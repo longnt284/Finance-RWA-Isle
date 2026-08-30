@@ -1,4 +1,5 @@
-import { useSyncExternalStore } from "react";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
+import { setUsdRate } from "./format";
 
 export interface Asset {
   id: string;
@@ -15,10 +16,15 @@ export interface Quote {
   prev: number;
   ch: number; // 24h %
   due: number; // next update timestamp
+  updatedAt: number;
+  source: "binance" | "yahoo" | "reference";
+  status: "live" | "delayed" | "stale" | "reference";
 }
 
+export type MarketConnection = "connecting" | "live" | "partial" | "offline";
+
 /* ------------------------------------------------------------------ */
-/*  Top 100 crypto (simulated anchors, USD)                            */
+/*  Top 100 crypto (offline reference anchors, USD)                    */
 /* ------------------------------------------------------------------ */
 
 const C: [string, string, number][] = [
@@ -86,85 +92,276 @@ export const ASSET_BY_ID = new Map(ASSETS.map((a) => [a.id, a]));
 export const DEFAULT_WATCH = ["c0", "c1", "c4", "c5", "c8", "v0", "v2", "u2"];
 
 /* ------------------------------------------------------------------ */
-/*  Live simulated store                                               */
+/*  Resilient realtime store                                           */
 /* ------------------------------------------------------------------ */
-
-const rand = (a: number, b: number) => a + Math.random() * (b - a);
-
-export interface MarketEvent {
-  id: "whale" | "pump" | "dump" | "vni" | "fed";
-  sym?: string;
-  n?: string;
-  p?: string;
-  d?: "tăng" | "giảm";
-}
 
 class MarketStore {
   quotes: Record<string, Quote> = {};
   private version = 0;
   private listeners = new Set<() => void>();
-  private timer: ReturnType<typeof setInterval> | null = null;
-  onEvent: ((e: MarketEvent) => void) | null = null;
-  lastGlobalUpdate = Date.now();
+  private started = false;
+  private healthTimer: ReturnType<typeof setInterval> | null = null;
+  private equityTimer: ReturnType<typeof setInterval> | null = null;
+  private fxTimer: ReturnType<typeof setInterval> | null = null;
+  private notifyTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectDelay = 1500;
+  private socket: WebSocket | null = null;
+  private tracked = new Set<string>(DEFAULT_WATCH);
+  private trackedRefs = new Map<string, number>();
+  private socketKey = "";
+  lastGlobalUpdate = 0;
+  connection: MarketConnection = "connecting";
+  lastError = "";
 
   constructor() {
     const now = Date.now();
     for (const a of ASSETS) {
-      const stable = a.sym === "USDT" || a.sym === "USDC";
-      const ch = stable ? 0.01 : rand(-6, 8);
-      const p = Math.max(a.base * 0.2, a.base * (1 + rand(-0.06, 0.06)));
-      this.quotes[a.id] = { p, prev: p, ch, due: now + rand(20000, 300000) };
+      this.quotes[a.id] = {
+        p: a.base,
+        prev: a.base,
+        ch: 0,
+        due: now,
+        updatedAt: 0,
+        source: "reference",
+        status: "reference",
+      };
     }
   }
 
   ensureStarted() {
-    if (this.timer) return;
-    this.timer = setInterval(() => this.tick(), 5000);
-    this.tick();
+    if (this.started || typeof window === "undefined") return;
+    this.started = true;
+    this.connection = navigator.onLine ? "connecting" : "offline";
+    this.connectCrypto();
+    void this.refreshEquities();
+    void this.refreshFx();
+    this.healthTimer = window.setInterval(() => this.checkHealth(), 5000);
+    this.equityTimer = window.setInterval(() => void this.refreshEquities(), 60_000);
+    this.fxTimer = window.setInterval(() => void this.refreshFx(), 30 * 60_000);
+    window.addEventListener("online", this.handleOnline);
+    window.addEventListener("offline", this.handleOffline);
   }
 
-  private tick() {
+  trackAssets(ids: readonly string[]): () => void {
+    let cryptoChanged = false;
+    let stocksChanged = false;
+    const validIds = [...new Set(ids)].filter((id) => ASSET_BY_ID.has(id));
+    for (const id of validIds) {
+      this.trackedRefs.set(id, (this.trackedRefs.get(id) ?? 0) + 1);
+      if (this.tracked.has(id)) continue;
+      this.tracked.add(id);
+      if (ASSET_BY_ID.get(id)?.type === "crypto") cryptoChanged = true;
+      else stocksChanged = true;
+    }
+    if (this.started && cryptoChanged) this.scheduleReconnect();
+    if (this.started && stocksChanged) void this.refreshEquities();
+
+    return () => {
+      let removedCrypto = false;
+      for (const id of validIds) {
+        const remaining = (this.trackedRefs.get(id) ?? 1) - 1;
+        if (remaining > 0) {
+          this.trackedRefs.set(id, remaining);
+          continue;
+        }
+        this.trackedRefs.delete(id);
+        if (DEFAULT_WATCH.includes(id)) continue;
+        this.tracked.delete(id);
+        if (ASSET_BY_ID.get(id)?.type === "crypto") removedCrypto = true;
+      }
+      if (this.started && removedCrypto) this.scheduleReconnect();
+    };
+  }
+
+  private handleOnline = () => {
+    this.connection = "connecting";
+    this.lastError = "";
+    this.connectCrypto();
+    void this.refreshEquities();
+    void this.refreshFx();
+    this.publish();
+  };
+
+  private handleOffline = () => {
+    this.connection = "offline";
+    this.socket?.close();
+    this.publish();
+  };
+
+  private binanceSymbol(asset: Asset): string | null {
+    if (asset.type !== "crypto") return null;
+    if (asset.sym === "USDT") return null;
+    const renamed: Record<string, string> = { RNDR: "RENDER", POL: "POL" };
+    return `${renamed[asset.sym] ?? asset.sym}USDT`;
+  }
+
+  private scheduleReconnect() {
+    if (this.reconnectTimer) window.clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = window.setTimeout(() => this.connectCrypto(), 350);
+  }
+
+  private connectCrypto() {
+    if (!navigator.onLine || typeof WebSocket === "undefined") return;
+    const assets = [...this.tracked]
+      .map((id) => ASSET_BY_ID.get(id))
+      .filter((asset): asset is Asset => Boolean(asset?.type === "crypto"))
+      .slice(0, 36);
+    const symbols = assets.map((asset) => this.binanceSymbol(asset)).filter((symbol): symbol is string => Boolean(symbol));
+    const key = symbols.sort().join("/");
+    if (!key) return;
+    if (this.socket?.readyState === WebSocket.OPEN && this.socketKey === key) return;
+    this.socketKey = key;
+    this.socket?.close();
+    const streams = symbols.map((symbol) => `${symbol.toLowerCase()}@ticker`).join("/");
+    const socket = new WebSocket(`wss://stream.binance.com:9443/stream?streams=${streams}`);
+    this.socket = socket;
+    this.connection = "connecting";
+    this.publish();
+
+    socket.addEventListener("open", () => {
+      if (this.socket !== socket) return;
+      this.reconnectDelay = 1500;
+      this.connection = "live";
+      this.lastError = "";
+      const stable = ASSETS.find((asset) => asset.sym === "USDT" && asset.type === "crypto");
+      if (stable) this.applyQuote(stable.id, 1, 0, "binance", "live");
+    });
+    socket.addEventListener("message", (event) => {
+      if (this.socket !== socket) return;
+      try {
+        const envelope = JSON.parse(String(event.data)) as { data?: { s?: string; c?: string; P?: string } };
+        const ticker = envelope.data;
+        if (!ticker?.s || !ticker.c) return;
+        const asset = assets.find((candidate) => this.binanceSymbol(candidate) === ticker.s);
+        if (!asset) return;
+        this.applyQuote(asset.id, Number(ticker.c), Number(ticker.P ?? 0), "binance", "live");
+      } catch {
+        // Ignore one malformed packet; the next tick will replace it.
+      }
+    });
+    socket.addEventListener("error", () => {
+      if (this.socket !== socket) return;
+      this.lastError = "crypto_stream";
+    });
+    socket.addEventListener("close", () => {
+      if (this.socket !== socket) return;
+      this.socket = null;
+      if (!navigator.onLine) return;
+      this.connection = this.lastGlobalUpdate ? "partial" : "offline";
+      this.publish();
+      this.reconnectTimer = window.setTimeout(() => this.connectCrypto(), this.reconnectDelay);
+      this.reconnectDelay = Math.min(30_000, this.reconnectDelay * 1.8);
+    });
+  }
+
+  private async refreshEquities() {
+    if (!navigator.onLine) return;
+    const assets = [...this.tracked]
+      .map((id) => ASSET_BY_ID.get(id))
+      .filter((asset): asset is Asset => Boolean(asset?.type === "stock"))
+      .slice(0, 18);
+    if (!assets.length) return;
+    const symbolToAsset = new Map(assets.map((asset) => [asset.cur === "VND" ? `${asset.sym}.VN` : asset.sym, asset]));
+    const configuredFeed = (import.meta.env.VITE_EQUITY_FEED_URL as string | undefined)?.replace(/\/$/, "");
+    const endpoint = configuredFeed || "/api/quotes";
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 12_000);
+    try {
+      const symbols = [...symbolToAsset.keys()];
+      const response = await fetch(`${endpoint}?symbols=${encodeURIComponent(symbols.join(","))}`, { signal: controller.signal, cache: "no-store" });
+      if (!response.ok) throw new Error(String(response.status));
+      const payload = (await response.json()) as {
+        quotes?: Array<{ symbol: string; price: number; previousClose: number | null; updatedAt: number }>;
+        failed?: string[];
+      };
+      for (const item of payload.quotes ?? []) {
+        const asset = symbolToAsset.get(item.symbol);
+        if (!asset) continue;
+        const previous = Number(item.previousClose);
+        const change = Number.isFinite(previous) && previous > 0 ? ((item.price - previous) / previous) * 100 : 0;
+        this.applyQuote(asset.id, item.price, change, "yahoo", "delayed");
+      }
+      if (payload.failed?.length) {
+        for (const symbol of payload.failed) {
+          const asset = symbolToAsset.get(symbol);
+          const quote = asset ? this.quotes[asset.id] : null;
+          if (quote?.updatedAt && Date.now() - quote.updatedAt > 10 * 60_000) quote.status = "stale";
+        }
+        this.connection = "partial";
+      }
+    } catch {
+      for (const asset of assets) {
+        const quote = this.quotes[asset.id];
+        if (quote.updatedAt && Date.now() - quote.updatedAt > 10 * 60_000) quote.status = "stale";
+      }
+      this.connection = this.lastGlobalUpdate ? "partial" : "offline";
+      this.lastError = "equity_feed";
+      this.publish();
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  }
+
+  private async refreshFx() {
+    if (!navigator.onLine) return;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 8000);
+    try {
+      const response = await fetch("https://open.er-api.com/v6/latest/USD", { signal: controller.signal, cache: "no-store" });
+      if (!response.ok) return;
+      const payload = (await response.json()) as { rates?: { VND?: number } };
+      if (payload.rates?.VND) setUsdRate(payload.rates.VND);
+      this.publish();
+    } catch {
+      this.lastError ||= "fx_feed";
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  }
+
+  private applyQuote(id: string, price: number, change: number, source: Quote["source"], status: Quote["status"]) {
+    if (!Number.isFinite(price) || price <= 0) return;
+    const now = Date.now();
+    const quote = this.quotes[id];
+    quote.prev = quote.p;
+    quote.p = price;
+    quote.ch = Number.isFinite(change) ? change : quote.ch;
+    quote.due = source === "binance" ? now + 15_000 : now + 60_000;
+    quote.updatedAt = now;
+    quote.source = source;
+    quote.status = status;
+    this.lastGlobalUpdate = now;
+    this.publish();
+  }
+
+  private checkHealth() {
     const now = Date.now();
     let changed = false;
-    for (const a of ASSETS) {
-      const q = this.quotes[a.id];
-      if (now < q.due) continue;
-      const stable = a.sym === "USDT" || a.sym === "USDC";
-      const drift = stable ? rand(-0.0004, 0.0004) : rand(-0.035, 0.038);
-      const p = Math.max(a.base * 0.05, q.p * (1 + drift));
-      q.prev = q.p;
-      q.p = p;
-      q.ch = Math.max(-30, Math.min(30, q.ch + drift * 100 * 0.6));
-      q.due = now + rand(60000, 300000); // 1–5 phút
-      changed = true;
-
-      if (!stable && Math.random() < 0.16 && this.onEvent) {
-        const r = Math.random();
-        const pStr = Math.abs(drift * 100).toFixed(1);
-        if (a.type === "stock" && a.cur === "VND" && r < 0.3) {
-          this.onEvent({ id: "vni", p: (rand(0.4, 2.8)).toFixed(1), d: drift >= 0 ? "tăng" : "giảm" });
-        } else if (r < 0.3) {
-          this.onEvent({ id: "whale", sym: a.sym, n: (rand(0.4, 12)).toFixed(1) });
-        } else if (r < 0.55) {
-          this.onEvent({ id: "pump", sym: a.sym, p: pStr });
-        } else if (r < 0.8) {
-          this.onEvent({ id: "dump", sym: a.sym, p: pStr });
-        } else {
-          this.onEvent({ id: "fed" });
-        }
+    for (const id of this.tracked) {
+      const quote = this.quotes[id];
+      if (!quote?.updatedAt || quote.status === "reference") continue;
+      const maxAge = quote.source === "binance" ? 45_000 : 10 * 60_000;
+      if (now - quote.updatedAt > maxAge && quote.status !== "stale") {
+        quote.status = "stale";
+        changed = true;
       }
     }
-    if (changed) {
-      this.lastGlobalUpdate = now;
+    if (changed) this.publish();
+  }
+
+  private publish() {
+    if (this.notifyTimer) return;
+    this.notifyTimer = window.setTimeout(() => {
+      this.notifyTimer = null;
       this.version++;
-      this.listeners.forEach((l) => l());
-    }
+      this.listeners.forEach((listener) => listener());
+    }, 160);
   }
 
   nextDue(): number {
-    let m = Infinity;
-    for (const a of ASSETS) m = Math.min(m, this.quotes[a.id].due);
-    return Math.max(0, Math.round((m - Date.now()) / 1000));
+    const due = this.equityTimer ? this.lastGlobalUpdate + 60_000 : Date.now();
+    return Math.max(0, Math.round((due - Date.now()) / 1000));
   }
 
   subscribe = (l: () => void) => {
@@ -176,7 +373,11 @@ class MarketStore {
 
 export const market = new MarketStore();
 
-export function useMarket(): number {
-  market.ensureStarted();
+export function useMarket(assetIds: readonly string[] = []): number {
+  const key = useMemo(() => assetIds.join(","), [assetIds]);
+  useEffect(() => {
+    market.ensureStarted();
+    return market.trackAssets(key ? key.split(",") : []);
+  }, [key]);
   return useSyncExternalStore(market.subscribe, market.getVersion, market.getVersion);
 }

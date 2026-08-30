@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
-  useStore, cityLevel, netWorth, levelFor, xpMult, DISTRICT_IDS, ISLE_UNLOCK_LV,
+  useStore, cityLevel, netWorth, levelFor, xpMult, DISTRICT_IDS, ISLE_UNLOCK_LEVELS,
 } from "../state/store";
 import type { DistrictId, ViewId } from "../state/store";
 import { makeT } from "../lib/i18n";
@@ -21,6 +21,10 @@ interface Props {
   onDrawer: (d: DrawerId) => void;
   muted: boolean;
   onToggleMute: () => void;
+  voyage: boolean;
+  canVoyage: boolean;
+  onVoyage: () => void;
+  onHelmInput: (input: { throttle: number; turn: number }) => void;
 }
 
 const NAV_ICONS: Record<string, (p: { className?: string }) => React.ReactElement> = {
@@ -33,13 +37,12 @@ const NAV_ICONS: Record<string, (p: { className?: string }) => React.ReactElemen
   isle: IconIsland,
 };
 
-function NavChip({ id, onClick }: { id: string; onClick: () => void }) {
+function NavChip({ id, onClick, active }: { id: string; onClick: () => void; active: boolean }) {
   const { state } = useStore();
   const t = makeT(state.lang);
   const isDistrict = (DISTRICT_IDS as string[]).includes(id);
   const lv = isDistrict ? levelFor(state.xp[id as DistrictId]) : null;
-  const isleLocked = id === "isle" && levelFor(state.xp.crypto) < ISLE_UNLOCK_LV;
-  const active = state.onboarded && useStoreSelected() === id;
+  const isleLocked = id === "isle" && !DISTRICT_IDS.some((district) => levelFor(state.xp[district]) >= ISLE_UNLOCK_LEVELS[district]);
   const Icon = NAV_ICONS[id];
   const label =
     id === "overview" ? t("nav.overview")
@@ -65,21 +68,15 @@ function NavChip({ id, onClick }: { id: string; onClick: () => void }) {
         </span>
       )}
       {id === "isle" && isleLocked && (
-        <span className="font-mono text-[9px] text-mist-500">{t("misc.levelShort", { n: ISLE_UNLOCK_LV })}</span>
+        <span className="font-mono text-[9px] text-mist-500">{t("misc.levelShort", { n: Math.min(...Object.values(ISLE_UNLOCK_LEVELS)) })}+</span>
       )}
     </button>
   );
 }
 
-/* helper to read selected inside chips without prop drilling */
-let _selected: ViewId = "overview";
-function useStoreSelected(): ViewId {
-  return _selected;
-}
-
 function Ticker() {
   const { state, api } = useStore();
-  useMarket();
+  useMarket(state.watchlist);
   const t = makeT(state.lang);
   if (state.watchlist.length === 0) return null;
   const items = state.watchlist.map((id) => ({ asset: ASSET_BY_ID.get(id), q: market.quotes[id] })).filter((x) => x.asset && x.q);
@@ -108,9 +105,9 @@ function Ticker() {
   return (
     <div className="pointer-events-auto absolute bottom-0 left-0 right-0 z-20 border-t hairline-gold bg-ink-900/85 py-2 backdrop-blur-md">
       <div className="flex items-center">
-        <span className="z-10 ml-3 mr-2 flex shrink-0 items-center gap-1.5 font-display text-[9px] tracking-[0.2em] text-gold-400">
-          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-jade-400" />
-          {t("hud.live")}
+        <span className="z-10 flex min-w-[138px] shrink-0 items-center gap-1.5 border-r border-gold-500/15 bg-ink-900 px-3 font-display text-[9px] tracking-[0.16em] text-gold-400">
+          <span className={`h-1.5 w-1.5 rounded-full ${market.connection === "live" ? "animate-pulse bg-jade-400" : market.connection === "connecting" ? "animate-pulse bg-gold-400" : "bg-coral-400"}`} />
+          {market.connection === "live" ? t("hud.live") : market.connection === "partial" ? t("hud.partial") : market.connection === "connecting" ? t("hud.connecting") : t("hud.offline")}
         </span>
         <div className="relative min-w-0 flex-1 overflow-hidden">
           <div className="marquee-track">
@@ -123,17 +120,78 @@ function Ticker() {
   );
 }
 
-export default function HUD({ selected, onSelect, drawer, onDrawer, muted, onToggleMute }: Props) {
+function LiveClock() {
+  const { state } = useStore();
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    document.documentElement.lang = state.lang;
+    const timer = window.setInterval(() => setNow(new Date()), 1000);
+    return () => window.clearInterval(timer);
+  }, [state.lang]);
+  const locale = state.lang === "vi" ? "vi-VN" : "en-US";
+  return (
+    <div className="chip hidden items-center gap-2 rounded-lg px-3 py-1.5 md:flex" aria-label={now.toLocaleString(locale)}>
+      <span className="h-1.5 w-1.5 rounded-full bg-jade-400 shadow-[0_0_10px_rgba(76,217,154,0.8)]" />
+      <div className="text-right font-mono leading-tight">
+        <div className="text-[11px] font-semibold text-mist-100">{now.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</div>
+        <div className="text-[8px] uppercase tracking-[0.13em] text-mist-500">{now.toLocaleDateString(locale, { weekday: "short", day: "2-digit", month: "2-digit" })}</div>
+      </div>
+    </div>
+  );
+}
+
+function VoyageControls({ onInput, onExit }: { onInput: (input: { throttle: number; turn: number }) => void; onExit: () => void }) {
+  const { state } = useStore();
+  const t = makeT(state.lang);
+  const controlProps = (throttle: number, turn: number) => ({
+    onPointerDown: (event: React.PointerEvent<HTMLButtonElement>) => {
+      event.currentTarget.setPointerCapture(event.pointerId);
+      onInput({ throttle, turn });
+    },
+    onPointerUp: () => onInput({ throttle: 0, turn: 0 }),
+    onPointerCancel: () => onInput({ throttle: 0, turn: 0 }),
+    onPointerLeave: () => onInput({ throttle: 0, turn: 0 }),
+  });
+  return (
+    <div className="pointer-events-auto absolute bottom-16 left-1/2 z-30 flex -translate-x-1/2 items-end gap-3">
+      <div className="panel rounded-2xl p-2 shadow-2xl">
+        <div className="grid grid-cols-3 gap-1.5">
+          <span />
+          <button {...controlProps(1, 0)} className="helm-key" aria-label={t("yacht.forward")}>↑</button>
+          <span />
+          <button {...controlProps(0, -1)} className="helm-key" aria-label={t("yacht.left")}>←</button>
+          <button {...controlProps(-1, 0)} className="helm-key" aria-label={t("yacht.reverse")}>↓</button>
+          <button {...controlProps(0, 1)} className="helm-key" aria-label={t("yacht.right")}>→</button>
+        </div>
+        <div className="mt-1.5 text-center font-mono text-[8px] uppercase tracking-[0.18em] text-mist-500">WASD · {t("yacht.drag")}</div>
+      </div>
+      <button onClick={onExit} className="btn-gold mb-1 rounded-xl px-4 py-3 font-display text-[10px] tracking-wider">{t("yacht.exit")}</button>
+    </div>
+  );
+}
+
+export default function HUD({ selected, onSelect, drawer, onDrawer, muted, onToggleMute, voyage, canVoyage, onVoyage, onHelmInput }: Props) {
   const { state, api } = useStore();
   const t = makeT(state.lang);
-  useMarket();
-  _selected = selected;
-  const [feedOpen, setFeedOpen] = useState(true);
+  const [feedOpen, setFeedOpen] = useState(() => typeof window === "undefined" || window.innerWidth >= 640);
+  useEffect(() => {
+    const compact = window.matchMedia("(max-width: 639px)");
+    const collapseOnCompact = (event: MediaQueryListEvent | MediaQueryList) => {
+      if (event.matches) setFeedOpen(false);
+    };
+    collapseOnCompact(compact);
+    compact.addEventListener("change", collapseOnCompact);
+    return () => compact.removeEventListener("change", collapseOnCompact);
+  }, []);
+  useEffect(() => {
+    const first = state.toasts[0];
+    if (!first) return;
+    const timer = window.setTimeout(() => api.dismissToast(first.id), 5200);
+    return () => window.clearTimeout(timer);
+  }, [state.toasts, api]);
 
   const nw = netWorth(state);
   const canClaim = state.onboarded && state.lastClaim !== dayKey(Date.now());
-  const isleUnlocked = levelFor(state.xp.crypto) >= ISLE_UNLOCK_LV;
-
   const navIds: string[] = ["overview", "center", ...DISTRICT_IDS, "isle"];
 
   return (
@@ -161,6 +219,7 @@ export default function HUD({ selected, onSelect, drawer, onDrawer, muted, onTog
         </div>
 
         <div className="pointer-events-auto flex flex-wrap items-center justify-end gap-1.5">
+          <LiveClock />
           {/* currency + language */}
           <div className="chip flex items-center rounded-lg p-0.5">
             {(["VND", "USD"] as const).map((c) => (
@@ -175,6 +234,15 @@ export default function HUD({ selected, onSelect, drawer, onDrawer, muted, onTog
               </button>
             ))}
           </div>
+          <button
+            onClick={onVoyage}
+            disabled={!canVoyage}
+            title={canVoyage ? t("yacht.title") : t("yacht.locked")}
+            className={`chip flex items-center gap-1.5 rounded-lg px-3 py-2 text-[11px] transition-all ${voyage ? "border-jade-500/60 bg-jade-500/10 text-jade-300" : "text-mist-400 hover:border-jade-500/40 hover:text-jade-300"} disabled:cursor-not-allowed disabled:opacity-40`}
+          >
+            <IconIsland className="h-4 w-4" />
+            <span className="hidden lg:inline">{t("yacht.title")}</span>
+          </button>
           <div className="chip flex items-center rounded-lg p-0.5">
             {(["vi", "en"] as const).map((l) => (
               <button
@@ -217,7 +285,7 @@ export default function HUD({ selected, onSelect, drawer, onDrawer, muted, onTog
         <div className="mb-1 font-display text-[9px] uppercase tracking-[0.28em] text-mist-500">{t("hud.nav")}</div>
         <div className="pointer-events-auto flex flex-col gap-1.5">
           {navIds.map((id) => (
-            <NavChip key={id} id={id} onClick={() => onSelect(id as ViewId)} />
+            <NavChip key={id} id={id} active={selected === id} onClick={() => onSelect(id as ViewId)} />
           ))}
         </div>
         {selected !== "overview" && (
@@ -246,7 +314,7 @@ export default function HUD({ selected, onSelect, drawer, onDrawer, muted, onTog
           )}
         </div>
 
-        <div className="panel pointer-events-auto flex min-h-0 w-full flex-1 flex-col overflow-hidden rounded-xl">
+        <div className={`panel pointer-events-auto flex min-h-0 w-full flex-col overflow-hidden rounded-xl ${feedOpen ? "flex-1" : "shrink-0"}`}>
           <button onClick={() => setFeedOpen(!feedOpen)} className="flex items-center justify-between px-4 py-2.5">
             <span className="font-display text-[9px] tracking-[0.24em] text-mist-400">{t("hud.feed")}</span>
             <IconChevD className={`h-3.5 w-3.5 text-mist-500 transition-transform ${feedOpen ? "" : "rotate-180"}`} />
@@ -306,6 +374,7 @@ export default function HUD({ selected, onSelect, drawer, onDrawer, muted, onTog
       </div>
 
       <Ticker />
+      {voyage && <VoyageControls onInput={onHelmInput} onExit={onVoyage} />}
     </>
   );
 }

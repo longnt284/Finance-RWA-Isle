@@ -1,15 +1,15 @@
 import { useMemo, useState } from "react";
 import {
   useStore, DISTRICTS, xpIntoLevel, cityLevel, netWorth, levelFor, xpMult,
-  ACH_DEFS, DISTRICT_IDS, ISLE_UNLOCK_LV, LEVEL_XP, MAX_LEVEL,
+  ACH_DEFS, DISTRICT_IDS, ISLE_UNLOCK_LEVELS, LEVEL_XP, MAX_LEVEL,
 } from "../state/store";
-import type { DistrictId, Goal, Task, ViewId, AchTier } from "../state/store";
+import type { DistrictId, Goal, Task, ViewId, AchTier, IslandTheme } from "../state/store";
 import { makeT } from "../lib/i18n";
 import { compactVND, fmt, fmtMoney, fmtSmart, pct, timeAgo } from "../lib/format";
 import { sound } from "../lib/audio";
 import {
   IconCheck, IconClose, IconPlus, IconTarget, IconMedal, IconReset,
-  IconIsland, IconLock, IconArrowR, IconSpark,
+  IconIsland, IconLock, IconSpark,
 } from "./icons";
 import { DECOR_IDS } from "../world/build";
 
@@ -394,19 +394,20 @@ function DistrictPanel({ district, onClose }: { district: DistrictId; onClose: (
 
 /* ------------------------------ isle panel ------------------------------ */
 
-function IslePanel({ onClose, onVisit }: { onClose: () => void; onVisit: () => void }) {
+function IslePanel({ onClose, activeIsle, onIslandSelect }: { onClose: () => void; activeIsle: DistrictId; onIslandSelect: (district: DistrictId) => void }) {
   const { state, api } = useStore();
   const t = makeT(state.lang);
-  const lv = levelFor(state.xp.crypto);
-  const unlocked = lv >= ISLE_UNLOCK_LV;
-  const prog = xpIntoLevel(state.xp.crypto);
+  const lv = levelFor(state.xp[activeIsle]);
+  const unlockLevel = ISLE_UNLOCK_LEVELS[activeIsle];
+  const unlocked = lv >= unlockLevel;
+  const prog = xpIntoLevel(state.xp[activeIsle]);
 
   if (!unlocked) {
     return (
       <div className="anim-slide-left panel absolute bottom-0 right-0 top-0 z-40 flex w-full flex-col sm:w-[400px]">
         <div className="flex items-start justify-between border-b border-mist-500/10 p-5 pb-4">
           <div>
-            <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-mist-500">{t("misc.openIsle")}</div>
+            <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-mist-500">{t(`ct.isle.${activeIsle}`)}</div>
             <div className="mt-1 flex items-center gap-2 font-display text-lg font-semibold text-mist-100">
               <IconLock className="h-4 w-4 text-gold-400" /> {t("il.locked")}
             </div>
@@ -416,17 +417,17 @@ function IslePanel({ onClose, onVisit }: { onClose: () => void; onVisit: () => v
           </button>
         </div>
         <div className="flex-1 space-y-4 overflow-y-auto p-5">
-          <p className="text-[12.5px] leading-relaxed text-mist-400">{t("il.lockedSub", { n: ISLE_UNLOCK_LV })}</p>
+          <p className="text-[12.5px] leading-relaxed text-mist-400">{t("il.lockedSub", { n: unlockLevel })}</p>
           <div className="rounded-xl border border-gold-500/20 bg-ink-850/60 p-4">
             <div className="flex justify-between font-mono text-[10px] text-mist-500">
-              <span>{t("d.crypto.building")}</span>
-              <span>{t("ws.lvl", { n: lv })} → {t("misc.levelShort", { n: ISLE_UNLOCK_LV })}</span>
+              <span>{t(`d.${activeIsle}.building`)}</span>
+              <span>{t("ws.lvl", { n: lv })} → {t("misc.levelShort", { n: unlockLevel })}</span>
             </div>
             <div className="mt-2 h-2 overflow-hidden rounded-full bg-ink-700">
-              <div className="xp-bar h-full rounded-full transition-all duration-700" style={{ width: `${(Math.min(lv, ISLE_UNLOCK_LV) / ISLE_UNLOCK_LV) * 100}%` }} />
+              <div className="xp-bar h-full rounded-full transition-all duration-700" style={{ width: `${(Math.min(lv, unlockLevel) / unlockLevel) * 100}%` }} />
             </div>
             <div className="mt-2 font-mono text-[10px] text-mist-500">
-              {lv >= MAX_LEVEL ? t("il.max", { n: MAX_LEVEL }) : t("il.progress", { have: prog.have, need: prog.need })} · {LEVEL_XP[ISLE_UNLOCK_LV]} XP
+              {lv >= MAX_LEVEL ? t("il.max", { n: MAX_LEVEL }) : t("il.progress", { have: prog.have, need: prog.need })} · {LEVEL_XP[unlockLevel]} XP
             </div>
           </div>
           <p className="text-[11px] leading-relaxed text-mist-500">{t("il.lvHint")}</p>
@@ -439,11 +440,11 @@ function IslePanel({ onClose, onVisit }: { onClose: () => void; onVisit: () => v
     <div className="anim-slide-left panel absolute bottom-0 right-0 top-0 z-40 flex w-full flex-col sm:w-[400px]">
       <div className="flex items-start justify-between border-b border-mist-500/10 p-5 pb-4">
         <div>
-          <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-jade-400/80">{t("misc.openIsle")}</div>
+          <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-jade-400/80">{t(`ct.isle.${activeIsle}`)}</div>
           <div className="mt-1 flex items-center gap-2 font-display text-lg font-semibold text-mist-100">
-            <IconIsland className="h-5 w-5 text-jade-400" /> {t("il.title")}
+            <IconIsland className="h-5 w-5 text-jade-400" /> {t(`ct.isle.${activeIsle}`)}
           </div>
-          <div className="text-[11px] text-mist-500">{t("il.sub")}</div>
+          <div className="text-[11px] text-mist-500">{t(`d.${activeIsle}.tagline`)}</div>
           <div className="mt-2 flex items-center gap-2">
             <span className="chip rounded-full px-2.5 py-1 font-mono text-[10px] text-jade-300">{t("ws.lvl", { n: lv })}</span>
             {lv < MAX_LEVEL && (
@@ -456,21 +457,37 @@ function IslePanel({ onClose, onVisit }: { onClose: () => void; onVisit: () => v
         </button>
       </div>
       <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-5">
-        <button onClick={onVisit} className="btn-gold flex w-full items-center justify-center gap-2 rounded-lg py-3 font-display text-[11px] tracking-[0.18em]">
-          <IconArrowR className="h-4 w-4" /> {t("il.enter")}
-        </button>
+        <div>
+          <div className="mb-2 font-display text-[9px] tracking-[0.22em] text-mist-500">{t("il.choose")}</div>
+          <div className="grid grid-cols-2 gap-2">
+            {DISTRICT_IDS.map((district) => {
+              const districtLv = levelFor(state.xp[district]);
+              const districtUnlocked = districtLv >= ISLE_UNLOCK_LEVELS[district];
+              return (
+                <button
+                  key={district}
+                  onClick={() => onIslandSelect(district)}
+                  className={`rounded-lg border px-3 py-2 text-left transition-all ${activeIsle === district ? "border-jade-500/55 bg-jade-500/10 text-jade-300" : districtUnlocked ? "hairline-gold bg-ink-850/60 text-mist-300 hover:border-gold-500/40" : "border-mist-500/12 text-mist-500"}`}
+                >
+                  <span className="block text-[10.5px] font-medium">{t(`ct.isle.${district}`)}</span>
+                  <span className="font-mono text-[8.5px]">{districtUnlocked ? t("ct.isle.unlockedShort") : `${t("misc.levelShort", { n: districtLv })}/${ISLE_UNLOCK_LEVELS[district]}`}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
 
         <div className="rounded-lg border hairline-gold bg-ink-850/60 p-3.5">
           <div className="flex items-center justify-between">
-            <h3 className="font-display text-[10px] tracking-[0.22em] text-mist-400">{t("ws.goals")} · CRYPTO</h3>
-            <span className="font-mono text-[10px] text-mist-500">{state.goals.filter((g) => g.district === "crypto" && g.done).length}/{state.goals.filter((g) => g.district === "crypto").length}</span>
+            <h3 className="font-display text-[10px] tracking-[0.22em] text-mist-400">{t("ws.goals")} · {t(`d.${activeIsle}.name`)}</h3>
+            <span className="font-mono text-[10px] text-mist-500">{state.goals.filter((g) => g.district === activeIsle && g.done).length}/{state.goals.filter((g) => g.district === activeIsle).length}</span>
           </div>
           <div className="mt-2 space-y-2">
-            {state.goals.filter((g) => g.district === "crypto").map((g) => <GoalCard key={g.id} goal={g} />)}
-            <AddGoal district="crypto" />
+            {state.goals.filter((g) => g.district === activeIsle).map((g) => <GoalCard key={g.id} goal={g} />)}
+            <AddGoal district={activeIsle} />
           </div>
           <div className="mt-3">
-            <QuickActions district="crypto" />
+            <QuickActions district={activeIsle} />
           </div>
         </div>
 
@@ -482,12 +499,12 @@ function IslePanel({ onClose, onVisit }: { onClose: () => void; onVisit: () => v
           <p className="mb-2 text-[10.5px] text-mist-500">{t("il.decorHint")}</p>
           <div className="grid grid-cols-2 gap-2">
             {DECOR_IDS.map((id) => {
-              const on = state.isleDecor.includes(id);
+              const on = state.isleDecor[activeIsle].includes(id);
               return (
                 <button
                   key={id}
                   onClick={() => {
-                    api.toggleDecor(id);
+                    api.toggleDecor(activeIsle, id);
                     sound.coin();
                   }}
                   className={`flex items-center justify-between rounded-lg border px-3 py-2.5 text-[12px] transition-all ${
@@ -506,6 +523,21 @@ function IslePanel({ onClose, onVisit }: { onClose: () => void; onVisit: () => v
           </div>
         </section>
 
+        <section>
+          <h3 className="mb-2 font-display text-[10px] tracking-[0.22em] text-mist-400">{t("il.theme")}</h3>
+          <div className="grid grid-cols-4 gap-2">
+            {(["emerald", "sunset", "lagoon", "violet"] as IslandTheme[]).map((theme) => (
+              <button
+                key={theme}
+                onClick={() => api.setIsleTheme(activeIsle, theme)}
+                className={`isle-theme isle-theme-${theme} ${state.isleTheme[activeIsle] === theme ? "is-active" : ""}`}
+                title={t(`theme.${theme}`)}
+                aria-label={t(`theme.${theme}`)}
+              />
+            ))}
+          </div>
+        </section>
+
         <p className="text-[10.5px] leading-relaxed text-mist-500">{t("il.lvHint")}</p>
       </div>
     </div>
@@ -520,7 +552,7 @@ const TIER_STYLE: Record<AchTier, string> = {
   hard: "border-coral-500/40 text-coral-400",
 };
 
-function CenterPanel({ onClose }: { onClose: () => void }) {
+function CenterPanel({ onClose, onIslandSelect }: { onClose: () => void; onIslandSelect: (district: DistrictId) => void }) {
   const { state, api } = useStore();
   const t = makeT(state.lang);
   const cl = cityLevel(state);
@@ -528,7 +560,6 @@ function CenterPanel({ onClose }: { onClose: () => void }) {
   const [name, setName] = useState(state.city);
   const [achName, setAchName] = useState("");
   const [achDesc, setAchDesc] = useState("");
-  const cryptoLv = levelFor(state.xp.crypto);
 
   return (
     <div className="anim-slide-left panel absolute bottom-0 right-0 top-0 z-40 flex w-full flex-col sm:w-[420px]">
@@ -561,26 +592,20 @@ function CenterPanel({ onClose }: { onClose: () => void }) {
           <h3 className="mb-2 font-display text-[10px] tracking-[0.22em] text-mist-400">{t("ct.isles")}</h3>
           <div className="space-y-1.5">
             {(["crypto", "stocks", "vault", "academy"] as DistrictId[]).map((d) => {
-              const isCrypto = d === "crypto";
-              const unlocked = isCrypto && cryptoLv >= ISLE_UNLOCK_LV;
+              const districtLv = levelFor(state.xp[d]);
+              const unlockLevel = ISLE_UNLOCK_LEVELS[d];
+              const unlocked = districtLv >= unlockLevel;
               return (
-                <div key={d} className={`flex items-center gap-3 rounded-lg border px-3 py-2 ${unlocked ? "border-jade-500/35 bg-jade-500/5" : "hairline-gold bg-ink-850/40"}`}>
+                <button onClick={() => onIslandSelect(d)} key={d} className={`flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left transition-all ${unlocked ? "border-jade-500/35 bg-jade-500/5 hover:border-jade-500/60" : "hairline-gold bg-ink-850/40 hover:border-gold-500/30"}`}>
                   <IconIsland className={`h-4 w-4 shrink-0 ${unlocked ? "text-jade-400" : "text-mist-500"}`} />
                   <div className="min-w-0 flex-1">
                     <div className={`text-[12px] font-medium ${unlocked ? "text-jade-300" : "text-mist-300"}`}>{t(`ct.isle.${d}`)}</div>
                     <div className="font-mono text-[9px] text-mist-500">
-                      {isCrypto
-                        ? unlocked
-                          ? t("ct.isle.unlocked")
-                          : t("ct.isle.unlockAt", { n: ISLE_UNLOCK_LV })
-                        : t("ct.soon")}
+                      {unlocked ? t("ct.isle.unlocked") : t("ct.isle.unlockAt", { n: unlockLevel })}
                     </div>
                   </div>
-                  {!isCrypto && <span className="chip rounded px-1.5 py-0.5 font-mono text-[8px] text-mist-500">{t("ct.locked")}</span>}
-                  {isCrypto && !unlocked && (
-                    <span className="font-mono text-[10px] text-gold-400">{t("misc.levelShort", { n: cryptoLv })}/{ISLE_UNLOCK_LV}</span>
-                  )}
-                </div>
+                  {!unlocked && <span className="font-mono text-[10px] text-gold-400">{t("misc.levelShort", { n: districtLv })}/{unlockLevel}</span>}
+                </button>
               );
             })}
           </div>
@@ -724,9 +749,9 @@ function CenterPanel({ onClose }: { onClose: () => void }) {
 
 /* ------------------------------ root ------------------------------ */
 
-export default function Workspace({ view, onClose, onSelect }: { view: ViewId; onClose: () => void; onSelect: (v: ViewId) => void }) {
+export default function Workspace({ view, onClose, activeIsle, onIslandSelect }: { view: ViewId; onClose: () => void; onSelect: (v: ViewId, island?: DistrictId) => void; activeIsle: DistrictId; onIslandSelect: (district: DistrictId) => void }) {
   if (view === "overview") return null;
-  if (view === "center") return <CenterPanel onClose={onClose} />;
-  if (view === "isle") return <IslePanel onClose={onClose} onVisit={() => onSelect("isle")} />;
+  if (view === "center") return <CenterPanel onClose={onClose} onIslandSelect={onIslandSelect} />;
+  if (view === "isle") return <IslePanel onClose={onClose} activeIsle={activeIsle} onIslandSelect={onIslandSelect} />;
   return <DistrictPanel district={view} onClose={onClose} />;
 }

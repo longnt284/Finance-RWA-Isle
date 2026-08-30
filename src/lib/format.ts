@@ -1,6 +1,11 @@
 export type Currency = "VND" | "USD";
 
-export const USD_RATE = 25400; // ₫ per $
+/** Live binding updated by the market service; starts from a conservative reference rate. */
+export let USD_RATE = 25400; // ₫ per $
+
+export function setUsdRate(rate: number): void {
+  if (Number.isFinite(rate) && rate > 10000 && rate < 50000) USD_RATE = rate;
+}
 
 const nf = new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 0 });
 const nf2 = new Intl.NumberFormat("vi-VN", { maximumFractionDigits: 2 });
