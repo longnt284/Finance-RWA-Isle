@@ -1,93 +1,139 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { StoreProvider, useStore, districtLevels } from "./state/store";
-import type { DistrictId, ViewId } from "./state/store";
+import { StoreProvider, useStore, districtLevels, levelFor, ACH_DEFS, ISLE_UNLOCK_LV } from "./state/store";
+import type { ViewId } from "./state/store";
 import WorldScene from "./world/WorldScene";
 import type { WorldHandle } from "./world/WorldScene";
-import { TopBar, SideNav, BottomHud, Toasts } from "./components/HUD";
+import HUD from "./components/HUD";
+import type { DrawerId } from "./components/HUD";
 import Workspace from "./components/Workspace";
-import Onboarding from "./components/Modals";
+import { MarketDrawer, ToolsDrawer, NotesDrawer } from "./components/Drawers";
+import { Hero, OnboardingModal, TutorialOverlay } from "./components/Modals";
+import { makeT } from "./lib/i18n";
+import { market } from "./lib/market";
 import { sound } from "./lib/audio";
 
-const DISTRICT_IDS: DistrictId[] = ["crypto", "stocks", "vault", "academy"];
-
 function Shell() {
-  const { state } = useStore();
+  const { state, api } = useStore();
+  const t = makeT(state.lang);
   const [selected, setSelected] = useState<ViewId>("overview");
-  const [intro, setIntro] = useState(true);
-  const handleRef = useRef<WorldHandle | null>(null);
+  const [drawer, setDrawer] = useState<DrawerId>(null);
+  const [showOnboard, setShowOnboard] = useState(false);
+  const [muted, setMuted] = useState(sound.isMuted());
+  const worldRef = useRef<WorldHandle | null>(null);
 
-  const levels = useMemo(() => districtLevels(state), [state]);
+  const levels = useMemo(() => districtLevels(state), [state.xp]);
+  const isleUnlocked = levels.crypto >= ISLE_UNLOCK_LV;
 
-  /* intro splash */
+  /* ---------- achievement scanner ---------- */
+  const rewarded = useRef<Set<string> | null>(null);
   useEffect(() => {
-    const id = window.setTimeout(() => setIntro(false), 3200);
-    return () => window.clearTimeout(id);
-  }, []);
+    if (!state.onboarded) {
+      rewarded.current = null;
+      return;
+    }
+    if (rewarded.current === null) {
+      rewarded.current = new Set(ACH_DEFS.filter((a) => a.done(state)).map((a) => a.id));
+      return;
+    }
+    for (const a of ACH_DEFS) {
+      if (rewarded.current.has(a.id)) continue;
+      if (a.done(state)) {
+        rewarded.current.add(a.id);
+        const name = t(`ach.${a.id}.n`);
+        api.logTrade(state.focus, t("log.ach", { n: name, x: a.reward }), a.reward);
+        api.pushToast({ title: t("toast.ach", { n: name }), sub: `+${a.reward} XP`, kind: "gold" });
+        worldRef.current?.fireBurst("center", "gold");
+        sound.levelUp();
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state]);
 
-  /* keep view in sync when civilization is reset; focus after onboarding */
+  /* ---------- market events ---------- */
+  useEffect(() => {
+    market.onEvent = (e) => {
+      const tr = makeT(state.lang);
+      let text = "";
+      if (e.id === "whale" && e.sym) text = tr("evt.whale", { n: e.n ?? "1", s: e.sym });
+      else if (e.id === "pump" && e.sym) text = tr("evt.pump", { s: e.sym, p: e.p ?? "1" });
+      else if (e.id === "dump" && e.sym) text = tr("evt.dump", { s: e.sym, p: e.p ?? "1" });
+      else if (e.id === "vni") text = tr("evt.vni", { d: e.d === "giảm" ? (state.lang === "vi" ? "giảm" : "down") : state.lang === "vi" ? "tăng" : "up", p: e.p ?? "1" });
+      else if (e.id === "fed") text = tr("evt.fed");
+      if (text) api.logEvent(text);
+    };
+    return () => {
+      market.onEvent = null;
+    };
+  }, [state.lang, api]);
+
+  /* ---------- flow control ---------- */
   const prevOnboarded = useRef(state.onboarded);
   useEffect(() => {
     if (!state.onboarded) {
       setSelected("overview");
+      setDrawer(null);
     } else if (!prevOnboarded.current && state.onboarded) {
       setSelected(state.focus);
+      if (!state.tutorialSeen) {
+        const timer = setTimeout(() => setDrawer("tutorial"), 900);
+        return () => clearTimeout(timer);
+      }
     }
     prevOnboarded.current = state.onboarded;
-  }, [state.onboarded, state.focus]);
+  }, [state.onboarded, state.focus, state.tutorialSeen]);
 
-  /* celebrate level-ups */
-  const prevLevels = useRef<Record<DistrictId, number> | null>(null);
-  useEffect(() => {
-    const prev = prevLevels.current;
-    if (prev) {
-      for (const d of DISTRICT_IDS) {
-        if (levels[d] > prev[d]) {
-          handleRef.current?.fireBurst(d, "gold");
-          sound.levelUp();
-        }
-      }
+  function handleSelect(view: ViewId) {
+    if (view === "isle" && !isleUnlocked) {
+      api.pushToast({
+        title: t("toast.needLvl", { b: t("d.crypto.building"), n: ISLE_UNLOCK_LV }),
+        sub: t("il.lockedSub", { n: ISLE_UNLOCK_LV }),
+        kind: "info",
+      });
+      setSelected("crypto");
+      sound.tick();
+      return;
     }
-    prevLevels.current = { ...levels };
-  }, [levels]);
-
-  /* celebrate goal completions */
-  const doneGoals = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    const nowDone = state.goals.filter((g) => g.done);
-    for (const g of nowDone) {
-      if (!doneGoals.current.has(g.id)) {
-        if (doneGoals.current.size > 0 || prevLevels.current) {
-          handleRef.current?.fireBurst(g.district, "jade");
-          sound.chime();
-        }
-      }
-    }
-    doneGoals.current = new Set(nowDone.map((g) => g.id));
-  }, [state.goals]);
+    setSelected(view);
+    if (view !== "overview") api.visit(view);
+  }
 
   return (
-    <div className="relative h-full w-full overflow-hidden bg-ink-900">
-      <WorldScene levels={levels} selected={selected} onSelect={setSelected} handleRef={handleRef} />
+    <div className="relative h-screen w-screen select-none overflow-hidden bg-ink-900">
+      <WorldScene
+        levels={levels}
+        selected={selected}
+        onSelect={handleSelect}
+        handleRef={worldRef}
+        lang={state.lang}
+        decor={state.isleDecor}
+        isleUnlocked={isleUnlocked}
+        isleLevel={levels.crypto}
+      />
 
-      <TopBar />
-      <SideNav selected={selected} onSelect={setSelected} />
-      <BottomHud selected={selected} />
-      <Toasts />
-      <Workspace view={selected} onClose={() => setSelected("overview")} />
-
-      {/* intro splash */}
-      {intro && (
-        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
-          <div className="anim-fade-in text-center" style={{ animation: "fadeIn 0.8s ease both, fadeUp 3.2s ease both" }}>
-            <div className="font-display text-5xl font-bold tracking-[0.18em] text-gold-300 sm:text-7xl" style={{ textShadow: "0 0 60px rgba(240,194,104,0.4)" }}>
-              VƯỢNG
-            </div>
-            <div className="mt-3 font-display text-[10px] tracking-[0.42em] text-mist-400">WEALTH CIVILIZATION</div>
-          </div>
-        </div>
+      {state.onboarded ? (
+        <>
+          <HUD
+            selected={selected}
+            onSelect={handleSelect}
+            drawer={drawer}
+            onDrawer={setDrawer}
+            muted={muted}
+            onToggleMute={() => setMuted(sound.toggleMute())}
+          />
+          {selected !== "overview" && (
+            <Workspace view={selected} onClose={() => setSelected("overview")} onSelect={handleSelect} />
+          )}
+          {drawer === "market" && <MarketDrawer onClose={() => setDrawer(null)} />}
+          {drawer === "tools" && <ToolsDrawer onClose={() => setDrawer(null)} />}
+          {drawer === "notes" && <NotesDrawer onClose={() => setDrawer(null)} />}
+          <TutorialOverlay open={drawer === "tutorial"} onClose={() => setDrawer(null)} />
+        </>
+      ) : (
+        <>
+          <Hero onBegin={() => setShowOnboard(true)} />
+          <OnboardingModal open={showOnboard} onClose={() => setShowOnboard(false)} />
+        </>
       )}
-
-      {!state.onboarded && <Onboarding />}
     </div>
   );
 }

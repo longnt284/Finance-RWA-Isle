@@ -115,4 +115,72 @@ input[type="range"] { accent-color: #e0aa50; }
   transform: translate(-50%, -110%);
   white-space: nowrap;
   will-change: transform, opacity;
+  transition: opacity 0.3s ease;
 }
+.world-label .chip { transition: border-color 0.25s ease, color 0.25s ease, box-shadow 0.25s ease; }
+.world-label.label-active .chip {
+  border-color: rgba(240, 194, 104, 0.55);
+  color: #ffd88a;
+  box-shadow: 0 0 18px rgba(224, 170, 80, 0.22);
+}
+.world-label.label-locked .chip { opacity: 0.6; border-style: dashed; }
+
+/* ---------- display type ---------- */
+.text-outline {
+  color: transparent;
+  -webkit-text-stroke: 1.5px rgba(240, 194, 104, 0.85);
+}
+.text-outline-mist {
+  color: transparent;
+  -webkit-text-stroke: 1px rgba(183, 203, 201, 0.5);
+}
+
+/* ---------- marquee ticker ---------- */
+@keyframes marqueeX {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+.marquee-track {
+  display: flex;
+  width: max-content;
+  animation: marqueeX 48s linear infinite;
+}
+.marquee-track:hover { animation-play-state: paused; }
+
+/* ---------- hero scanline ---------- */
+@keyframes scan {
+  0%, 100% { transform: translateY(-30vh); opacity: 0; }
+  10% { opacity: 0.5; }
+  50% { opacity: 0.25; }
+  90% { opacity: 0.5; }
+  100% { transform: translateY(110vh); opacity: 0; }
+}
+.scanline {
+  animation: scan 9s ease-in-out infinite;
+}
+
+@keyframes floaty {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+.anim-floaty { animation: floaty 5s ease-in-out infinite; }
+
+@keyframes popIn {
+  0% { opacity: 0; transform: scale(0.92) translateY(10px); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+.anim-pop { animation: popIn 0.4s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+@keyframes glowPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(240, 194, 104, 0.35); }
+  50% { box-shadow: 0 0 0 8px rgba(240, 194, 104, 0); }
+}
+.glow-pulse { animation: glowPulse 2.4s ease-out infinite; }
+
+@keyframes driftA {
+  from { transform: translate3d(-4vw, 0, 0); }
+  to { transform: translate3d(4vw, 0, 0); }
+}
+.drift-a { animation: driftA 14s ease-in-out infinite alternate; }
+.drift-b { animation: driftA 19s ease-in-out infinite alternate-reverse; }
+

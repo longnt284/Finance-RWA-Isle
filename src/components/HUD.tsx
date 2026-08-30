@@ -1,238 +1,311 @@
-import { useEffect, useRef, useState } from "react";
-import { useStore, cityLevel, netWorth, levelFor } from "../state/store";
-import type { DistrictId, ViewId } from "../state/store";
-import { compactVND, fmt, timeAgo } from "../lib/format";
-import { sound } from "../lib/audio";
+import { useState } from "react";
 import {
-  IconCrypto, IconStocks, IconVault, IconAcademy, IconLighthouse, IconOverview,
-  IconFlame, IconSound, IconMute, IconBolt, IconClose,
+  useStore, cityLevel, netWorth, levelFor, xpMult, DISTRICT_IDS, ISLE_UNLOCK_LV,
+} from "../state/store";
+import type { DistrictId, ViewId } from "../state/store";
+import { makeT } from "../lib/i18n";
+import { fmtMoney, dayKey, timeAgo, fmtPrice, compactVND } from "../lib/format";
+import { useMarket, market, ASSET_BY_ID } from "../lib/market";
+import {
+  IconBitcoin, IconChart, IconVault, IconBook, IconHome, IconCompass, IconIsland,
+  IconBolt, IconGift, IconSound, IconSoundOff, IconCoins, IconCalc, IconNote, IconHelp,
+  IconClose, IconTrendUp, IconTrendDown, IconChevD,
 } from "./icons";
 
-const NAV: { id: ViewId; name: string; icon: (p: { className?: string }) => JSX.Element }[] = [
-  { id: "overview", name: "Toàn cảnh", icon: IconOverview },
-  { id: "crypto", name: "Tháp Genesis", icon: IconCrypto },
-  { id: "stocks", name: "Sàn Hưng Thịnh", icon: IconStocks },
-  { id: "vault", name: "Kim Khố", icon: IconVault },
-  { id: "academy", name: "Học Viện", icon: IconAcademy },
-  { id: "center", name: "Hải Đăng", icon: IconLighthouse },
-];
+export type DrawerId = "market" | "tools" | "notes" | "tutorial" | null;
 
-const DISTRICT_IDS: DistrictId[] = ["crypto", "stocks", "vault", "academy"];
-
-interface Quote {
-  sym: string;
-  price: number;
-  isIndex?: boolean;
+interface Props {
+  selected: ViewId;
+  onSelect: (v: ViewId) => void;
+  drawer: DrawerId;
+  onDrawer: (d: DrawerId) => void;
+  muted: boolean;
+  onToggleMute: () => void;
 }
 
-const INITIAL_QUOTES: Quote[] = [
-  { sym: "BTC", price: 2.641e9 },
-  { sym: "ETH", price: 9.24e7 },
-  { sym: "SOL", price: 5.13e6 },
-  { sym: "BNB", price: 1.72e7 },
-  { sym: "VNINDEX", price: 1287.4, isIndex: true },
-  { sym: "FPT", price: 134200, isIndex: true },
-  { sym: "SSI", price: 27850, isIndex: true },
-  { sym: "VÀNG", price: 8.42e7 },
-];
+const NAV_ICONS: Record<string, (p: { className?: string }) => React.ReactElement> = {
+  overview: IconCompass,
+  center: IconHome,
+  crypto: IconBitcoin,
+  stocks: IconChart,
+  vault: IconVault,
+  academy: IconBook,
+  isle: IconIsland,
+};
 
-function quoteStr(q: Quote): string {
-  if (q.isIndex) return fmt(q.price);
-  return compactVND(q.price);
-}
-
-export function TickerTape() {
-  const [quotes, setQuotes] = useState(INITIAL_QUOTES);
-  const [dir, setDir] = useState<Record<string, number>>({});
-  const [flashKey, setFlashKey] = useState(0);
-
-  useEffect(() => {
-    const id = window.setInterval(() => {
-      setQuotes((prev) => {
-        const next = prev.map((q) => {
-          const drift = (Math.random() - 0.485) * 0.011;
-          return { ...q, price: Math.max(0.01, q.price * (1 + drift)), _d: drift };
-        }) as (Quote & { _d: number })[];
-        const d: Record<string, number> = {};
-        for (const q of next) d[q.sym] = q._d >= 0 ? 1 : -1;
-        setDir(d);
-        return next;
-      });
-      setFlashKey((k) => k + 1);
-    }, 2400);
-    return () => window.clearInterval(id);
-  }, []);
-
+function NavChip({ id, onClick }: { id: string; onClick: () => void }) {
+  const { state } = useStore();
+  const t = makeT(state.lang);
+  const isDistrict = (DISTRICT_IDS as string[]).includes(id);
+  const lv = isDistrict ? levelFor(state.xp[id as DistrictId]) : null;
+  const isleLocked = id === "isle" && levelFor(state.xp.crypto) < ISLE_UNLOCK_LV;
+  const active = state.onboarded && useStoreSelected() === id;
+  const Icon = NAV_ICONS[id];
+  const label =
+    id === "overview" ? t("nav.overview")
+    : id === "center" ? t("nav.center")
+    : id === "isle" ? t("nav.isle")
+    : t(`d.${id}.building`);
   return (
-    <div className="chip flex items-center gap-4 overflow-hidden rounded-md px-3 py-1.5 font-mono text-[11px]">
-      <span className="shrink-0 font-display text-[8px] tracking-[0.22em] text-gold-400">THỊ TRƯỜNG</span>
-      <div className="flex items-center gap-4 overflow-hidden">
-        {quotes.map((q) => (
-          <span key={q.sym + flashKey} className={`whitespace-nowrap ${dir[q.sym] === 1 ? "flash-up" : "flash-down"}`}>
-            <span className="text-mist-400">{q.sym}</span>{" "}
-            <span className="text-mist-100">{quoteStr(q)}</span>{" "}
-            <span className={dir[q.sym] === 1 ? "text-jade-400" : "text-coral-400"}>{dir[q.sym] === 1 ? "▲" : "▼"}</span>
-          </span>
-        ))}
-      </div>
-    </div>
+    <button
+      onClick={onClick}
+      className={`group flex w-full items-center gap-2.5 rounded-lg border px-3 py-2 text-left transition-all duration-200 ${
+        active
+          ? "border-gold-500/60 bg-gold-500/12 text-gold-300 shadow-[0_0_18px_rgba(224,170,80,0.15)]"
+          : "border-mist-500/12 bg-ink-850/60 text-mist-400 hover:border-gold-500/35 hover:text-mist-100 hover:translate-x-0.5"
+      }`}
+    >
+      <Icon className={`h-4 w-4 shrink-0 ${active ? "text-gold-400" : ""}`} />
+      <span className="min-w-0 flex-1 truncate text-[12px] font-medium">{label}</span>
+      {lv !== null && (
+        <span className="flex items-center gap-0.5">
+          {[0, 1, 2, 3, 4].map((i) => (
+            <span key={i} className={`h-1 w-1 rotate-45 ${i < Math.min(lv, 5) ? "" : "opacity-20"}`} style={{ background: active ? "#f0c268" : "#8ba4a7" }} />
+          ))}
+        </span>
+      )}
+      {id === "isle" && isleLocked && (
+        <span className="font-mono text-[9px] text-mist-500">{t("misc.levelShort", { n: ISLE_UNLOCK_LV })}</span>
+      )}
+    </button>
   );
 }
 
-export function TopBar() {
-  const { state } = useStore();
-  const nw = netWorth(state);
-  const cl = cityLevel(state);
-  const [muted, setMuted] = useState(sound.isMuted());
-
-  return (
-    <div className="pointer-events-none absolute inset-x-0 top-0 z-30 flex items-start justify-between gap-3 p-4 sm:p-5">
-      {/* wordmark */}
-      <div className="pointer-events-auto anim-fade-up">
-        <div className="flex items-baseline gap-2.5">
-          <span className="font-display text-xl font-bold tracking-[0.08em] text-gold-300 sm:text-2xl" style={{ textShadow: "0 0 24px rgba(240,194,104,0.35)" }}>
-            VƯỢNG
-          </span>
-          <span className="hidden font-display text-[9px] tracking-[0.3em] text-mist-400 sm:block">WEALTH CIVILIZATION</span>
-        </div>
-        <div className="mt-1 flex items-center gap-2 text-[11px] text-mist-400">
-          <span className="text-mist-300">{state.city}</span>
-          <span className="chip rounded px-1.5 py-px font-mono text-[10px] text-gold-400">Cấp đảo {cl}</span>
-        </div>
-      </div>
-
-      {/* stats */}
-      <div className="pointer-events-auto flex items-center gap-2">
-        <div className="chip anim-fade-up hidden rounded-md px-3 py-1.5 text-right md:block" style={{ animationDelay: "60ms" }}>
-          <div className="text-[9px] uppercase tracking-[0.18em] text-mist-500">Tài sản ròng</div>
-          <div className="font-mono text-sm font-semibold text-gold-300">{nw === null ? "—" : compactVND(nw)}</div>
-        </div>
-        <div className="chip anim-fade-up rounded-md px-3 py-1.5 text-right" style={{ animationDelay: "120ms" }}>
-          <div className="flex items-center justify-end gap-1 text-[9px] uppercase tracking-[0.18em] text-mist-500">
-            <IconBolt className="h-3 w-3 text-gold-400" /> Tổng XP
-          </div>
-          <div className="font-mono text-sm font-semibold text-mist-100">{fmt(DISTRICT_IDS.reduce((s, d) => s + state.xp[d], 0))}</div>
-        </div>
-        <div className="chip anim-fade-up rounded-md px-3 py-1.5 text-center" style={{ animationDelay: "180ms" }}>
-          <div className="flex items-center justify-center gap-1 font-mono text-sm font-semibold text-coral-400">
-            <IconFlame className="h-4 w-4" /> {state.streak}
-          </div>
-          <div className="text-[9px] uppercase tracking-[0.18em] text-mist-500">ngày</div>
-        </div>
-        <button
-          className="chip anim-fade-up rounded-md p-2.5 text-mist-300 transition-colors hover:text-gold-300"
-          style={{ animationDelay: "240ms" }}
-          onClick={() => {
-            setMuted(sound.toggleMute());
-            sound.tick();
-          }}
-          title={muted ? "Bật âm thanh" : "Tắt âm thanh"}
-        >
-          {muted ? <IconMute className="h-4 w-4" /> : <IconSound className="h-4 w-4" />}
-        </button>
-      </div>
-    </div>
-  );
+/* helper to read selected inside chips without prop drilling */
+let _selected: ViewId = "overview";
+function useStoreSelected(): ViewId {
+  return _selected;
 }
 
-export function SideNav({ selected, onSelect }: { selected: ViewId; onSelect: (v: ViewId) => void }) {
-  const { state } = useStore();
-  return (
-    <div className="pointer-events-auto absolute left-4 top-1/2 z-30 hidden -translate-y-1/2 flex-col gap-1.5 lg:flex">
-      {NAV.map((n, i) => {
-        const active = selected === n.id;
-        const lv = n.id !== "overview" && n.id !== "center" ? levelFor(state.xp[n.id as DistrictId]) : null;
-        const Icon = n.icon;
+function Ticker() {
+  const { state, api } = useStore();
+  useMarket();
+  const t = makeT(state.lang);
+  if (state.watchlist.length === 0) return null;
+  const items = state.watchlist.map((id) => ({ asset: ASSET_BY_ID.get(id), q: market.quotes[id] })).filter((x) => x.asset && x.q);
+  const row = (keyPrefix: string) => (
+    <div className="flex items-center">
+      {items.map(({ asset, q }, i) => {
+        const up = q.ch >= 0;
+        const flash = q.p > q.prev ? "flash-up" : q.p < q.prev ? "flash-down" : "";
         return (
           <button
-            key={n.id}
-            onClick={() => {
-              sound.tick();
-              onSelect(n.id);
-            }}
-            className={`anim-fade-up group flex items-center gap-2.5 rounded-md border px-2.5 py-2 text-left transition-all duration-200 ${
-              active
-                ? "border-gold-500/60 bg-gold-500/15 text-gold-300 shadow-[0_0_20px_rgba(224,170,80,0.15)]"
-                : "border-transparent text-mist-400 hover:border-gold-500/25 hover:bg-ink-800/70 hover:text-mist-100"
-            }`}
-            style={{ animationDelay: `${300 + i * 70}ms` }}
+            key={`${keyPrefix}-${asset!.id}-${i}`}
+            onClick={() => api.pushToast({ title: `${asset!.sym} · ${asset!.name}`, sub: `${fmtPrice(q.p, asset!.cur, state.currency)} · ${up ? "+" : ""}${q.ch.toFixed(2)}%`, kind: "info" })}
+            className="mx-4 flex items-center gap-2 whitespace-nowrap font-mono text-[11px]"
           >
-            <Icon className="h-[18px] w-[18px] shrink-0" />
-            <span className="max-w-0 overflow-hidden whitespace-nowrap font-display text-[10px] tracking-[0.12em] opacity-0 transition-all duration-300 group-hover:max-w-[140px] group-hover:opacity-100">
-              {n.name.toUpperCase()}
-              {lv !== null && <span className="ml-1.5 font-mono text-[9px] text-gold-400">·{String(lv).padStart(1, "0")}</span>}
+            <span className="font-semibold tracking-wider text-mist-300">{asset!.sym}</span>
+            <span className={`text-mist-100 ${flash}`} key={`${asset!.id}-${q.p}`}>{fmtPrice(q.p, asset!.cur, state.currency)}</span>
+            <span className={`flex items-center gap-0.5 ${up ? "text-jade-400" : "text-coral-400"}`}>
+              {up ? <IconTrendUp className="h-3 w-3" /> : <IconTrendDown className="h-3 w-3" />}
+              {up ? "+" : ""}{q.ch.toFixed(2)}%
             </span>
           </button>
         );
       })}
     </div>
   );
-}
-
-export function BottomHud({ selected }: { selected: ViewId }) {
-  const { state } = useStore();
   return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30 flex flex-col gap-2 p-4 sm:p-5">
-      <div className="flex items-end justify-between gap-3">
-        <div className="flex min-w-0 flex-col gap-2">
-          <div className="pointer-events-auto hidden sm:block">
-            <TickerTape />
-          </div>
-          <div className="hidden max-w-[380px] flex-col gap-1 md:flex">
-            {state.log.slice(0, 3).map((l) => (
-              <div key={l.id} className="anim-fade-up flex items-center gap-2 text-[11px] text-mist-400">
-                <span
-                  className="h-1 w-1 shrink-0 rotate-45"
-                  style={{
-                    background: l.kind === "level" ? "#ffd88a" : l.kind === "goal" ? "#4cd99a" : l.kind === "xp" ? "#5ce8c4" : "#5f7d82",
-                  }}
-                />
-                <span className="truncate">{l.text}</span>
-                <span className="shrink-0 font-mono text-[9px] text-mist-500">{timeAgo(l.ts)}</span>
-              </div>
-            ))}
+    <div className="pointer-events-auto absolute bottom-0 left-0 right-0 z-20 border-t hairline-gold bg-ink-900/85 py-2 backdrop-blur-md">
+      <div className="flex items-center">
+        <span className="z-10 ml-3 mr-2 flex shrink-0 items-center gap-1.5 font-display text-[9px] tracking-[0.2em] text-gold-400">
+          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-jade-400" />
+          {t("hud.live")}
+        </span>
+        <div className="relative min-w-0 flex-1 overflow-hidden">
+          <div className="marquee-track">
+            {row("a")}
+            {row("b")}
           </div>
         </div>
-        {selected === "overview" && (
-          <div className="pointer-events-auto hidden shrink-0 text-right text-[10px] leading-relaxed text-mist-500 lg:block">
-            <div>Kéo để xoay · cuộn để thu phóng</div>
-            <div className="text-mist-400">Nhấn vào một công trình để mở quận</div>
+      </div>
+    </div>
+  );
+}
+
+export default function HUD({ selected, onSelect, drawer, onDrawer, muted, onToggleMute }: Props) {
+  const { state, api } = useStore();
+  const t = makeT(state.lang);
+  useMarket();
+  _selected = selected;
+  const [feedOpen, setFeedOpen] = useState(true);
+
+  const nw = netWorth(state);
+  const canClaim = state.onboarded && state.lastClaim !== dayKey(Date.now());
+  const isleUnlocked = levelFor(state.xp.crypto) >= ISLE_UNLOCK_LV;
+
+  const navIds: string[] = ["overview", "center", ...DISTRICT_IDS, "isle"];
+
+  return (
+    <>
+      {/* ------------------------------ top bar ------------------------------ */}
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-30 flex items-start justify-between gap-3 p-3 sm:p-4">
+        <div className="pointer-events-auto flex items-center gap-3">
+          <div className="panel rounded-xl px-4 py-2.5">
+            <div className="font-display text-[9px] uppercase tracking-[0.3em] text-gold-400/90">{t("brand.top")}</div>
+            <div className="font-display text-lg font-bold leading-tight tracking-wide text-mist-100">{t("brand.main")}</div>
+            <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-mist-500">
+              <span className="h-1 w-1 rotate-45 bg-gold-500" />
+              {state.city || "—"} · {t("ct.islandLvl")} {cityLevel(state)}
+            </div>
           </div>
+          {canClaim && (
+            <button
+              onClick={() => api.claimDaily()}
+              className="btn-gold glow-pulse pointer-events-auto flex items-center gap-1.5 rounded-xl px-3.5 py-2.5 font-display text-[10px] tracking-wider"
+            >
+              <IconGift className="h-4 w-4" />
+              {t("hud.daily")}
+            </button>
+          )}
+        </div>
+
+        <div className="pointer-events-auto flex flex-wrap items-center justify-end gap-1.5">
+          {/* currency + language */}
+          <div className="chip flex items-center rounded-lg p-0.5">
+            {(["VND", "USD"] as const).map((c) => (
+              <button
+                key={c}
+                onClick={() => api.setCurrency(c)}
+                className={`rounded-md px-2.5 py-1.5 font-mono text-[10px] font-semibold transition-all ${
+                  state.currency === c ? "bg-gold-500/90 text-ink-950" : "text-mist-400 hover:text-mist-100"
+                }`}
+              >
+                {c === "VND" ? "₫" : "$"} {c}
+              </button>
+            ))}
+          </div>
+          <div className="chip flex items-center rounded-lg p-0.5">
+            {(["vi", "en"] as const).map((l) => (
+              <button
+                key={l}
+                onClick={() => api.setLang(l)}
+                className={`rounded-md px-2.5 py-1.5 font-mono text-[10px] font-semibold uppercase transition-all ${
+                  state.lang === l ? "bg-gold-500/90 text-ink-950" : "text-mist-400 hover:text-mist-100"
+                }`}
+              >
+                {l}
+              </button>
+            ))}
+          </div>
+          {([
+            ["market", IconCoins, t("hud.market")],
+            ["tools", IconCalc, t("hud.tools")],
+            ["notes", IconNote, t("hud.notes")],
+            ["tutorial", IconHelp, t("hud.help")],
+          ] as const).map(([id, Icon, label]) => (
+            <button
+              key={id}
+              onClick={() => onDrawer(drawer === id ? null : id)}
+              title={label}
+              className={`chip flex items-center gap-1.5 rounded-lg px-3 py-2 text-[11px] transition-all ${
+                drawer === id ? "border-gold-500/50 text-gold-300" : "text-mist-400 hover:text-mist-100 hover:border-gold-500/30"
+              }`}
+            >
+              <Icon className="h-4 w-4" />
+              <span className="hidden lg:inline">{label}</span>
+            </button>
+          ))}
+          <button onClick={onToggleMute} title={muted ? t("hud.muted") : t("hud.mute")} className="chip rounded-lg p-2 text-mist-400 transition-colors hover:text-mist-100">
+            {muted ? <IconSoundOff className="h-4 w-4" /> : <IconSound className="h-4 w-4" />}
+          </button>
+        </div>
+      </div>
+
+      {/* ------------------------------ left nav ------------------------------ */}
+      <div className="pointer-events-none absolute bottom-14 left-3 top-24 z-20 hidden w-[210px] flex-col gap-1.5 sm:flex sm:top-24">
+        <div className="mb-1 font-display text-[9px] uppercase tracking-[0.28em] text-mist-500">{t("hud.nav")}</div>
+        <div className="pointer-events-auto flex flex-col gap-1.5">
+          {navIds.map((id) => (
+            <NavChip key={id} id={id} onClick={() => onSelect(id as ViewId)} />
+          ))}
+        </div>
+        {selected !== "overview" && (
+          <button onClick={() => onSelect("overview")} className="btn-ghost pointer-events-auto mt-2 flex items-center justify-center gap-1.5 rounded-lg py-2 text-[11px]">
+            <IconChevD className="h-3.5 w-3.5 -rotate-90" />
+            {t("hud.back")}
+          </button>
         )}
       </div>
-    </div>
-  );
-}
 
-export function Toasts() {
-  const { state, api } = useStore();
-  return (
-    <div className="pointer-events-none absolute left-1/2 top-20 z-40 flex w-[min(92vw,360px)] -translate-x-1/2 flex-col gap-2">
-      {state.toasts.map((t) => (
-        <ToastItem key={t.id} id={t.id} title={t.title} sub={t.sub} kind={t.kind} onDone={(id) => api.dismissToast(id)} />
-      ))}
-    </div>
-  );
-}
+      {/* ------------------------------ right: networth + feed ------------------------------ */}
+      <div className="pointer-events-none absolute bottom-14 right-3 top-24 z-20 flex w-[230px] flex-col items-end gap-2 sm:w-[250px]">
+        <div className="panel pointer-events-auto w-full rounded-xl px-4 py-3">
+          <div className="flex items-center justify-between">
+            <span className="font-mono text-[9px] uppercase tracking-[0.2em] text-mist-500">{t("hud.networth")}</span>
+            <span className="chip flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[9px] text-gold-300">
+              <IconBolt className="h-3 w-3" />
+              {t("hud.streak", { n: state.streak })} · ×{xpMult(state.streak).toFixed(2)}
+            </span>
+          </div>
+          <div className="mt-1 font-mono text-xl font-semibold tracking-tight text-gold-300">
+            {nw === null ? "—" : fmtMoney(nw, state.currency)}
+          </div>
+          {nw !== null && state.currency === "USD" && (
+            <div className="font-mono text-[10px] text-mist-500">{compactVND(nw)}</div>
+          )}
+        </div>
 
-function ToastItem({ id, title, sub, kind, onDone }: { id: string; title: string; sub?: string; kind: "gold" | "jade" | "info"; onDone: (id: string) => void }) {
-  const timer = useRef<number>(0);
-  useEffect(() => {
-    timer.current = window.setTimeout(() => onDone(id), 4200);
-    return () => window.clearTimeout(timer.current);
-  }, [id, onDone]);
-  const color = kind === "gold" ? "text-gold-300" : kind === "jade" ? "text-jade-300" : "text-mist-300";
-  const bar = kind === "gold" ? "#e0aa50" : kind === "jade" ? "#4cd99a" : "#5f7d82";
-  return (
-    <div className="anim-toast panel pointer-events-auto relative flex items-start gap-3 overflow-hidden rounded-lg px-4 py-3">
-      <span className="absolute inset-y-0 left-0 w-[3px]" style={{ background: bar }} />
-      <div className="min-w-0 flex-1">
-        <div className={`font-display text-[11px] tracking-[0.08em] ${color}`}>{title}</div>
-        {sub && <div className="mt-0.5 text-[11px] text-mist-400">{sub}</div>}
+        <div className="panel pointer-events-auto flex min-h-0 w-full flex-1 flex-col overflow-hidden rounded-xl">
+          <button onClick={() => setFeedOpen(!feedOpen)} className="flex items-center justify-between px-4 py-2.5">
+            <span className="font-display text-[9px] tracking-[0.24em] text-mist-400">{t("hud.feed")}</span>
+            <IconChevD className={`h-3.5 w-3.5 text-mist-500 transition-transform ${feedOpen ? "" : "rotate-180"}`} />
+          </button>
+          {feedOpen && (
+            <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto px-4 pb-3">
+              {state.log.length === 0 && <p className="text-[10px] text-mist-500">…</p>}
+              {state.log.slice(0, 14).map((l) => (
+                <div key={l.id} className="flex items-baseline gap-2 text-[10.5px] leading-snug">
+                  <span
+                    className="mt-1 h-1 w-1 shrink-0 rotate-45"
+                    style={{
+                      background:
+                        l.kind === "level" ? "#f0c268"
+                        : l.kind === "goal" ? "#ffd88a"
+                        : l.kind === "xp" ? "#4cd99a"
+                        : l.kind === "event" ? "#9fd0ff"
+                        : l.kind === "ach" ? "#ff7f6e"
+                        : "#5f7d82",
+                    }}
+                  />
+                  <span className="min-w-0 flex-1 text-mist-400">{l.text}</span>
+                  <span className="shrink-0 font-mono text-[8.5px] text-mist-500">{timeAgo(l.ts)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
-      <button className="shrink-0 text-mist-500 transition-colors hover:text-mist-100" onClick={() => onDone(id)}>
-        <IconClose className="h-3.5 w-3.5" />
-      </button>
-    </div>
+
+      {/* ------------------------------ hint ------------------------------ */}
+      {selected === "overview" && (
+        <div className="pointer-events-none absolute bottom-12 left-1/2 z-10 -translate-x-1/2">
+          <span className="chip anim-fade-in rounded-full px-4 py-1.5 text-[10.5px] text-mist-400">{t("hud.clkHint")}</span>
+        </div>
+      )}
+
+      {/* ------------------------------ toasts ------------------------------ */}
+      <div className="pointer-events-none absolute left-1/2 top-20 z-50 flex -translate-x-1/2 flex-col items-center gap-2">
+        {state.toasts.map((toast) => (
+          <div
+            key={toast.id}
+            className={`anim-toast panel pointer-events-auto flex items-start gap-3 rounded-xl px-4 py-3 ${
+              toast.kind === "gold" ? "border-gold-500/50" : toast.kind === "jade" ? "border-jade-500/50" : ""
+            }`}
+          >
+            <span className={`mt-1 h-2 w-2 rotate-45 ${toast.kind === "gold" ? "bg-gold-400" : toast.kind === "jade" ? "bg-jade-400" : "bg-mist-400"}`} />
+            <div>
+              <div className="font-display text-[12px] font-semibold text-mist-100">{toast.title}</div>
+              {toast.sub && <div className="mt-0.5 text-[11px] text-mist-400">{toast.sub}</div>}
+            </div>
+            <button onClick={() => api.dismissToast(toast.id)} className="ml-2 text-mist-500 transition-colors hover:text-mist-100">
+              <IconClose className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ))}
+      </div>
+
+      <Ticker />
+    </>
   );
 }

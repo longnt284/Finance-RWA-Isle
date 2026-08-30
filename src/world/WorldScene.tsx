@@ -3,6 +3,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import {
   DISTRICT_POS,
+  ISLE_POS,
   buildSpire,
   buildExchange,
   buildVault,
@@ -11,6 +12,8 @@ import {
   buildTerrain,
   buildPaths,
   buildGate,
+  buildIsle,
+  buildIsleGhost,
   makeTree,
   makeRock,
   makeCloud,
@@ -20,26 +23,38 @@ import {
   makeDust,
   makeBurstPool,
   makeMats,
+  makePerson,
+  makeBoat,
+  makeBird,
+  makeLamp,
+  makeDecor,
+  DECOR_IDS,
 } from "./build";
-import type { TickFn } from "./build";
-import { DISTRICTS } from "../state/store";
+import type { TickFn, Mats, DecorId } from "./build";
+import { DISTRICTS, ISLE_UNLOCK_LV, VISUAL_MAX } from "../state/store";
 import type { DistrictId, ViewId } from "../state/store";
+import { makeT } from "../lib/i18n";
+import type { Lang } from "../lib/i18n";
 import { sound } from "../lib/audio";
 
 export interface WorldHandle {
-  fireBurst(view: DistrictId, kind: "gold" | "jade"): void;
+  fireBurst(view: ViewId, kind: "gold" | "jade"): void;
 }
 
 interface Props {
   levels: Record<DistrictId, number>;
   selected: ViewId;
-  onSelect: (view: DistrictId | "center") => void;
+  onSelect: (view: ViewId) => void;
   handleRef: React.MutableRefObject<WorldHandle | null>;
+  lang: Lang;
+  decor: string[];
+  isleUnlocked: boolean;
+  isleLevel: number;
 }
 
 const DISTRICT_IDS: DistrictId[] = ["crypto", "stocks", "vault", "academy"];
 
-type Builder = (level: number, m: ReturnType<typeof makeMats>, ticks: TickFn[]) => THREE.Group;
+type Builder = (level: number, m: Mats, ticks: TickFn[]) => THREE.Group;
 const BUILDERS: Record<DistrictId, Builder> = {
   crypto: buildSpire,
   stocks: buildExchange,
@@ -53,6 +68,7 @@ const LABEL_HEIGHT: Record<string, (lv: number) => number> = {
   vault: (lv) => 5 + lv * 0.3,
   academy: (lv) => 6 + lv * 0.5,
   center: () => 11.5,
+  isle: () => 6.5,
 };
 
 function easeInOutCubic(k: number): number {
@@ -66,6 +82,13 @@ function viewPose(view: ViewId): { pos: THREE.Vector3; target: THREE.Vector3 } {
   if (view === "center") {
     return { pos: new THREE.Vector3(11.5, 8, 13.5), target: new THREE.Vector3(0, 3.6, 0) };
   }
+  if (view === "isle") {
+    const dir = ISLE_POS.clone().setY(0).normalize();
+    return {
+      pos: ISLE_POS.clone().add(dir.multiplyScalar(-11)).add(new THREE.Vector3(0, 8.5, 6)),
+      target: ISLE_POS.clone().add(new THREE.Vector3(0, 1.6, 0)),
+    };
+  }
   const a = DISTRICT_POS[view];
   const dir = a.clone().setY(0).normalize();
   return {
@@ -74,20 +97,25 @@ function viewPose(view: ViewId): { pos: THREE.Vector3; target: THREE.Vector3 } {
   };
 }
 
-export default function WorldScene({ levels, selected, onSelect, handleRef }: Props) {
+export default function WorldScene({ levels, selected, onSelect, handleRef, lang, decor, isleUnlocked, isleLevel }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
   const labelEls = useRef<Record<string, HTMLDivElement | null>>({});
-  const propsRef = useRef({ levels, selected, onSelect });
-  propsRef.current = { levels, selected, onSelect };
+  const propsRef = useRef({ levels, selected, onSelect, lang, isleUnlocked, isleLevel, currentDecor: decor });
+  propsRef.current = { levels, selected, onSelect, lang, isleUnlocked, isleLevel, currentDecor: decor };
 
   const sceneApi = useRef<{
     flyTo: (view: ViewId, dur?: number) => void;
     rebuildDistrict: (d: DistrictId) => void;
-    burst: (view: DistrictId, kind: "gold" | "jade") => void;
+    rebuildIsle: () => void;
+    rebuildDecor: () => void;
+    burst: (view: ViewId, kind: "gold" | "jade") => void;
   } | null>(null);
 
   const prevLevels = useRef<Record<DistrictId, number> | null>(null);
+  const prevIsleLv = useRef<number>(isleLevel);
+  const prevUnlocked = useRef<boolean>(isleUnlocked);
+  const prevDecor = useRef<string>(decor.join(","));
 
   /* ------------------------- mount scene once ------------------------- */
   useEffect(() => {
@@ -108,25 +136,19 @@ export default function WorldScene({ levels, selected, onSelect, handleRef }: Pr
     const scene = new THREE.Scene();
     scene.fog = new THREE.FogExp2(0x08222b, 0.011);
 
-    const camera = new THREE.PerspectiveCamera(
-      46,
-      Math.max(0.1, container.clientWidth / Math.max(1, container.clientHeight)),
-      0.1,
-      900
-    );
+    const camera = new THREE.PerspectiveCamera(46, Math.max(0.1, container.clientWidth / Math.max(1, container.clientHeight)), 0.1, 900);
     camera.position.set(4, 85, 140);
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.07;
-    controls.minDistance = 10;
-    controls.maxDistance = 110;
+    controls.minDistance = 9;
+    controls.maxDistance = 120;
     controls.maxPolarAngle = 1.42;
     controls.minPolarAngle = 0.12;
     controls.autoRotateSpeed = 0.4;
     controls.target.set(0, 1.2, 0);
 
-    /* pause auto-rotate while the user interacts, resume after idle */
     let userInteracting = false;
     let idleTimer = 0;
     const onCtlStart = () => {
@@ -142,237 +164,344 @@ export default function WorldScene({ levels, selected, onSelect, handleRef }: Pr
     controls.addEventListener("start", onCtlStart);
     controls.addEventListener("end", onCtlEnd);
 
-    /* lights */
-    const hemi = new THREE.HemisphereLight(0x7fc4b8, 0x1d2a28, 0.55);
+    /* ------------------------------ lights ------------------------------ */
+    const hemi = new THREE.HemisphereLight(0x9fd4cf, 0x1c2a2c, 0.55);
     scene.add(hemi);
-    const sun = new THREE.DirectionalLight(0xffd9a0, 2.0);
-    sun.position.set(-38, 42, -30);
+    const sun = new THREE.DirectionalLight(0xffd9a8, 2.0);
+    sun.position.set(-42, 52, -30);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
-    sun.shadow.camera.left = -45;
-    sun.shadow.camera.right = 45;
-    sun.shadow.camera.top = 45;
-    sun.shadow.camera.bottom = -45;
-    sun.shadow.camera.far = 140;
-    sun.shadow.bias = -0.0006;
+    sun.shadow.camera.left = -46;
+    sun.shadow.camera.right = 46;
+    sun.shadow.camera.top = 46;
+    sun.shadow.camera.bottom = -46;
+    sun.shadow.camera.far = 160;
+    sun.shadow.bias = -0.0004;
     scene.add(sun);
-    const rim = new THREE.DirectionalLight(0x5ce8c4, 0.35);
-    rim.position.set(30, 18, 38);
+    const rim = new THREE.DirectionalLight(0x5ce8c4, 0.5);
+    rim.position.set(38, 18, 42);
     scene.add(rim);
 
-    const mats = makeMats();
+    /* ------------------------------ world ------------------------------ */
+    const m = makeMats();
+    const staticTicks: TickFn[] = [];
 
-    /* environment */
     scene.add(makeSky());
     scene.add(makeSunSprite());
     const water = makeWater();
     scene.add(water.mesh);
-    scene.add(buildTerrain());
-    scene.add(buildPaths(mats));
-    scene.add(buildGate(mats));
+    staticTicks.push(water.tick);
     const dust = makeDust();
     scene.add(dust.points);
-    const bursts = makeBurstPool(scene);
+    staticTicks.push(dust.tick);
 
-    /* nature scatter (deterministic) */
-    let seed = 7;
-    const rnd = () => {
-      seed = (seed * 16807) % 2147483647;
-      return seed / 2147483647;
-    };
-    const leafMats = [mats.leaves1, mats.leaves2];
-    for (let i = 0; i < 16; i++) {
-      const a = rnd() * Math.PI * 2;
-      const r = 16 + rnd() * 8;
-      const x = Math.cos(a) * r;
-      const z = Math.sin(a) * r;
-      let tooClose = Math.sqrt(x * x + z * z) < 15;
-      for (const id of DISTRICT_IDS) {
-        const p = DISTRICT_POS[id];
-        if (Math.sqrt((x - p.x) ** 2 + (z - p.z) ** 2) < 6.5) tooClose = true;
-      }
-      if (tooClose) continue;
-      const tree = makeTree(mats, 0.8 + rnd() * 0.9, leafMats[i % 2]);
-      tree.position.set(x, 0, z);
-      tree.rotation.y = rnd() * Math.PI;
-      scene.add(tree);
-    }
-    for (let i = 0; i < 9; i++) {
-      const a = rnd() * Math.PI * 2;
-      const r = 8 + rnd() * 16;
-      const rock = makeRock(mats, 0.5 + rnd() * 1.1);
-      rock.position.set(Math.cos(a) * r, 0.1, Math.sin(a) * r);
-      rock.rotation.y = rnd() * Math.PI;
-      scene.add(rock);
-    }
+    scene.add(buildTerrain());
+    scene.add(buildPaths(m));
+    scene.add(buildGate(m));
 
-    /* clouds */
-    const clouds: THREE.Group[] = [];
-    for (let i = 0; i < 4; i++) {
-      const c = makeCloud();
-      c.position.set(-70 + i * 42, 16 + (i % 2) * 5, -25 + i * 14);
-      c.scale.setScalar(1.4 + (i % 3) * 0.7);
-      clouds.push(c);
-      scene.add(c);
-    }
-
-    /* lighthouse at center */
-    const centerTicks: TickFn[] = [];
-    const lighthouse = buildLighthouse(mats, centerTicks);
+    const lighthouse = buildLighthouse(m, staticTicks);
+    lighthouse.position.copy(DISTRICT_POS.center);
+    lighthouse.userData.tag = "center";
     scene.add(lighthouse);
 
-    /* district roots */
-    const roots: Record<DistrictId, THREE.Group> = {} as Record<DistrictId, THREE.Group>;
-    const ticksByDistrict: Record<DistrictId, TickFn[]> = {} as Record<DistrictId, TickFn[]>;
+    /* district groups */
+    const districtGroups = {} as Record<DistrictId, THREE.Group>;
+    const districtTicks = {} as Record<DistrictId, TickFn[]>;
     for (const d of DISTRICT_IDS) {
-      const root = new THREE.Group();
-      root.position.copy(DISTRICT_POS[d]);
-      // hex pad
-      const pad = new THREE.Mesh(
-        new THREE.CylinderGeometry(4.7, 5.1, 0.65, 6),
-        mats.stoneDark
-      );
-      pad.position.y = 0.05;
-      pad.receiveShadow = true;
-      pad.castShadow = true;
-      root.add(pad);
-      const padRim = new THREE.Mesh(
-        new THREE.CylinderGeometry(4.75, 4.75, 0.1, 6),
-        mats.gold
-      );
-      padRim.position.y = 0.4;
-      root.add(padRim);
-      scene.add(root);
-      roots[d] = root;
-      ticksByDistrict[d] = [];
+      const holder = new THREE.Group();
+      holder.position.copy(DISTRICT_POS[d]);
+      holder.userData.tag = d;
+      scene.add(holder);
+      districtGroups[d] = holder;
+      districtTicks[d] = [];
     }
 
     function rebuildDistrict(d: DistrictId) {
-      const root = roots[d];
-      const keep = root.children.slice(0, 2); // pad + rim
-      for (const child of root.children) {
-        if (keep.includes(child)) continue;
-        root.remove(child);
-        child.traverse((o) => {
-          const mesh = o as THREE.Mesh;
-          if (mesh.isMesh) mesh.geometry.dispose();
-        });
-      }
-      root.children.length = 0;
-      root.add(...keep);
-      ticksByDistrict[d].length = 0;
-      const level = propsRef.current.levels[d];
-      const bld = BUILDERS[d](level, mats, ticksByDistrict[d]);
-      bld.position.y = 0.35;
-      root.add(bld);
+      const holder = districtGroups[d];
+      disposeGroup(holder);
+      districtTicks[d] = [];
+      const lv = Math.min(propsRef.current.levels[d], VISUAL_MAX);
+      const g = BUILDERS[d](lv, m, districtTicks[d]);
+      holder.add(g);
     }
     for (const d of DISTRICT_IDS) rebuildDistrict(d);
 
-    /* hit targets (invisible) */
-    const hitMat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false });
-    const hitMeshes: THREE.Mesh[] = [];
-    const addHit = (id: string, pos: THREE.Vector3, r: number, h: number) => {
-      const hm = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 8), hitMat);
-      hm.position.copy(pos).add(new THREE.Vector3(0, h / 2, 0));
-      hm.userData.viewId = id;
-      scene.add(hm);
-      hitMeshes.push(hm);
-    };
-    for (const d of DISTRICT_IDS) addHit(d, DISTRICT_POS[d], 4.9, 12);
-    addHit("center", DISTRICT_POS.center, 5.6, 11);
+    /* scenery: trees, rocks, lamps */
+    const scenery = new THREE.Group();
+    const treeSpots: [number, number, number][] = [
+      [18, 3, 1.2], [-17.5, 4, 1.05], [16, -13, 0.9], [-16, -13.5, 1.15], [5.5, 15, 1.0],
+      [-5.5, 15.5, 0.85], [19.5, -4, 0.8], [-19.5, -4.5, 0.95], [0.5, -16.5, 1.1], [-8, -17, 0.8],
+      [8.5, -17.5, 0.9], [13, 12.5, 0.95], [-13, 12.5, 1.05], [21, 9, 0.85], [-21, 9.5, 0.9],
+    ];
+    for (const [x, z, s] of treeSpots) {
+      const tree = makeTree(m, s, Math.random() > 0.5 ? m.leaves1 : m.leaves2);
+      tree.position.set(x, 0, z);
+      tree.rotation.y = x * z;
+      scenery.add(tree);
+    }
+    const rockSpots: [number, number, number][] = [
+      [22.5, -6, 1.3], [-23, -5, 1.1], [20, 14, 0.9], [-20, 14.5, 1.2], [3, 21.5, 1.0],
+      [-4, 22, 0.8], [24, 2, 0.7], [-24.5, 1, 0.9], [10, -21, 1.1], [-10, -21.5, 0.8],
+    ];
+    for (const [x, z, s] of rockSpots) {
+      const rock = makeRock(m, s);
+      rock.position.set(x, 0.1, z);
+      rock.rotation.y = x + z;
+      scenery.add(rock);
+    }
+    for (const d of DISTRICT_IDS) {
+      const a = DISTRICT_POS[d];
+      const len = Math.sqrt(a.x * a.x + a.z * a.z);
+      const px = a.x * 0.72 + (-a.z / len) * 1.6;
+      const pz = a.z * 0.72 + (a.x / len) * 1.6;
+      const lamp = makeLamp(m);
+      lamp.position.set(px, 0, pz);
+      scenery.add(lamp);
+    }
+    scene.add(scenery);
 
-    /* hover + selection rings */
-    const hoverRing = new THREE.Mesh(
-      new THREE.TorusGeometry(5.3, 0.09, 8, 48),
-      new THREE.MeshBasicMaterial({ color: 0xffd88a, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false })
-    );
-    hoverRing.rotation.x = -Math.PI / 2;
-    hoverRing.position.y = 0.14;
-    hoverRing.visible = false;
-    scene.add(hoverRing);
+    /* clouds */
+    const clouds: THREE.Group[] = [];
+    for (let i = 0; i < 7; i++) {
+      const c = makeCloud();
+      const a = (i / 7) * Math.PI * 2;
+      const r = 60 + Math.random() * 60;
+      c.position.set(Math.cos(a) * r, 22 + Math.random() * 16, Math.sin(a) * r);
+      c.scale.setScalar(2.2 + Math.random() * 2.4);
+      scene.add(c);
+      clouds.push(c);
+    }
+    staticTicks.push((t, dt) => {
+      clouds.forEach((c, i) => {
+        c.position.x += dt * (0.4 + i * 0.06);
+        if (c.position.x > 150) c.position.x = -150;
+        c.position.y += Math.sin(t * 0.3 + i) * 0.003;
+      });
+    });
 
-    const selectRing = new THREE.Mesh(
-      new THREE.TorusGeometry(5.7, 0.06, 8, 48),
-      new THREE.MeshBasicMaterial({ color: 0x5ce8c4, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false })
-    );
-    selectRing.rotation.x = -Math.PI / 2;
-    selectRing.position.y = 0.12;
-    selectRing.visible = false;
-    scene.add(selectRing);
-
-    /* camera tween */
-    let tween: {
-      fromPos: THREE.Vector3;
-      toPos: THREE.Vector3;
-      fromTarget: THREE.Vector3;
-      toTarget: THREE.Vector3;
-      t: number;
-      dur: number;
-    } | null = null;
-
-    function flyTo(view: ViewId, dur = 1.9) {
-      const pose = viewPose(view);
-      tween = {
-        fromPos: camera.position.clone(),
-        toPos: pose.pos,
-        fromTarget: controls.target.clone(),
-        toTarget: pose.target,
-        t: 0,
-        dur,
-      };
-      controls.enabled = false;
+    /* --------------------------- living world --------------------------- */
+    const shirtColors = [0x5ce8c4, 0xe0aa50, 0xff7f6e, 0x9fd0ff, 0xdde9e4, 0xf0c268, 0x7fe8bb, 0xd9a066, 0x8ba4a7, 0xffd88a];
+    interface Walker {
+      p: ReturnType<typeof makePerson>;
+      mode: "ring" | "path";
+      r: number;
+      speed: number;
+      phase: number;
+      axis?: THREE.Vector3;
+      pathLen?: number;
+      onIsle?: boolean;
+    }
+    const walkers: Walker[] = [];
+    for (let i = 0; i < 8; i++) {
+      const p = makePerson(shirtColors[i % shirtColors.length]);
+      p.group.scale.setScalar(0.95 + Math.random() * 0.15);
+      scene.add(p.group);
+      if (i < 5) {
+        walkers.push({ p, mode: "ring", r: 6.6 + Math.random() * 2.4, speed: (0.12 + Math.random() * 0.1) * (i % 2 ? 1 : -1), phase: Math.random() * Math.PI * 2 });
+      } else {
+        const d = DISTRICT_IDS[i - 5];
+        walkers.push({ p, mode: "path", r: 0, speed: 0.16 + Math.random() * 0.08, phase: Math.random() * 10, axis: DISTRICT_POS[d].clone().setY(0).normalize(), pathLen: DISTRICT_POS[d].length() - 5 });
+      }
+    }
+    const isleWalkers: Walker[] = [];
+    for (let i = 0; i < 2; i++) {
+      const p = makePerson(shirtColors[(i + 4) % shirtColors.length]);
+      p.group.scale.setScalar(1.0);
+      scene.add(p.group);
+      p.group.visible = propsRef.current.isleUnlocked;
+      isleWalkers.push({ p, mode: "ring", r: 4.6 + i * 0.9, speed: (0.14 + i * 0.05) * (i % 2 ? 1 : -1), phase: i * 2.6, onIsle: true });
     }
 
-    /* pointer interaction */
+    const boats = [
+      { g: makeBoat(m), r: 34, speed: 0.05, phase: 0.8 },
+      { g: makeBoat(m), r: 41, speed: -0.034, phase: 3.6 },
+    ];
+    boats.forEach((b) => scene.add(b.g));
+
+    const birds: (ReturnType<typeof makeBird> & { r: number; h: number; speed: number; phase: number })[] = [];
+    for (let i = 0; i < 5; i++) {
+      const b = makeBird();
+      scene.add(b.group);
+      birds.push({ ...b, r: 17 + Math.random() * 10, h: 10 + Math.random() * 6, speed: 0.22 + Math.random() * 0.16, phase: Math.random() * Math.PI * 2 });
+    }
+
+    staticTicks.push((t) => {
+      for (const w of walkers) {
+        const { p } = w;
+        if (w.mode === "ring") {
+          const a = w.phase + t * w.speed;
+          p.group.position.set(Math.cos(a) * w.r, 0.02 + Math.abs(Math.sin(t * 7 + w.phase)) * 0.05, Math.sin(a) * w.r);
+          p.group.rotation.y = -a + (w.speed > 0 ? -Math.PI / 2 : Math.PI / 2);
+        } else if (w.axis && w.pathLen) {
+          const k = (Math.sin(t * w.speed + w.phase) + 1) / 2;
+          const dist = 3.5 + k * w.pathLen;
+          p.group.position.copy(w.axis).multiplyScalar(dist);
+          p.group.position.y = 0.02;
+          const forward = Math.cos(t * w.speed + w.phase) > 0;
+          p.group.rotation.y = Math.atan2(w.axis.x, w.axis.z) + (forward ? 0 : Math.PI);
+        }
+        const sw = Math.sin(t * 8 + w.phase) * 0.55;
+        p.legL.rotation.x = sw;
+        p.legR.rotation.x = -sw;
+      }
+      for (const w of isleWalkers) {
+        if (!w.p.group.visible) continue;
+        const a = w.phase + t * w.speed;
+        w.p.group.position.set(ISLE_POS.x + Math.cos(a) * w.r, 0.55, ISLE_POS.z + Math.sin(a) * w.r);
+        w.p.group.rotation.y = -a + (w.speed > 0 ? -Math.PI / 2 : Math.PI / 2);
+        const sw = Math.sin(t * 8 + w.phase) * 0.5;
+        w.p.legL.rotation.x = sw;
+        w.p.legR.rotation.x = -sw;
+      }
+      for (const b of boats) {
+        const a = b.phase + t * b.speed;
+        b.g.position.set(Math.cos(a) * b.r, -1.25 + Math.sin(t * 1.2 + b.phase) * 0.1, Math.sin(a) * b.r);
+        b.g.rotation.y = -a + (b.speed > 0 ? -Math.PI / 2 : Math.PI / 2);
+        b.g.rotation.z = Math.sin(t * 1.4 + b.phase) * 0.04;
+      }
+      for (const b of birds) {
+        const a = b.phase + t * b.speed;
+        b.group.position.set(Math.cos(a) * b.r, b.h + Math.sin(t * 0.8 + b.phase) * 1.2, Math.sin(a) * b.r);
+        b.group.rotation.y = -a - Math.PI / 2;
+        const flap = Math.sin(t * 9 + b.phase) * 0.85;
+        b.wingL.rotation.z = flap;
+        b.wingR.rotation.z = -flap;
+      }
+    });
+
+    /* ---------------------------- genesis isle ---------------------------- */
+    const ghost = buildIsleGhost();
+    ghost.group.position.copy(ISLE_POS);
+    ghost.group.visible = !propsRef.current.isleUnlocked;
+    ghost.group.userData.tag = "isle";
+    scene.add(ghost.group);
+    staticTicks.push(ghost.tick);
+
+    const isleGroup = new THREE.Group();
+    isleGroup.position.copy(ISLE_POS);
+    isleGroup.userData.tag = "isle";
+    isleGroup.visible = propsRef.current.isleUnlocked;
+    scene.add(isleGroup);
+    let isleTicks: TickFn[] = [];
+
+    function rebuildIsle() {
+      disposeGroup(isleGroup);
+      isleTicks = [];
+      const g = buildIsle(m, Math.max(8, propsRef.current.isleLevel), isleTicks);
+      isleGroup.add(g);
+    }
+    if (propsRef.current.isleUnlocked) rebuildIsle();
+
+    const decorGroup = new THREE.Group();
+    decorGroup.position.copy(ISLE_POS);
+    decorGroup.visible = propsRef.current.isleUnlocked;
+    scene.add(decorGroup);
+    let decorTicks: TickFn[] = [];
+    function rebuildDecor() {
+      disposeGroup(decorGroup);
+      decorTicks = [];
+      for (const id of DECOR_IDS) {
+        if (!propsRef.current.currentDecor.includes(id)) continue;
+        decorGroup.add(makeDecor(id as DecorId, m, decorTicks));
+      }
+    }
+    rebuildDecor();
+
+    /* ------------------------------ bursts ------------------------------ */
+    const burst = makeBurstPool(scene);
+    staticTicks.push(burst.tick);
+
+    /* ------------------------------ camera tween ------------------------------ */
+    let tween: { t0: number; dur: number; fromPos: THREE.Vector3; toPos: THREE.Vector3; fromTgt: THREE.Vector3; toTgt: THREE.Vector3 } | null = null;
+    function flyTo(view: ViewId, dur = 1.6) {
+      const { pos, target } = viewPose(view);
+      tween = {
+        t0: performance.now(),
+        dur: dur * 1000,
+        fromPos: camera.position.clone(),
+        toPos: pos,
+        fromTgt: controls.target.clone(),
+        toTgt: target,
+      };
+      sound.whoosh();
+    }
+
+    /* ------------------------------ picking ------------------------------ */
     const raycaster = new THREE.Raycaster();
-    const ndc = new THREE.Vector2(-10, -10);
-    let hoverId: string | null = null;
-    let downX = 0, downY = 0, downT = 0;
-    const clientXY = { x: 0, y: 0 };
+    const pointer = new THREE.Vector2();
+    let hovered: string | null = null;
+    const downPos = { x: 0, y: 0 };
+
+    function pickAt(cx: number, cy: number): string | null {
+      const rect = renderer.domElement.getBoundingClientRect();
+      pointer.x = ((cx - rect.left) / Math.max(1, rect.width)) * 2 - 1;
+      pointer.y = -((cy - rect.top) / Math.max(1, rect.height)) * 2 + 1;
+      raycaster.setFromCamera(pointer, camera);
+      const targets: THREE.Object3D[] = [lighthouse, ...DISTRICT_IDS.map((d) => districtGroups[d] as THREE.Object3D), isleGroup, ghost.group];
+      const hits = raycaster.intersectObjects(targets, true);
+      for (const h of hits) {
+        let o: THREE.Object3D | null = h.object;
+        while (o) {
+          if (o.userData.tag) return o.userData.tag as string;
+          o = o.parent;
+        }
+      }
+      return null;
+    }
 
     function onPointerMove(e: PointerEvent) {
-      const rect = renderer.domElement.getBoundingClientRect();
-      ndc.set(
-        ((e.clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
-        -((e.clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1
-      );
-      clientXY.x = e.clientX;
-      clientXY.y = e.clientY;
+      const tag = pickAt(e.clientX, e.clientY);
+      if (tag !== hovered) {
+        hovered = tag;
+        renderer.domElement.style.cursor = tag ? "pointer" : "grab";
+      }
+      const tip = tooltipRef.current;
+      if (tip) {
+        if (tag) {
+          tip.style.opacity = "1";
+          tip.style.transform = `translate(${e.clientX - container.getBoundingClientRect().left + 14}px, ${e.clientY - container.getBoundingClientRect().top + 10}px)`;
+        } else {
+          tip.style.opacity = "0";
+        }
+      }
     }
     function onPointerDown(e: PointerEvent) {
-      downX = e.clientX;
-      downY = e.clientY;
-      downT = performance.now();
+      downPos.x = e.clientX;
+      downPos.y = e.clientY;
     }
     function onPointerUp(e: PointerEvent) {
-      const dx = e.clientX - downX;
-      const dy = e.clientY - downY;
-      if (dx * dx + dy * dy > 42 || performance.now() - downT > 500) return;
-      const rect = renderer.domElement.getBoundingClientRect();
-      ndc.set(
-        ((e.clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
-        -((e.clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1
-      );
-      raycaster.setFromCamera(ndc, camera);
-      const hits = raycaster.intersectObjects(hitMeshes, false);
-      if (hits.length > 0) {
-        const id = hits[0].object.userData.viewId as DistrictId | "center";
+      const dx = e.clientX - downPos.x;
+      const dy = e.clientY - downPos.y;
+      if (dx * dx + dy * dy > 36) return;
+      const tag = pickAt(e.clientX, e.clientY);
+      if (tag) {
         sound.tick();
-        propsRef.current.onSelect(id);
+        propsRef.current.onSelect(tag as ViewId);
       }
     }
     function onPointerLeave() {
-      ndc.set(-10, -10);
+      hovered = null;
+      if (tooltipRef.current) tooltipRef.current.style.opacity = "0";
     }
     renderer.domElement.addEventListener("pointermove", onPointerMove);
     renderer.domElement.addEventListener("pointerdown", onPointerDown);
     renderer.domElement.addEventListener("pointerup", onPointerUp);
     renderer.domElement.addEventListener("pointerleave", onPointerLeave);
 
-    /* labels + tooltip refs */
-    const tooltip = tooltipRef.current;
-    const labelIds = [...DISTRICT_IDS, "center"];
+    /* ------------------------------ labels ------------------------------ */
+    const labelIds = [...DISTRICT_IDS, "center", "isle"];
     const tmpV = new THREE.Vector3();
+    const labelTextCache: Record<string, string> = {};
+
+    function labelText(id: string): string {
+      const t = makeT(propsRef.current.lang);
+      if (id === "center") return t("nav.center");
+      if (id === "isle") {
+        return propsRef.current.isleUnlocked ? t("il.title") : `${t("nav.isle")} · ${t("misc.levelShort", { n: ISLE_UNLOCK_LV })}`;
+      }
+      const lv = propsRef.current.levels[id as DistrictId];
+      return `${t(`d.${id}.building`)} · ${t("misc.levelShort", { n: lv })}`;
+    }
 
     function updateLabels() {
       const w = container.clientWidth;
@@ -380,8 +509,8 @@ export default function WorldScene({ levels, selected, onSelect, handleRef }: Pr
       for (const id of labelIds) {
         const el = labelEls.current[id];
         if (!el) continue;
-        const base = DISTRICT_POS[id];
-        const lv = id === "center" ? 0 : propsRef.current.levels[id as DistrictId];
+        const base = id === "isle" ? ISLE_POS : DISTRICT_POS[id];
+        const lv = id === "center" ? 0 : id === "isle" ? 0 : propsRef.current.levels[id as DistrictId];
         tmpV.set(base.x, base.y + LABEL_HEIGHT[id](lv) + 1.2, base.z);
         tmpV.project(camera);
         const behind = tmpV.z > 1;
@@ -389,13 +518,39 @@ export default function WorldScene({ levels, selected, onSelect, handleRef }: Pr
         const y = (-tmpV.y * 0.5 + 0.5) * h;
         const off = behind || x < -80 || x > w + 80 || y < -40 || y > h + 40;
         el.style.opacity = off ? "0" : "1";
-        el.style.transform = `translate(-50%, -110%) translate3d(${x}px, ${y}px, 0)`;
+        el.style.transform = `translate(-50%, -110%) translate(${x}px, ${y}px)`;
+        const txt = labelText(id);
+        if (labelTextCache[id] !== txt) {
+          labelTextCache[id] = txt;
+          const txtEl = el.querySelector("[data-label-txt]");
+          if (txtEl) txtEl.textContent = txt;
+        }
+        el.classList.toggle("label-locked", id === "isle" && !propsRef.current.isleUnlocked);
+        el.classList.toggle("label-active", propsRef.current.selected === id);
       }
     }
 
-    /* resize */
+    /* ------------------------------ tooltip content ------------------------------ */
+    function updateTooltipContent() {
+      const tip = tooltipRef.current;
+      if (!tip || !hovered) return;
+      const t = makeT(propsRef.current.lang);
+      if (hovered === "isle") {
+        tip.innerHTML = propsRef.current.isleUnlocked
+          ? `<strong>${t("il.title")}</strong><span>${t("ws.lvl", { n: propsRef.current.isleLevel })}</span>`
+          : `<strong>${t("il.locked")}</strong><span>${t("ct.isle.unlockAt", { n: ISLE_UNLOCK_LV })}</span>`;
+        return;
+      }
+      if (hovered === "center") {
+        tip.innerHTML = `<strong>${t("ct.title")}</strong><span>${t("ct.sub")}</span>`;
+        return;
+      }
+      const d = hovered as DistrictId;
+      tip.innerHTML = `<strong>${t(`d.${d}.building`)}</strong><span>${t(`d.${d}.tagline`)}</span><span class="tt-lv">${t("ws.lvl", { n: propsRef.current.levels[d] })}</span>`;
+    }
+
+    /* ------------------------------ resize ------------------------------ */
     function onResize() {
-      if (!container) return;
       const w = Math.max(1, container.clientWidth);
       const h = Math.max(1, container.clientHeight);
       camera.aspect = w / h;
@@ -404,115 +559,69 @@ export default function WorldScene({ levels, selected, onSelect, handleRef }: Pr
     }
     window.addEventListener("resize", onResize);
 
-    /* main loop */
-    const clock = new THREE.Clock();
-    let raf = 0;
-    let hoverScale: Record<string, number> = {};
-
-    function loop() {
-      raf = requestAnimationFrame(loop);
-      const dt = Math.min(0.05, clock.getDelta());
-      const t = clock.elapsedTime;
-
-      if (tween) {
-        tween.t += dt / tween.dur;
-        const k = easeInOutCubic(Math.min(1, tween.t));
-        camera.position.lerpVectors(tween.fromPos, tween.toPos, k);
-        controls.target.lerpVectors(tween.fromTarget, tween.toTarget, k);
-        if (tween.t >= 1) {
-          tween = null;
-          controls.enabled = true;
-        }
-      }
-      controls.autoRotate = propsRef.current.selected === "overview" && !tween && !userInteracting;
-      controls.update();
-
-      water.tick(t, dt);
-      dust.tick(t, dt);
-      bursts.tick(t, dt);
-      for (const c of clouds) {
-        c.position.x += dt * 0.9;
-        if (c.position.x > 95) c.position.x = -95;
-      }
-      for (const fn of centerTicks) fn(t, dt);
-      for (const d of DISTRICT_IDS) for (const fn of ticksByDistrict[d]) fn(t, dt);
-
-      /* hover raycast */
-      raycaster.setFromCamera(ndc, camera);
-      const hits = ndc.x < -5 ? [] : raycaster.intersectObjects(hitMeshes, false);
-      const newHover = hits.length > 0 ? (hits[0].object.userData.viewId as string) : null;
-      if (newHover !== hoverId) {
-        hoverId = newHover;
-        renderer.domElement.style.cursor = hoverId ? "pointer" : "grab";
-        if (tooltip) {
-          if (hoverId) {
-            const isCenter = hoverId === "center";
-            const meta = isCenter ? null : DISTRICTS[hoverId as DistrictId];
-            const lv = isCenter ? 0 : propsRef.current.levels[hoverId as DistrictId];
-            tooltip.innerHTML = `
-              <div style="font-family:'Unbounded',sans-serif;font-size:11px;letter-spacing:0.14em;color:#ffd88a;">${isCenter ? "HẢI ĐĂNG TRUNG TÂM" : meta!.building.toUpperCase()}</div>
-              <div style="margin-top:3px;font-size:12px;color:#b7cbc9;">${isCenter ? "Trái tim của đảo — nhấn để xem tổng quan" : `${meta!.label} · Cấp ${lv} — nhấn để mở quận`}</div>`;
-            tooltip.style.opacity = "1";
-          } else {
-            tooltip.style.opacity = "0";
-          }
-        }
-      }
-      if (hoverId && tooltip) {
-        tooltip.style.transform = `translate3d(${clientXY.x + 18}px, ${clientXY.y + 14}px, 0)`;
-      }
-      if (hoverId) {
-        const p = DISTRICT_POS[hoverId];
-        hoverRing.visible = true;
-        hoverRing.position.set(p.x, 0.14, p.z);
-        hoverRing.scale.setScalar(1 + Math.sin(t * 4) * 0.03);
-      } else {
-        hoverRing.visible = false;
-      }
-
-      const sel = propsRef.current.selected;
-      if (sel !== "overview" && DISTRICT_POS[sel]) {
-        const p = DISTRICT_POS[sel];
-        selectRing.visible = true;
-        selectRing.position.set(p.x, 0.12, p.z);
-        selectRing.rotation.z = t * 0.5;
-      } else {
-        selectRing.visible = false;
-      }
-
-      /* subtle hover scale on building roots */
-      const nextScale: Record<string, number> = {};
-      for (const d of DISTRICT_IDS) {
-        const target = hoverId === d ? 1.035 : 1;
-        const cur = hoverScale[d] ?? 1;
-        const ns = cur + (target - cur) * Math.min(1, dt * 8);
-        nextScale[d] = ns;
-        roots[d].scale.setScalar(ns);
-      }
-      hoverScale = nextScale;
-
-      updateLabels();
-      renderer.render(scene, camera);
-    }
-    loop();
-
-    /* intro flight */
-    const introTimer = window.setTimeout(() => {
-      flyTo("overview", 3.0);
-    }, 250);
-
+    /* ------------------------------ API ------------------------------ */
     sceneApi.current = {
       flyTo,
       rebuildDistrict,
+      rebuildIsle,
+      rebuildDecor,
       burst: (view, kind) => {
-        const p = DISTRICT_POS[view];
-        bursts.fire(p.clone().add(new THREE.Vector3(0, 3.2, 0)), kind);
+        const origin =
+          view === "isle"
+            ? ISLE_POS.clone().add(new THREE.Vector3(0, 3, 0))
+            : view === "overview"
+              ? new THREE.Vector3(0, 5, 0)
+              : DISTRICT_POS[view].clone().add(new THREE.Vector3(0, 4.5, 0));
+        burst.fire(origin, kind);
       },
     };
+    handleRef.current = {
+      fireBurst: (view, kind) => sceneApi.current?.burst(view, kind),
+    };
 
-    /* ------------------------- cleanup ------------------------- */
+    /* ------------------------------ loop ------------------------------ */
+    const clock = new THREE.Clock();
+    let raf = 0;
+    const introPose = viewPose("overview");
+    const introStart = performance.now();
+    const introFrom = camera.position.clone();
+    let introDone = false;
+
+    function frame() {
+      raf = requestAnimationFrame(frame);
+      const dt = Math.min(0.05, clock.getDelta());
+      const t = clock.elapsedTime;
+
+      if (!introDone) {
+        const k = Math.min(1, (performance.now() - introStart) / 2600);
+        const e = easeInOutCubic(k);
+        camera.position.lerpVectors(introFrom, introPose.pos, e);
+        controls.target.lerpVectors(new THREE.Vector3(0, 20, 0), introPose.target, e);
+        if (k >= 1) introDone = true;
+      } else if (tween) {
+        const k = Math.min(1, (performance.now() - tween.t0) / tween.dur);
+        const e = easeInOutCubic(k);
+        camera.position.lerpVectors(tween.fromPos, tween.toPos, e);
+        controls.target.lerpVectors(tween.fromTgt, tween.toTgt, e);
+        if (k >= 1) tween = null;
+      }
+
+      controls.autoRotate = propsRef.current.selected === "overview" && !tween && !userInteracting && introDone;
+      controls.update();
+
+      for (const fn of staticTicks) fn(t, dt);
+      for (const d of DISTRICT_IDS) for (const fn of districtTicks[d]) fn(t, dt);
+      for (const fn of isleTicks) fn(t, dt);
+      for (const fn of decorTicks) fn(t, dt);
+
+      updateLabels();
+      updateTooltipContent();
+      renderer.render(scene, camera);
+    }
+    frame();
+
+    /* ------------------------------ cleanup ------------------------------ */
     return () => {
-      window.clearTimeout(introTimer);
       window.clearTimeout(idleTimer);
       cancelAnimationFrame(raf);
       window.removeEventListener("resize", onResize);
@@ -527,82 +636,96 @@ export default function WorldScene({ levels, selected, onSelect, handleRef }: Pr
         const mesh = o as THREE.Mesh;
         if (mesh.isMesh) {
           mesh.geometry.dispose();
-          const mm = mesh.material as THREE.Material | THREE.Material[];
-          if (Array.isArray(mm)) mm.forEach((x) => x.dispose());
-          else mm.dispose();
+          const mat = mesh.material;
+          if (Array.isArray(mat)) mat.forEach((mm) => mm.dispose());
+          else mat.dispose();
         }
       });
       renderer.dispose();
-      const host = container;
-      if (host && renderer.domElement.parentElement === host) host.removeChild(renderer.domElement);
+      if (renderer.domElement.parentElement === container) container.removeChild(renderer.domElement);
       sceneApi.current = null;
+      handleRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* ------------------- react to level changes ------------------- */
+  /* ------------------------- reactive effects ------------------------- */
+
   useEffect(() => {
+    if (!sceneApi.current) return;
+    sceneApi.current.flyTo(selected, selected === "overview" ? 2.0 : 1.5);
+  }, [selected]);
+
+  useEffect(() => {
+    const api = sceneApi.current;
+    if (!api) return;
     const prev = prevLevels.current;
-    if (!prev) {
-      prevLevels.current = { ...levels };
-      return;
-    }
     for (const d of DISTRICT_IDS) {
-      if (prev[d] !== levels[d]) {
-        sceneApi.current?.rebuildDistrict(d);
+      if (prev && prev[d] !== levels[d]) {
+        api.rebuildDistrict(d);
+        if (levels[d] > prev[d]) {
+          api.burst(d, d === "crypto" ? "jade" : "gold");
+          sound.levelUp();
+        }
+      } else if (!prev) {
+        api.rebuildDistrict(d);
       }
     }
     prevLevels.current = { ...levels };
   }, [levels]);
 
-  /* ------------------- react to selection ------------------- */
   useEffect(() => {
-    sceneApi.current?.flyTo(selected);
-  }, [selected]);
+    const api = sceneApi.current;
+    if (!api) return;
+    if (isleUnlocked && !prevUnlocked.current) {
+      api.rebuildIsle();
+      api.rebuildDecor();
+      api.burst("isle", "jade");
+      sound.levelUp();
+    } else if (isleUnlocked && isleLevel !== prevIsleLv.current) {
+      api.rebuildIsle();
+      if (isleLevel > prevIsleLv.current) api.burst("isle", "gold");
+    }
+    prevUnlocked.current = isleUnlocked;
+    prevIsleLv.current = isleLevel;
+  }, [isleUnlocked, isleLevel]);
 
-  /* ------------------- expose handle ------------------- */
   useEffect(() => {
-    handleRef.current = {
-      fireBurst: (view, kind) => sceneApi.current?.burst(view, kind),
-    };
-    return () => {
-      handleRef.current = null;
-    };
-  }, [handleRef]);
+    const key = decor.join(",");
+    if (key === prevDecor.current) return;
+    prevDecor.current = key;
+    sceneApi.current?.rebuildDecor();
+  }, [decor]);
 
+  /* ------------------------------ render ------------------------------ */
   return (
-    <>
-      <div ref={containerRef} className="absolute inset-0" />
-      <div className="pointer-events-none absolute inset-0 overflow-hidden">
-        {DISTRICT_IDS.map((d) => (
-          <div key={d} ref={(el) => { labelEls.current[d] = el; }} className="world-label transition-opacity duration-300">
-            <div className="chip rounded-md px-2.5 py-1 text-center">
-              <div className="font-display text-[9px] tracking-[0.18em] text-mist-300">{DISTRICTS[d].label.toUpperCase()}</div>
-              <div className="mt-0.5 flex items-center justify-center gap-1">
-                {[0, 1, 2, 3, 4].map((i) => (
-                  <span
-                    key={i}
-                    className="inline-block h-1 w-1 rotate-45"
-                    style={{ background: i < levels[d] ? DISTRICTS[d].accent : "rgba(139,164,167,0.3)" }}
-                  />
-                ))}
-              </div>
-            </div>
-            <div className="mx-auto h-3 w-px bg-gradient-to-b from-[rgba(224,170,80,0.5)] to-transparent" />
-          </div>
-        ))}
-        <div ref={(el) => { labelEls.current["center"] = el; }} className="world-label transition-opacity duration-300">
-          <div className="chip rounded-md px-2.5 py-1 text-center">
-            <div className="font-display text-[9px] tracking-[0.18em] text-gold-300">HẢI ĐĂNG</div>
-          </div>
-          <div className="mx-auto h-3 w-px bg-gradient-to-b from-[rgba(255,216,138,0.5)] to-transparent" />
+    <div ref={containerRef} className="absolute inset-0 overflow-hidden">
+      <div
+        ref={tooltipRef}
+        className="chip pointer-events-none absolute left-0 top-0 z-30 rounded-md px-2.5 py-1.5 text-[11px] leading-tight opacity-0 transition-opacity duration-150"
+        style={{ opacity: 0 }}
+      />
+      {[...DISTRICT_IDS, "center", "isle"].map((id) => (
+        <div key={id} ref={(el) => void (labelEls.current[id] = el)} className="world-label left-0 top-0 z-20" style={{ opacity: 0 }}>
+          <span className="chip inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 font-display text-[9px] tracking-[0.14em] text-mist-300">
+            <span className="h-1.5 w-1.5 rotate-45" style={{ background: id === "center" ? "#f0c268" : id === "isle" ? "#5ce8c4" : DISTRICTS[id as DistrictId].accent }} />
+            <span data-label-txt="" />
+          </span>
         </div>
-        <div
-          ref={tooltipRef}
-          className="panel absolute left-0 top-0 z-20 max-w-[240px] rounded-lg px-3.5 py-2.5 opacity-0 transition-opacity duration-150"
-          style={{ willChange: "transform" }}
-        />
-      </div>
-    </>
+      ))}
+    </div>
   );
+}
+
+/* ------------------------------ helpers ------------------------------ */
+
+function disposeGroup(g: THREE.Group) {
+  for (let i = g.children.length - 1; i >= 0; i--) {
+    const child = g.children[i];
+    child.traverse((o) => {
+      const mesh = o as THREE.Mesh;
+      if (mesh.isMesh) mesh.geometry.dispose();
+    });
+    g.remove(child);
+  }
 }
