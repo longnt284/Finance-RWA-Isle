@@ -36,6 +36,10 @@ html, body, #root {
 }
 
 canvas { display: block; outline: none; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, canvas:focus-visible {
+  outline: 2px solid rgba(127, 232, 187, 0.9);
+  outline-offset: 2px;
+}
 
 /* ---------- UI surfaces ---------- */
 .panel {
@@ -183,4 +187,59 @@ input[type="range"] { accent-color: #e0aa50; }
 }
 .drift-a { animation: driftA 14s ease-in-out infinite alternate; }
 .drift-b { animation: driftA 19s ease-in-out infinite alternate-reverse; }
+
+/* ---------- private isle designer + helm ---------- */
+.isle-theme {
+  position: relative;
+  height: 34px;
+  overflow: hidden;
+  border-radius: 9px;
+  border: 1px solid rgba(183, 203, 201, 0.18);
+  transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+.isle-theme::after {
+  content: "";
+  position: absolute;
+  inset: 7px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.22);
+  filter: blur(7px);
+}
+.isle-theme:hover { transform: translateY(-1px); border-color: rgba(240, 194, 104, 0.55); }
+.isle-theme.is-active { border-color: #7fe8bb; box-shadow: 0 0 0 2px rgba(76, 217, 154, 0.14), 0 0 18px rgba(76, 217, 154, 0.18); }
+.isle-theme-emerald { background: linear-gradient(135deg, #173f3a, #38a57c); }
+.isle-theme-sunset { background: linear-gradient(135deg, #553644, #e47c58); }
+.isle-theme-lagoon { background: linear-gradient(135deg, #173a58, #45b7c5); }
+.isle-theme-violet { background: linear-gradient(135deg, #342c58, #9277cf); }
+
+.helm-key {
+  display: grid;
+  width: 38px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid rgba(127, 232, 187, 0.26);
+  border-radius: 9px;
+  background: linear-gradient(155deg, rgba(20, 67, 70, 0.92), rgba(5, 24, 31, 0.96));
+  color: #bff8e3;
+  font: 600 15px "JetBrains Mono", monospace;
+  box-shadow: inset 0 1px rgba(255,255,255,0.06);
+  touch-action: none;
+  transition: transform 100ms ease, background 100ms ease, border-color 100ms ease;
+}
+.helm-key:active { transform: scale(0.93); border-color: #7fe8bb; background: rgba(47, 191, 131, 0.26); }
+
+@media (max-width: 640px) {
+  .panel, .chip { backdrop-filter: blur(8px); }
+  .world-label .chip { font-size: 8px; padding: 3px 7px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .marquee-track { animation: none; transform: none; }
+}
 

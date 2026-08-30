@@ -8,8 +8,15 @@ import { sound } from "../lib/audio";
 import { IconClose, IconSearch, IconPlus, IconCheck, IconSwap, IconTrash, IconTrendUp, IconTrendDown, IconCoins, IconCalc, IconNote } from "./icons";
 
 function DrawerShell({ title, icon, onClose, children, wide }: { title: string; icon: React.ReactNode; onClose: () => void; children: React.ReactNode; wide?: boolean }) {
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
   return (
-    <div className={`anim-slide-left panel absolute bottom-0 right-0 top-0 z-40 flex w-full flex-col ${wide ? "sm:w-[460px]" : "sm:w-[400px]"}`}>
+    <div role="dialog" aria-modal="true" aria-label={title} className={`anim-slide-left panel absolute bottom-0 right-0 top-0 z-40 flex w-full flex-col ${wide ? "sm:w-[460px]" : "sm:w-[400px]"}`}>
       <div className="flex items-center justify-between border-b border-mist-500/10 px-5 py-4">
         <div className="flex items-center gap-2.5">
           <span className="text-gold-400">{icon}</span>
@@ -29,7 +36,6 @@ function DrawerShell({ title, icon, onClose, children, wide }: { title: string; 
 function AssetRow({ a }: { a: Asset }) {
   const { state, api } = useStore();
   const t = makeT(state.lang);
-  useMarket();
   const q = market.quotes[a.id];
   const inWatch = state.watchlist.includes(a.id);
   const up = q.ch >= 0;
@@ -42,7 +48,8 @@ function AssetRow({ a }: { a: Asset }) {
         </div>
       </div>
       <div className="text-right">
-        <div className="font-mono text-[12px] text-mist-100" key={q.p}>
+        <div className="flex items-center justify-end gap-1.5 font-mono text-[12px] text-mist-100" key={q.p} title={`${q.source} · ${q.status}`}>
+          <span className={`h-1.5 w-1.5 rounded-full ${q.status === "live" ? "bg-jade-400" : q.status === "delayed" ? "bg-gold-400" : q.status === "stale" ? "bg-coral-400" : "bg-mist-500"}`} />
           {fmtPrice(q.p, a.cur, state.currency)}
         </div>
         <div className={`flex items-center justify-end gap-1 font-mono text-[10px] ${up ? "text-jade-400" : "text-coral-400"}`}>
@@ -75,14 +82,8 @@ function AssetRow({ a }: { a: Asset }) {
 export function MarketDrawer({ onClose }: { onClose: () => void }) {
   const { state, api } = useStore();
   const t = makeT(state.lang);
-  useMarket();
   const [tab, setTab] = useState<"crypto" | "stocks">("crypto");
   const [query, setQuery] = useState("");
-  const [, setClock] = useState(0);
-  useEffect(() => {
-    const i = setInterval(() => setClock((c) => c + 1), 1000);
-    return () => clearInterval(i);
-  }, []);
 
   const list = useMemo(() => {
     const ql = query.trim().toLowerCase();
@@ -90,6 +91,8 @@ export function MarketDrawer({ onClose }: { onClose: () => void }) {
       (a) => a.type === tab && (!ql || a.sym.toLowerCase().includes(ql) || a.name.toLowerCase().includes(ql))
     );
   }, [tab, query]);
+  const trackedIds = useMemo(() => [...state.watchlist, ...list.slice(0, 36).map((asset) => asset.id)], [state.watchlist, list]);
+  useMarket(trackedIds);
 
   const watchAssets = state.watchlist.map((id) => ASSET_BY_ID.get(id)).filter(Boolean) as Asset[];
 
@@ -100,7 +103,7 @@ export function MarketDrawer({ onClose }: { onClose: () => void }) {
         <div className="mb-2 flex items-center justify-between">
           <span className="font-display text-[9px] tracking-[0.24em] text-mist-400">{t("mk.watch")}</span>
           <span className="font-mono text-[9px] text-mist-500">
-            {t("mk.next", { s: market.nextDue() })} · {t("mk.updated", { t: timeAgo(market.lastGlobalUpdate) })}
+            {market.lastGlobalUpdate ? t("mk.updated", { t: timeAgo(market.lastGlobalUpdate) }) : t("mk.connecting")}
           </span>
         </div>
         {watchAssets.length === 0 ? (
@@ -170,6 +173,7 @@ export function MarketDrawer({ onClose }: { onClose: () => void }) {
 export function ToolsDrawer({ onClose }: { onClose: () => void }) {
   const { state, api } = useStore();
   const t = makeT(state.lang);
+  useMarket();
   const [vnd, setVnd] = useState("10000000");
   const [usd, setUsd] = useState(String(Math.round(10000000 / USD_RATE)));
   const [initM, setInitM] = useState(100); // triệu ₫
@@ -228,9 +232,9 @@ export function ToolsDrawer({ onClose }: { onClose: () => void }) {
             </div>
             <button
               onClick={() => {
-                const tmp = vnd;
-                setVnd(usd);
-                setUsd(tmp);
+                const sourceVnd = parseInt(vnd || "0", 10);
+                setVnd(String(Math.max(0, sourceVnd)));
+                setUsd(String(Math.round((sourceVnd / USD_RATE) * 100) / 100));
                 sound.tick();
               }}
               className="btn-ghost mt-4 rounded-lg p-2"

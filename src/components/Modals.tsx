@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useStore, DISTRICT_IDS } from "../state/store";
 import type { DistrictId } from "../state/store";
 import { makeT } from "../lib/i18n";
@@ -16,6 +16,17 @@ const FOCUS_ICONS: Record<DistrictId, (p: { className?: string }) => React.React
   vault: IconVault,
   academy: IconBook,
 };
+
+function useEscape(open: boolean, onEscape: () => void) {
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onEscape();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open, onEscape]);
+}
 
 /* ================================ HERO ================================ */
 
@@ -192,9 +203,10 @@ export function OnboardingModal({ open, onClose }: { open: boolean; onClose: () 
   const t = makeT(state.lang);
   const [name, setName] = useState("");
   const [focus, setFocus] = useState<DistrictId>("crypto");
+  useEscape(open, onClose);
   if (!open) return null;
   return (
-    <div className="absolute inset-0 z-50 flex items-center justify-center bg-ink-950/80 p-4 backdrop-blur-sm">
+    <div role="dialog" aria-modal="true" aria-label={t("ob.title")} className="absolute inset-0 z-50 flex items-center justify-center bg-ink-950/80 p-4 backdrop-blur-sm">
       <div className="anim-pop panel w-full max-w-[560px] rounded-2xl p-6 sm:p-8">
         <div className="flex items-start justify-between">
           <div>
@@ -276,14 +288,15 @@ export function TutorialOverlay({ open, onClose }: { open: boolean; onClose: () 
   const { state, api } = useStore();
   const t = makeT(state.lang);
   const [step, setStep] = useState(0);
-  if (!open) return null;
   const finish = () => {
     api.markTutorial();
     setStep(0);
     onClose();
   };
+  useEscape(open, finish);
+  if (!open) return null;
   return (
-    <div className="absolute inset-0 z-50 flex items-center justify-center bg-ink-950/70 p-4 backdrop-blur-sm">
+    <div role="dialog" aria-modal="true" aria-label={t("tu.title")} className="absolute inset-0 z-50 flex items-center justify-center bg-ink-950/70 p-4 backdrop-blur-sm">
       <div className="anim-pop panel w-full max-w-[500px] rounded-2xl p-6 sm:p-7">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">

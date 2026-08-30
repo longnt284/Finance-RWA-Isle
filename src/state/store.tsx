@@ -29,6 +29,7 @@ export interface Task {
   xp: number;
   done: boolean;
   ts: number;
+  awardedXp?: number;
 }
 
 export interface Note {
@@ -89,7 +90,8 @@ export interface State {
   totalTasksDone: number;
   visits: string[];
   watchlist: string[];
-  isleDecor: string[];
+  isleDecor: Record<DistrictId, string[]>;
+  isleTheme: Record<DistrictId, IslandTheme>;
   tutorialSeen: boolean;
   toasts: Toast[];
 }
@@ -117,7 +119,14 @@ export const LEVEL_XP = [0, 60, 200, 450, 850, 1450, 2300, 3500, 5000, 7000, 950
 export const MAX_LEVEL = 10;
 export const VISUAL_MAX = 5;
 export const ISLE_UNLOCK_LV = 8;
+export const ISLE_UNLOCK_LEVELS: Record<DistrictId, number> = {
+  crypto: ISLE_UNLOCK_LV,
+  stocks: 7,
+  vault: 6,
+  academy: 5,
+};
 export const DAILY_XP = 30;
+export type IslandTheme = "emerald" | "sunset" | "lagoon" | "violet";
 
 export function levelFor(xp: number): number {
   let lv = 0;
@@ -183,7 +192,8 @@ type Action =
   | { type: "COMPLETE_CUSTOM_ACH"; id: string }
   | { type: "ADD_WATCH"; id: string }
   | { type: "REMOVE_WATCH"; id: string }
-  | { type: "TOGGLE_DECOR"; id: string }
+  | { type: "TOGGLE_DECOR"; district: DistrictId; id: string }
+  | { type: "SET_ISLE_THEME"; district: DistrictId; theme: IslandTheme }
   | { type: "SET_LANG"; lang: Lang }
   | { type: "SET_CURRENCY"; currency: Currency }
   | { type: "RENAME_CITY"; name: string }
@@ -233,6 +243,14 @@ function emptyXp(): Record<DistrictId, number> {
   return { crypto: 0, stocks: 0, vault: 0, academy: 0 };
 }
 
+function emptyIsleDecor(): Record<DistrictId, string[]> {
+  return { crypto: [], stocks: [], vault: [], academy: [] };
+}
+
+function defaultIsleThemes(): Record<DistrictId, IslandTheme> {
+  return { crypto: "emerald", stocks: "sunset", vault: "lagoon", academy: "violet" };
+}
+
 export function freshState(): State {
   return {
     city: "",
@@ -255,7 +273,8 @@ export function freshState(): State {
     totalTasksDone: 0,
     visits: [],
     watchlist: [...DEFAULT_WATCH],
-    isleDecor: [],
+    isleDecor: emptyIsleDecor(),
+    isleTheme: defaultIsleThemes(),
     tutorialSeen: false,
     toasts: [],
   };
@@ -302,8 +321,13 @@ function demoState(lang: Lang): State {
     streak: 6,
     totalTasksDone: 9,
     visits: ["crypto", "stocks", "vault"],
-    xp: { crypto: 5650, stocks: 335, vault: 285, academy: 145 },
-    isleDecor: ["palms", "neon"],
+    xp: { crypto: 5650, stocks: 3500, vault: 2300, academy: 1450 },
+    isleDecor: {
+      crypto: ["palms", "neon", "dock"],
+      stocks: ["flags", "torch", "dock"],
+      vault: ["palms", "torch"],
+      academy: ["palms", "flags", "neon"],
+    },
     tutorialSeen: true,
     notes: [
       {
@@ -383,10 +407,11 @@ function reducer(state: State, action: Action): State {
       const task = state.tasks.find((x) => x.id === action.id);
       if (!task) return state;
       const nowDone = !task.done;
-      const tasks = state.tasks.map((x) => (x.id === action.id ? { ...x, done: nowDone, ts: Date.now() } : x));
-      const mult = xpMult(state.streak);
-      const gained = Math.round(task.xp * mult);
-      let s: State = { ...state, tasks, totalTasksDone: state.totalTasksDone + (nowDone ? 1 : -1) };
+      const gained = task.awardedXp ?? Math.round(task.xp * xpMult(state.streak));
+      const tasks = state.tasks.map((x) =>
+        x.id === action.id ? { ...x, done: nowDone, awardedXp: gained, ts: Date.now() } : x
+      );
+      let s: State = { ...state, tasks, totalTasksDone: Math.max(0, state.totalTasksDone + (nowDone ? 1 : -1)) };
       if (nowDone) {
         s = gainXp(s, task.district, gained);
         s = { ...s, log: pushLog(s.log, { text: t("log.taskDone", { t: task.title, x: gained }), kind: "xp", xp: gained }) };
@@ -448,10 +473,15 @@ function reducer(state: State, action: Action): State {
     case "TOGGLE_DECOR":
       return {
         ...state,
-        isleDecor: state.isleDecor.includes(action.id)
-          ? state.isleDecor.filter((d) => d !== action.id)
-          : [...state.isleDecor, action.id],
+        isleDecor: {
+          ...state.isleDecor,
+          [action.district]: state.isleDecor[action.district].includes(action.id)
+            ? state.isleDecor[action.district].filter((decorId) => decorId !== action.id)
+            : [...state.isleDecor[action.district], action.id],
+        },
       };
+    case "SET_ISLE_THEME":
+      return { ...state, isleTheme: { ...state.isleTheme, [action.district]: action.theme } };
     case "SET_LANG":
       return { ...state, lang: action.lang };
     case "SET_CURRENCY":
@@ -504,7 +534,8 @@ export interface StoreApi {
   completeCustomAch(id: string): void;
   addWatch(id: string): void;
   removeWatch(id: string): void;
-  toggleDecor(id: string): void;
+  toggleDecor(district: DistrictId, id: string): void;
+  setIsleTheme(district: DistrictId, theme: IslandTheme): void;
   setLang(lang: Lang): void;
   setCurrency(c: Currency): void;
   renameCity(name: string): void;
@@ -525,9 +556,30 @@ function loadInitial(): State {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return freshState();
-    const parsed = JSON.parse(raw) as Partial<State>;
+    const parsed = JSON.parse(raw) as Partial<State> & { isleDecor?: unknown; isleTheme?: unknown };
     if (!parsed || typeof parsed !== "object" || !parsed.xp) return freshState();
-    return { ...freshState(), ...parsed, toasts: [] };
+    const fresh = freshState();
+    const legacyDecor = parsed.isleDecor;
+    const decorSource = legacyDecor && typeof legacyDecor === "object" && !Array.isArray(legacyDecor)
+      ? (legacyDecor as Partial<Record<DistrictId, unknown>>)
+      : {};
+    const isleDecor = Object.fromEntries(
+      DISTRICT_IDS.map((district) => {
+        const candidate = Array.isArray(legacyDecor) && district === "crypto" ? legacyDecor : decorSource[district];
+        return [district, Array.isArray(candidate) ? candidate.filter((id): id is string => typeof id === "string") : []];
+      })
+    ) as Record<DistrictId, string[]>;
+    const themeSource = parsed.isleTheme && typeof parsed.isleTheme === "object"
+      ? (parsed.isleTheme as Partial<Record<DistrictId, unknown>>)
+      : {};
+    const validThemes: IslandTheme[] = ["emerald", "sunset", "lagoon", "violet"];
+    const isleTheme = Object.fromEntries(
+      DISTRICT_IDS.map((district) => {
+        const candidate = themeSource[district];
+        return [district, validThemes.includes(candidate as IslandTheme) ? candidate : fresh.isleTheme[district]];
+      })
+    ) as Record<DistrictId, IslandTheme>;
+    return { ...fresh, ...parsed, isleDecor, isleTheme, toasts: [] };
   } catch {
     return freshState();
   }
@@ -570,7 +622,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       completeCustomAch: (id) => dispatch({ type: "COMPLETE_CUSTOM_ACH", id }),
       addWatch: (id) => dispatch({ type: "ADD_WATCH", id }),
       removeWatch: (id) => dispatch({ type: "REMOVE_WATCH", id }),
-      toggleDecor: (id) => dispatch({ type: "TOGGLE_DECOR", id }),
+      toggleDecor: (district, id) => dispatch({ type: "TOGGLE_DECOR", district, id }),
+      setIsleTheme: (district, theme) => dispatch({ type: "SET_ISLE_THEME", district, theme }),
       setLang: (lang) => dispatch({ type: "SET_LANG", lang }),
       setCurrency: (currency) => dispatch({ type: "SET_CURRENCY", currency }),
       renameCity: (name) => dispatch({ type: "RENAME_CITY", name }),

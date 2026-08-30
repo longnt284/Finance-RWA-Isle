@@ -40,8 +40,11 @@ export interface Mats {
 }
 
 export function makeMats(): Mats {
-  const std = (p: THREE.MeshStandardMaterialParameters) =>
-    new THREE.MeshStandardMaterial({ flatShading: true, roughness: 0.9, metalness: 0.02, ...p });
+  const std = (p: THREE.MeshStandardMaterialParameters) => {
+    const material = new THREE.MeshStandardMaterial({ roughness: 0.9, metalness: 0.02, ...p });
+    material.userData.shared = true;
+    return material;
+  };
   return {
     stone: std({ color: 0xa9b9b3 }),
     stoneDark: std({ color: 0x64787a, roughness: 0.95 }),
@@ -652,7 +655,7 @@ export function makeCloud(): THREE.Group {
   const mat = new THREE.MeshBasicMaterial({
     color: 0x9fbdb8,
     transparent: true,
-    opacity: 0.13,
+    opacity: 0.065,
     depthWrite: false,
   });
   const parts: [number, number, number, number][] = [
@@ -672,6 +675,10 @@ export function makeCloud(): THREE.Group {
 export function makeSky(): THREE.Mesh {
   const geo = new THREE.SphereGeometry(330, 24, 16);
   const mat = new THREE.ShaderMaterial({
+    uniforms: {
+      uDaylight: { value: 0.72 },
+      uDusk: { value: 0.35 },
+    },
     side: THREE.BackSide,
     depthWrite: false,
     vertexShader: `
@@ -681,22 +688,26 @@ export function makeSky(): THREE.Mesh {
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
       }`,
     fragmentShader: `
+      uniform float uDaylight;
+      uniform float uDusk;
       varying vec3 vDir;
       float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
       void main() {
         vec3 d = normalize(vDir);
         float h = d.y;
-        vec3 top = vec3(0.006, 0.04, 0.068);
-        vec3 mid = vec3(0.028, 0.13, 0.16);
-        vec3 hor = vec3(0.13, 0.21, 0.21);
-        vec3 warm = vec3(0.55, 0.32, 0.13);
+        vec3 nightTop = vec3(0.004, 0.018, 0.045);
+        vec3 dayTop = vec3(0.025, 0.20, 0.34);
+        vec3 top = mix(nightTop, dayTop, uDaylight);
+        vec3 mid = mix(vec3(0.018, 0.07, 0.11), vec3(0.12, 0.39, 0.48), uDaylight);
+        vec3 hor = mix(vec3(0.07, 0.10, 0.14), vec3(0.39, 0.58, 0.58), uDaylight);
+        vec3 warm = vec3(0.76, 0.34, 0.12);
         vec3 col = mix(hor, mid, smoothstep(0.02, 0.3, h));
         col = mix(col, top, smoothstep(0.22, 0.72, h));
         float band = exp(-abs(h - 0.02) * 20.0);
-        col += warm * band * 0.55;
+        col += warm * band * uDusk * 0.72;
         vec2 sp = d.xz / (abs(d.y) + 0.35);
         float star = step(0.9975, hash(floor(sp * 230.0))) * smoothstep(0.2, 0.55, h);
-        col += vec3(0.85, 0.92, 1.0) * star * 0.5;
+        col += vec3(0.85, 0.92, 1.0) * star * (1.0 - uDaylight) * 0.85;
         gl_FragColor = vec4(col, 1.0);
       }`,
   });
@@ -726,42 +737,55 @@ export function makeSunSprite(): THREE.Sprite {
   });
   const sp = new THREE.Sprite(mat);
   sp.position.set(-140, 30, -180);
-  sp.scale.set(120, 120, 1);
+  sp.scale.set(24, 24, 1);
   return sp;
 }
 
 export function makeWater(): { mesh: THREE.Mesh; tick: TickFn } {
-  const geo = new THREE.PlaneGeometry(640, 640, 1, 1);
+  const geo = new THREE.PlaneGeometry(640, 640, 72, 72);
   const mat = new THREE.ShaderMaterial({
     uniforms: {
       uTime: { value: 0 },
       uFog: { value: new THREE.Color(0x08222b) },
+      uDaylight: { value: 0.72 },
     },
     vertexShader: `
       varying vec3 vWorld;
+      varying float vWave;
+      uniform float uTime;
       void main() {
-        vec4 wp = modelMatrix * vec4(position, 1.0);
+        vec3 p = position;
+        float w1 = sin(p.x * 0.055 + uTime * 0.72) * 0.16;
+        float w2 = sin(p.y * 0.082 - uTime * 0.54 + p.x * 0.018) * 0.11;
+        float w3 = sin((p.x + p.y) * 0.035 + uTime * 0.31) * 0.07;
+        p.z += w1 + w2 + w3;
+        vWave = w1 + w2 + w3;
+        vec4 wp = modelMatrix * vec4(p, 1.0);
         vWorld = wp.xyz;
         gl_Position = projectionMatrix * viewMatrix * wp;
       }`,
     fragmentShader: `
       uniform float uTime;
       uniform vec3 uFog;
+      uniform float uDaylight;
       varying vec3 vWorld;
+      varying float vWave;
       void main() {
         vec2 p = vWorld.xz;
         float d = length(p);
         float ring = sin(d * 0.34 - uTime * 1.15) * 0.5 + 0.5;
         float drift = sin(p.x * 0.06 + uTime * 0.35) * sin(p.y * 0.05 - uTime * 0.28);
-        vec3 deep = vec3(0.012, 0.075, 0.1);
-        vec3 base = vec3(0.03, 0.145, 0.17);
-        vec3 col = mix(deep, base, ring * 0.3 + drift * 0.2 + 0.25);
+        vec3 deep = mix(vec3(0.006, 0.025, 0.06), vec3(0.012, 0.09, 0.14), uDaylight);
+        vec3 base = mix(vec3(0.018, 0.07, 0.10), vec3(0.045, 0.25, 0.31), uDaylight);
+        vec3 col = mix(deep, base, ring * 0.28 + drift * 0.18 + 0.31 + vWave * 0.35);
         float foam = 1.0 - smoothstep(25.5, 30.0, d);
         col = mix(col, vec3(0.15, 0.33, 0.3), foam * 0.5);
         vec3 viewDir = normalize(cameraPosition - vWorld);
         vec3 hv = normalize(viewDir + normalize(vec3(-0.55, 0.3, -0.6)));
-        float spec = pow(max(hv.y, 0.0), 90.0);
-        col += vec3(1.0, 0.8, 0.5) * spec * (0.35 + 0.5 * ring);
+        float spec = pow(clamp(hv.y + vWave * 0.18, 0.0, 1.0), 96.0);
+        float fresnel = pow(1.0 - max(viewDir.y, 0.0), 3.0);
+        col += vec3(0.92, 0.68, 0.42) * spec * (0.12 + 0.3 * ring) * uDaylight;
+        col = mix(col, vec3(0.15, 0.34, 0.40), fresnel * 0.24 * uDaylight);
         float fogF = smoothstep(80.0, 340.0, distance(cameraPosition, vWorld));
         col = mix(col, uFog, fogF);
         gl_FragColor = vec4(col, 1.0);
@@ -872,16 +896,33 @@ export function makeBurstPool(scene: THREE.Scene) {
 /* Genesis Isle — private crypto island (unlocked at level 8)          */
 /* ------------------------------------------------------------------ */
 
-export const ISLE_POS = new THREE.Vector3(37, 0, 10);
+export type IslandKind = "crypto" | "stocks" | "vault" | "academy";
+export type IslandTheme = "emerald" | "sunset" | "lagoon" | "violet";
+export const ISLE_POSITIONS: Record<IslandKind, THREE.Vector3> = {
+  crypto: new THREE.Vector3(43, 0, -10),
+  stocks: new THREE.Vector3(-43, 0, -10),
+  vault: new THREE.Vector3(-37, 0, 35),
+  academy: new THREE.Vector3(37, 0, 35),
+};
+/** Backwards-compatible alias for the original Genesis isle. */
+export const ISLE_POS = ISLE_POSITIONS.crypto;
 export const ISLE_RADIUS = 7.5;
 export const DECOR_IDS = ["palms", "neon", "flags", "dock", "torch"] as const;
 export type DecorId = (typeof DECOR_IDS)[number];
 
-function isleTerrain(): THREE.Group {
+const ISLE_PALETTES: Record<IslandTheme, { rock: number; top: number; rim: number; pad: number; glow: number }> = {
+  emerald: { rock: 0x244c47, top: 0x216b59, rim: 0xb28a54, pad: 0x314a4a, glow: 0x5ce8c4 },
+  sunset: { rock: 0x4a3540, top: 0x8a4c48, rim: 0xe0aa50, pad: 0x4b3b42, glow: 0xffb36b },
+  lagoon: { rock: 0x23445a, top: 0x28758a, rim: 0xd3bc7d, pad: 0x304f5d, glow: 0x7bdcf5 },
+  violet: { rock: 0x393452, top: 0x65568d, rim: 0xc6a8ff, pad: 0x403c5c, glow: 0xb79cff },
+};
+
+function isleTerrain(theme: IslandTheme): THREE.Group {
   const g = new THREE.Group();
+  const palette = ISLE_PALETTES[theme];
   const rock = new THREE.Mesh(
-    new THREE.CylinderGeometry(ISLE_RADIUS, ISLE_RADIUS - 2.2, 4.6, 34, 2),
-    new THREE.MeshStandardMaterial({ color: 0x274a48, flatShading: true, roughness: 1 })
+    new THREE.CylinderGeometry(ISLE_RADIUS, ISLE_RADIUS - 2.2, 4.6, 48, 3),
+    new THREE.MeshStandardMaterial({ color: palette.rock, roughness: 0.94, metalness: 0.03 })
   );
   const pos = rock.geometry.attributes.position as THREE.BufferAttribute;
   for (let i = 0; i < pos.count; i++) {
@@ -895,18 +936,18 @@ function isleTerrain(): THREE.Group {
   rock.position.y = -2.3;
   rock.receiveShadow = true;
   g.add(rock);
-  const top = cyl(ISLE_RADIUS - 0.25, ISLE_RADIUS, 0.4, 34, new THREE.MeshStandardMaterial({ color: 0x1f5a50, flatShading: true, roughness: 0.95 }));
+  const top = cyl(ISLE_RADIUS - 0.25, ISLE_RADIUS, 0.4, 48, new THREE.MeshStandardMaterial({ color: palette.top, roughness: 0.9 }));
   top.position.y = 0;
   top.receiveShadow = true;
   g.add(top);
   const rim = new THREE.Mesh(
-    new THREE.TorusGeometry(ISLE_RADIUS - 0.4, 0.28, 6, 40),
-    new THREE.MeshStandardMaterial({ color: 0x8f7d55, flatShading: true, roughness: 1 })
+    new THREE.TorusGeometry(ISLE_RADIUS - 0.4, 0.22, 8, 56),
+    new THREE.MeshStandardMaterial({ color: palette.rim, roughness: 0.78 })
   );
   rim.rotation.x = Math.PI / 2;
   rim.position.y = 0.05;
   g.add(rim);
-  const pad = cyl(2.6, 2.9, 0.3, 8, new THREE.MeshStandardMaterial({ color: 0x31424a, flatShading: true, roughness: 0.9 }));
+  const pad = cyl(2.6, 2.9, 0.3, 12, new THREE.MeshStandardMaterial({ color: palette.pad, roughness: 0.82, metalness: 0.12 }));
   pad.position.y = 0.3;
   pad.receiveShadow = true;
   g.add(pad);
@@ -1104,27 +1145,34 @@ function holoChart(m: Mats, ticks: TickFn[]): THREE.Group {
   return g;
 }
 
-/** Đảo Genesis theo cấp (8/9/10 thêm công trình mới) */
-export function buildIsle(m: Mats, level: number, ticks: TickFn[]): THREE.Group {
-  const g = isleTerrain();
-  const rig = miningRig(m, ticks);
-  rig.position.set(-2.4, 0.4, -1.6);
-  rig.rotation.y = 0.5;
-  g.add(rig);
-  const ob = obelisk(m, ticks);
-  ob.position.set(2.1, 0.4, -2.1);
-  g.add(ob);
-  if (level >= 9) {
-    const whale = whaleStatue(m, ticks);
-    whale.position.set(2.6, 0.4, 2.3);
-    whale.rotation.y = -2.2;
-    g.add(whale);
+/** A district-specific private isle that gains landmarks at higher levels. */
+export function buildIsle(
+  m: Mats,
+  level: number,
+  ticks: TickFn[],
+  district: IslandKind = "crypto",
+  theme: IslandTheme = "emerald"
+): THREE.Group {
+  const g = isleTerrain(theme);
+  const first = district === "stocks" ? exchangeMonolith(m, ticks) : district === "vault" ? whaleStatue(m, ticks) : district === "academy" ? obelisk(m, ticks) : miningRig(m, ticks);
+  first.position.set(-2.4, 0.4, -1.6);
+  first.rotation.y = 0.5;
+  g.add(first);
+  const second = district === "stocks" ? holoChart(m, ticks) : district === "vault" ? obelisk(m, ticks) : district === "academy" ? rocket(m, ticks) : obelisk(m, ticks);
+  second.position.set(2.1, district === "stocks" ? 1.0 : 0.4, -2.1);
+  g.add(second);
+  const unlockBase = district === "crypto" ? 8 : district === "stocks" ? 7 : district === "vault" ? 6 : 5;
+  if (level >= unlockBase + 1) {
+    const third = district === "vault" ? miningRig(m, ticks) : whaleStatue(m, ticks);
+    third.position.set(2.6, 0.4, 2.3);
+    third.rotation.y = -2.2;
+    g.add(third);
     const mono = exchangeMonolith(m, ticks);
     mono.position.set(-2.6, 0.4, 1.9);
     mono.rotation.y = 2.6;
     g.add(mono);
   }
-  if (level >= 10) {
+  if (level >= unlockBase + 2) {
     const rk = rocket(m, ticks);
     rk.position.set(0.4, 0.4, -3.4);
     g.add(rk);
@@ -1132,8 +1180,8 @@ export function buildIsle(m: Mats, level: number, ticks: TickFn[]): THREE.Group 
     holo.position.set(0, 1.1, 0);
     g.add(holo);
   }
-  // teal beacon above the isle
-  const beamMat = new THREE.MeshBasicMaterial({ color: 0x5ce8c4, transparent: true, opacity: 0.05, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending });
+  const palette = ISLE_PALETTES[theme];
+  const beamMat = new THREE.MeshBasicMaterial({ color: palette.glow, transparent: true, opacity: 0.05, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending });
   const beam = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 0.4, 16, 10, 1, true), beamMat);
   beam.position.y = 8.4;
   g.add(beam);
@@ -1141,18 +1189,19 @@ export function buildIsle(m: Mats, level: number, ticks: TickFn[]): THREE.Group 
 }
 
 /** Hologram khi đảo chưa mở khóa */
-export function buildIsleGhost(): { group: THREE.Group; tick: TickFn } {
+export function buildIsleGhost(theme: IslandTheme = "emerald"): { group: THREE.Group; tick: TickFn } {
   const g = new THREE.Group();
-  const ghostMat = new THREE.MeshBasicMaterial({ color: 0x5ce8c4, wireframe: true, transparent: true, opacity: 0.14, depthWrite: false });
+  const glow = ISLE_PALETTES[theme].glow;
+  const ghostMat = new THREE.MeshBasicMaterial({ color: glow, wireframe: true, transparent: true, opacity: 0.11, depthWrite: false });
   const cone = new THREE.Mesh(new THREE.CylinderGeometry(ISLE_RADIUS, ISLE_RADIUS - 2.2, 4.6, 20, 2), ghostMat);
   cone.position.y = -2.3;
   g.add(cone);
-  const ringMat = new THREE.MeshBasicMaterial({ color: 0x5ce8c4, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false });
+  const ringMat = new THREE.MeshBasicMaterial({ color: glow, transparent: true, opacity: 0.3, blending: THREE.AdditiveBlending, depthWrite: false });
   const ring = new THREE.Mesh(new THREE.TorusGeometry(ISLE_RADIUS + 0.8, 0.08, 6, 48), ringMat);
   ring.rotation.x = Math.PI / 2;
   ring.position.y = 0.2;
   g.add(ring);
-  const lock = new THREE.Mesh(new THREE.OctahedronGeometry(0.7), new THREE.MeshBasicMaterial({ color: 0x5ce8c4, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false }));
+  const lock = new THREE.Mesh(new THREE.OctahedronGeometry(0.7), new THREE.MeshBasicMaterial({ color: glow, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false }));
   lock.position.y = 2.4;
   g.add(lock);
   const tick: TickFn = (t) => {
@@ -1385,6 +1434,54 @@ export function makeBoat(m: Mats): THREE.Group {
   g.traverse((o) => {
     if ((o as THREE.Mesh).isMesh) o.castShadow = true;
   });
+  return g;
+}
+
+/** Player-controlled motor yacht. Geometry is intentionally compact to keep draw calls low. */
+export function makeYacht(m: Mats): THREE.Group {
+  const g = new THREE.Group();
+  const hullMat = new THREE.MeshPhysicalMaterial({ color: 0xf1f5ef, roughness: 0.24, metalness: 0.12, clearcoat: 0.75, clearcoatRoughness: 0.18 });
+  const glass = new THREE.MeshPhysicalMaterial({ color: 0x143e4b, emissive: 0x0b3742, emissiveIntensity: 0.45, roughness: 0.08, metalness: 0.28, transparent: true, opacity: 0.86 });
+  const trim = new THREE.MeshStandardMaterial({ color: 0xd9a64f, roughness: 0.28, metalness: 0.82 });
+
+  const hull = new THREE.Mesh(new THREE.CapsuleGeometry(0.82, 3.2, 5, 12), hullMat);
+  hull.rotation.x = Math.PI / 2;
+  hull.scale.set(1, 0.48, 1);
+  hull.position.y = 0.06;
+  g.add(hull);
+  const keel = box(1.35, 0.32, 3.5, m.stoneDark);
+  keel.position.y = -0.28;
+  g.add(keel);
+  const deck = box(1.46, 0.13, 3.0, trim);
+  deck.position.y = 0.34;
+  g.add(deck);
+  const cabin = box(1.18, 0.62, 1.34, glass);
+  cabin.position.set(0, 0.74, -0.35);
+  g.add(cabin);
+  const roof = box(1.38, 0.09, 1.55, hullMat);
+  roof.position.set(0, 1.08, -0.37);
+  g.add(roof);
+
+  for (const x of [-0.72, 0.72]) {
+    const rail = cyl(0.025, 0.025, 2.7, 6, trim);
+    rail.rotation.x = Math.PI / 2;
+    rail.position.set(x, 0.65, 0.35);
+    g.add(rail);
+  }
+  const mast = cyl(0.035, 0.035, 1.05, 8, trim);
+  mast.position.set(0, 1.58, -0.48);
+  g.add(mast);
+  const radar = new THREE.Mesh(new THREE.TorusGeometry(0.22, 0.035, 8, 24), trim);
+  radar.position.set(0, 2.06, -0.48);
+  radar.rotation.x = Math.PI / 2;
+  g.add(radar);
+  const navLight = new THREE.PointLight(0x7fe8bb, 0.85, 9);
+  navLight.position.set(0, 1.35, 1.45);
+  g.add(navLight);
+  const sternLight = new THREE.PointLight(0xffd88a, 0.65, 7);
+  sternLight.position.set(0, 0.62, -1.7);
+  g.add(sternLight);
+  castAll(g);
   return g;
 }
 

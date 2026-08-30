@@ -1,16 +1,18 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { StoreProvider, useStore, districtLevels, levelFor, ACH_DEFS, ISLE_UNLOCK_LV } from "./state/store";
-import type { ViewId } from "./state/store";
-import WorldScene from "./world/WorldScene";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { StoreProvider, useStore, districtLevels, ACH_DEFS, ISLE_UNLOCK_LEVELS, DISTRICT_IDS } from "./state/store";
+import type { DistrictId, ViewId } from "./state/store";
 import type { WorldHandle } from "./world/WorldScene";
 import HUD from "./components/HUD";
 import type { DrawerId } from "./components/HUD";
-import Workspace from "./components/Workspace";
-import { MarketDrawer, ToolsDrawer, NotesDrawer } from "./components/Drawers";
 import { Hero, OnboardingModal, TutorialOverlay } from "./components/Modals";
 import { makeT } from "./lib/i18n";
-import { market } from "./lib/market";
 import { sound } from "./lib/audio";
+
+const Workspace = lazy(() => import("./components/Workspace"));
+const WorldScene = lazy(() => import("./world/WorldScene"));
+const MarketDrawer = lazy(() => import("./components/Drawers").then((module) => ({ default: module.MarketDrawer })));
+const ToolsDrawer = lazy(() => import("./components/Drawers").then((module) => ({ default: module.ToolsDrawer })));
+const NotesDrawer = lazy(() => import("./components/Drawers").then((module) => ({ default: module.NotesDrawer })));
 
 function Shell() {
   const { state, api } = useStore();
@@ -19,10 +21,28 @@ function Shell() {
   const [drawer, setDrawer] = useState<DrawerId>(null);
   const [showOnboard, setShowOnboard] = useState(false);
   const [muted, setMuted] = useState(sound.isMuted());
+  const [activeIsle, setActiveIsle] = useState<DistrictId>("crypto");
+  const [voyage, setVoyage] = useState(false);
+  const [helmInput, setHelmInput] = useState({ throttle: 0, turn: 0 });
   const worldRef = useRef<WorldHandle | null>(null);
 
   const levels = useMemo(() => districtLevels(state), [state.xp]);
-  const isleUnlocked = levels.crypto >= ISLE_UNLOCK_LV;
+  const islands = useMemo(
+    () =>
+      Object.fromEntries(
+        DISTRICT_IDS.map((district) => [
+          district,
+          {
+            unlocked: levels[district] >= ISLE_UNLOCK_LEVELS[district],
+            level: levels[district],
+            decor: state.isleDecor[district],
+            theme: state.isleTheme[district],
+          },
+        ])
+      ) as Record<DistrictId, { unlocked: boolean; level: number; decor: string[]; theme: (typeof state.isleTheme)[DistrictId] }>,
+    [levels, state.isleDecor, state.isleTheme]
+  );
+  const canVoyage = DISTRICT_IDS.some((district) => islands[district].unlocked);
 
   /* ---------- achievement scanner ---------- */
   const rewarded = useRef<Set<string> | null>(null);
@@ -49,23 +69,6 @@ function Shell() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state]);
 
-  /* ---------- market events ---------- */
-  useEffect(() => {
-    market.onEvent = (e) => {
-      const tr = makeT(state.lang);
-      let text = "";
-      if (e.id === "whale" && e.sym) text = tr("evt.whale", { n: e.n ?? "1", s: e.sym });
-      else if (e.id === "pump" && e.sym) text = tr("evt.pump", { s: e.sym, p: e.p ?? "1" });
-      else if (e.id === "dump" && e.sym) text = tr("evt.dump", { s: e.sym, p: e.p ?? "1" });
-      else if (e.id === "vni") text = tr("evt.vni", { d: e.d === "giảm" ? (state.lang === "vi" ? "giảm" : "down") : state.lang === "vi" ? "tăng" : "up", p: e.p ?? "1" });
-      else if (e.id === "fed") text = tr("evt.fed");
-      if (text) api.logEvent(text);
-    };
-    return () => {
-      market.onEvent = null;
-    };
-  }, [state.lang, api]);
-
   /* ---------- flow control ---------- */
   const prevOnboarded = useRef(state.onboarded);
   useEffect(() => {
@@ -82,33 +85,39 @@ function Shell() {
     prevOnboarded.current = state.onboarded;
   }, [state.onboarded, state.focus, state.tutorialSeen]);
 
-  function handleSelect(view: ViewId) {
-    if (view === "isle" && !isleUnlocked) {
+  function handleSelect(view: ViewId, island?: DistrictId) {
+    const requestedIsle = island ?? activeIsle;
+    if (view === "isle" && !islands[requestedIsle].unlocked) {
       api.pushToast({
-        title: t("toast.needLvl", { b: t("d.crypto.building"), n: ISLE_UNLOCK_LV }),
-        sub: t("il.lockedSub", { n: ISLE_UNLOCK_LV }),
+        title: t("toast.needLvl", { b: t(`d.${requestedIsle}.building`), n: ISLE_UNLOCK_LEVELS[requestedIsle] }),
+        sub: t("il.lockedSub", { n: ISLE_UNLOCK_LEVELS[requestedIsle] }),
         kind: "info",
       });
-      setSelected("crypto");
+      setSelected(requestedIsle);
       sound.tick();
       return;
     }
+    if (view === "isle") setActiveIsle(requestedIsle);
+    if (voyage) setVoyage(false);
     setSelected(view);
     if (view !== "overview") api.visit(view);
   }
 
   return (
     <div className="relative h-screen w-screen select-none overflow-hidden bg-ink-900">
-      <WorldScene
-        levels={levels}
-        selected={selected}
-        onSelect={handleSelect}
-        handleRef={worldRef}
-        lang={state.lang}
-        decor={state.isleDecor}
-        isleUnlocked={isleUnlocked}
-        isleLevel={levels.crypto}
-      />
+      <Suspense fallback={<div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_45%,#173f3a_0%,#071816_72%)]" aria-hidden="true" />}>
+        <WorldScene
+          levels={levels}
+          selected={selected}
+          onSelect={handleSelect}
+          handleRef={worldRef}
+          lang={state.lang}
+          islands={islands}
+          activeIsle={activeIsle}
+          voyage={voyage}
+          helmInput={helmInput}
+        />
+      </Suspense>
 
       {state.onboarded ? (
         <>
@@ -119,13 +128,31 @@ function Shell() {
             onDrawer={setDrawer}
             muted={muted}
             onToggleMute={() => setMuted(sound.toggleMute())}
+            voyage={voyage}
+            canVoyage={canVoyage}
+            onVoyage={() => {
+              setDrawer(null);
+              setHelmInput({ throttle: 0, turn: 0 });
+              const next = !voyage;
+              if (next) setSelected("overview");
+              setVoyage(next);
+            }}
+            onHelmInput={setHelmInput}
           />
-          {selected !== "overview" && (
-            <Workspace view={selected} onClose={() => setSelected("overview")} onSelect={handleSelect} />
-          )}
-          {drawer === "market" && <MarketDrawer onClose={() => setDrawer(null)} />}
-          {drawer === "tools" && <ToolsDrawer onClose={() => setDrawer(null)} />}
-          {drawer === "notes" && <NotesDrawer onClose={() => setDrawer(null)} />}
+          <Suspense fallback={<div className="panel absolute right-4 top-24 z-40 h-24 w-72 animate-pulse rounded-xl" />}>
+            {selected !== "overview" && (
+              <Workspace
+                view={selected}
+                onClose={() => setSelected("overview")}
+                onSelect={handleSelect}
+                activeIsle={activeIsle}
+                onIslandSelect={(district) => handleSelect("isle", district)}
+              />
+            )}
+            {drawer === "market" && <MarketDrawer onClose={() => setDrawer(null)} />}
+            {drawer === "tools" && <ToolsDrawer onClose={() => setDrawer(null)} />}
+            {drawer === "notes" && <NotesDrawer onClose={() => setDrawer(null)} />}
+          </Suspense>
           <TutorialOverlay open={drawer === "tutorial"} onClose={() => setDrawer(null)} />
         </>
       ) : (
