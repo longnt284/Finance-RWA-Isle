@@ -35,6 +35,14 @@ Nếu deploy trên nền tảng khác Vercel, trỏ client tới proxy tương t
 VITE_EQUITY_FEED_URL=https://your-domain.example/api/quotes
 ```
 
+Repository đã có cấu hình production mặc định trong `.env.production`:
+
+```bash
+VITE_EQUITY_FEED_URL=/api/quotes
+```
+
+Giá trị này dùng endpoint cùng origin nên không phụ thuộc domain preview/production. Nếu frontend và proxy nằm ở hai domain khác nhau, sao chép `.env.example` thành `.env.local` khi phát triển hoặc đặt biến môi trường trên nền tảng deploy để ghi đè bằng URL tuyệt đối. Biến `VITE_*` được đưa vào bundle phía client, vì vậy không đặt API key hay secret trong đó.
+
 Proxy nhận `?symbols=AAPL,FPT.VN` và trả `{ quotes: [{ symbol, price, previousClose, updatedAt }] }`.
 
 > Dữ liệu phục vụ theo dõi và trải nghiệm sản phẩm, không phải lời khuyên đầu tư. Feed cổ phiếu có thể trễ tùy quy định của sở giao dịch.

@@ -3,4 +3,6 @@ node_modules/
 dist/
 build/
 .artifacts/
+.env.local
+.env.*.local
 *.log
