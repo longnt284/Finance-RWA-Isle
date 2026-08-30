@@ -1,3 +1,5 @@
+import { yahooQuote, stooqQuote } from "./_providers.js";
+
 const CACHE_TTL_MS = 20_000;
 const MAX_SYMBOLS = 30;
 /** Trần request đồng thời tới upstream để không bị chặn tốc độ. */
@@ -35,30 +37,25 @@ async function mapWithLimit(items, limit, worker) {
   return results;
 }
 
+/**
+ * Thử lần lượt từng nguồn cho một mã. Yahoo đi trước vì phủ cả HOSE/HNX lẫn
+ * sàn Mỹ; Stooq chỉ đỡ được mã Mỹ nhưng đủ để bảng giá không trắng khi Yahoo
+ * chặn theo IP (403) hoặc giới hạn tốc độ (429).
+ */
 async function fetchQuote(symbol) {
   const cached = cache.get(symbol);
   if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) return cached.value;
-  const response = await fetch(
-    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1m&range=1d`,
-    {
-      headers: { "User-Agent": "Finance-RWA-Isle/1.0" },
-      signal: AbortSignal.timeout(7_500),
+  let lastError = new Error("upstream_unreachable");
+  let value = null;
+  for (const provider of [yahooQuote, stooqQuote]) {
+    try {
+      value = await provider(symbol);
+      break;
+    } catch (error) {
+      lastError = error;
     }
-  );
-  if (!response.ok) throw new Error(`upstream_${response.status}`);
-  const payload = await response.json();
-  const meta = payload?.chart?.result?.[0]?.meta;
-  const price = Number(meta?.regularMarketPrice);
-  const previousClose = Number(meta?.chartPreviousClose ?? meta?.previousClose);
-  if (!Number.isFinite(price) || price <= 0) throw new Error("invalid_quote");
-  const value = {
-    symbol,
-    price,
-    previousClose: Number.isFinite(previousClose) ? previousClose : null,
-    currency: meta?.currency || null,
-    marketState: meta?.marketState || null,
-    updatedAt: Date.now(),
-  };
+  }
+  if (!value) throw lastError;
   if (cache.size >= CACHE_MAX_ENTRIES) {
     const oldest = cache.keys().next();
     if (!oldest.done) cache.delete(oldest.value);

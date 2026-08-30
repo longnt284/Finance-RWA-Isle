@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import {
   useStore, DISTRICTS, xpIntoLevel, cityLevel, netWorth, levelFor, xpMult,
-  ACH_DEFS, DISTRICT_IDS, ISLE_UNLOCK_LEVELS, LEVEL_XP, MAX_LEVEL, pendingExamLevel,
+  ACH_DEFS, DISTRICT_IDS, ISLE_UNLOCK_LEVELS, LEVEL_XP, MAX_LEVEL, pendingExamLevel, renderLog,
 } from "../state/store";
 import type { DistrictId, Goal, Task, ViewId, AchTier, IslandTheme } from "../state/store";
 import { makeT } from "../lib/i18n";
@@ -305,7 +305,7 @@ function QuickActions({ district }: { district: DistrictId }) {
         <button
           key={i}
           onClick={() => {
-            api.logTrade(district, t(`qa.${district}.${i}`));
+            api.logTrade(district, `qa.${district}.${i}`);
             sound.coin();
           }}
           className="chip rounded-full px-2.5 py-1 text-[11px] text-mist-300 transition-all hover:border-gold-500/40 hover:text-gold-300"
@@ -772,8 +772,8 @@ function CenterPanel({ onClose, onIslandSelect }: { onClose: () => void; onIslan
           <div className="space-y-1.5">
             {state.log.slice(0, 10).map((l) => (
               <div key={l.id} className="flex items-baseline justify-between gap-2 text-[11px]">
-                <span className="min-w-0 truncate text-mist-400">{l.text}</span>
-                <span className="shrink-0 font-mono text-[9px] text-mist-500">{timeAgo(l.ts)}</span>
+                <span className="min-w-0 truncate text-mist-400">{renderLog(t, l)}</span>
+                <span className="shrink-0 font-mono text-[9px] text-mist-500">{timeAgo(l.ts, state.lang)}</span>
               </div>
             ))}
           </div>

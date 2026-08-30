@@ -23,7 +23,7 @@ export interface Quote {
   ch: number; // 24h %
   due: number; // next update timestamp
   updatedAt: number;
-  source: "binance" | "yahoo" | "reference";
+  source: "binance" | "yahoo" | "stooq" | "coingecko" | "coinmarketcap" | "reference";
   status: "live" | "delayed" | "stale" | "reference";
 }
 
@@ -198,6 +198,9 @@ const EQUITY_MAX_TRACKED = 75;
 /** Trần số cặp crypto mở trên một kết nối WebSocket. */
 const CRYPTO_MAX_STREAMS = 60;
 const STALE_AFTER_MS = 10 * 60_000;
+/** Sau ngần này mà WebSocket chưa mở được thì chuyển sang hỏi qua /api/crypto. */
+const CRYPTO_WS_GRACE_MS = 8_000;
+const CRYPTO_POLL_MS = 20_000;
 
 class MarketStore {
   quotes: Record<string, Quote> = {};
@@ -208,6 +211,10 @@ class MarketStore {
   private healthTimer: ReturnType<typeof setInterval> | null = null;
   private equityTimer: ReturnType<typeof setInterval> | null = null;
   private fxTimer: ReturnType<typeof setInterval> | null = null;
+  private cryptoPollTimer: ReturnType<typeof setInterval> | null = null;
+  private cryptoInFlight = false;
+  /** WebSocket đã từng mở được trong phiên này chưa. */
+  private wsEverOpen = false;
   private notifyTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectDelay = 1500;
@@ -242,6 +249,11 @@ class MarketStore {
     void this.refreshEquities();
     void this.refreshFx();
     this.healthTimer = window.setInterval(() => this.checkHealth(), 5000);
+    /* Mạng chặn Binance thì WebSocket không bao giờ mở. Sau thời gian ân hạn,
+       chuyển hẳn sang lấy giá crypto qua máy chủ. */
+    window.setTimeout(() => {
+      if (!this.wsEverOpen) this.startCryptoPolling();
+    }, CRYPTO_WS_GRACE_MS);
     this.equityTimer = window.setInterval(() => void this.refreshEquities(), 60_000);
     this.fxTimer = window.setInterval(() => void this.refreshFx(), 30 * 60_000);
     window.addEventListener("online", this.handleOnline);
@@ -327,6 +339,8 @@ class MarketStore {
     socket.addEventListener("open", () => {
       if (this.socket !== socket) return;
       this.reconnectDelay = 1500;
+      this.wsEverOpen = true;
+      this.stopCryptoPolling();
       this.connection = "live";
       this.lastError = "";
       const stable = ASSETS.find((asset) => asset.sym === "USDT" && asset.type === "crypto");
@@ -357,7 +371,72 @@ class MarketStore {
       this.publish();
       this.reconnectTimer = window.setTimeout(() => this.connectCrypto(), this.reconnectDelay);
       this.reconnectDelay = Math.min(30_000, this.reconnectDelay * 1.8);
+      /* Kết nối rơi lâu: đừng để bảng giá đứng im chờ WebSocket sống lại. */
+      if (this.reconnectDelay > 5_000) this.startCryptoPolling();
     });
+  }
+
+  /* ---------------- crypto qua máy chủ (đường lui) ---------------- */
+
+  private startCryptoPolling() {
+    if (this.cryptoPollTimer || typeof window === "undefined") return;
+    void this.refreshCryptoViaApi();
+    this.cryptoPollTimer = window.setInterval(() => void this.refreshCryptoViaApi(), CRYPTO_POLL_MS);
+  }
+
+  private stopCryptoPolling() {
+    if (!this.cryptoPollTimer) return;
+    window.clearInterval(this.cryptoPollTimer);
+    this.cryptoPollTimer = null;
+  }
+
+  /**
+   * Hỏi `/api/crypto` — cùng origin nên không vướng CORS, và vì chạy phía máy
+   * chủ nên không dính việc nhà mạng chặn Binance. Máy chủ tự xoay vòng giữa
+   * Binance, CoinGecko và CoinMarketCap.
+   */
+  private async refreshCryptoViaApi(): Promise<void> {
+    if (!navigator.onLine || this.cryptoInFlight) return;
+    const assets = [...this.tracked]
+      .map((id) => ASSET_BY_ID.get(id))
+      .filter((asset): asset is Asset => Boolean(asset?.type === "crypto"))
+      .slice(0, CRYPTO_MAX_STREAMS);
+    if (!assets.length) return;
+    this.cryptoInFlight = true;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 12_000);
+    try {
+      const bySymbol = new Map(assets.map((asset) => [asset.sym, asset]));
+      const response = await fetch(`/api/crypto?symbols=${encodeURIComponent([...bySymbol.keys()].join(","))}`, {
+        signal: controller.signal,
+        cache: "no-store",
+      });
+      if (!response.ok) throw new Error(String(response.status));
+      const payload = (await response.json()) as {
+        quotes?: Array<{ symbol: string; price: number; changePct: number; source: string }>;
+      };
+      let applied = 0;
+      for (const item of payload.quotes ?? []) {
+        const asset = bySymbol.get(item.symbol);
+        if (!asset) continue;
+        const source =
+          item.source === "coingecko" || item.source === "coinmarketcap" || item.source === "binance"
+            ? (item.source as Quote["source"])
+            : "binance";
+        this.applyQuote(asset.id, item.price, item.changePct, source, "delayed");
+        applied++;
+      }
+      if (applied) {
+        this.lastError = "";
+        if (this.connection !== "offline") this.connection = "partial";
+      }
+      this.publish();
+    } catch {
+      this.lastError ||= "crypto_feed";
+    } finally {
+      window.clearTimeout(timeout);
+      this.cryptoInFlight = false;
+    }
   }
 
   private async refreshEquities() {
@@ -449,7 +528,7 @@ class MarketStore {
     quote.prev = quote.p;
     quote.p = price;
     quote.ch = Number.isFinite(change) ? change : quote.ch;
-    quote.due = source === "binance" ? now + 15_000 : now + 60_000;
+    quote.due = source === "binance" && status === "live" ? now + 15_000 : now + 60_000;
     quote.updatedAt = now;
     quote.source = source;
     quote.status = status;
@@ -463,7 +542,7 @@ class MarketStore {
     for (const id of this.tracked) {
       const quote = this.quotes[id];
       if (!quote?.updatedAt || quote.status === "reference") continue;
-      const maxAge = quote.source === "binance" ? 45_000 : STALE_AFTER_MS;
+      const maxAge = quote.source === "binance" && quote.status === "live" ? 45_000 : STALE_AFTER_MS;
       if (now - quote.updatedAt > maxAge && quote.status !== "stale") {
         quote.status = "stale";
         changed = true;
