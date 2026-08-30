@@ -130,7 +130,7 @@ export function MarketDrawer({ onClose }: { onClose: () => void }) {
         <div className="mb-2 flex items-center justify-between">
           <span className="font-display text-[9px] tracking-[0.24em] text-mist-400">{t("mk.watch")}</span>
           <span className="font-mono text-[9px] text-mist-500">
-            {market.lastGlobalUpdate ? t("mk.updated", { t: timeAgo(market.lastGlobalUpdate) }) : t("mk.connecting")}
+            {market.lastGlobalUpdate ? t("mk.updated", { t: timeAgo(market.lastGlobalUpdate, state.lang) }) : t("mk.connecting")}
           </span>
         </div>
         {watchAssets.length === 0 ? (
@@ -402,7 +402,7 @@ export function NotesDrawer({ onClose }: { onClose: () => void }) {
             <div className="flex items-start justify-between gap-2">
               <span className="text-[13px] font-semibold text-mist-100">{n.title}</span>
               <div className="flex items-center gap-2">
-                <span className="font-mono text-[9px] text-mist-500">{timeAgo(n.ts)}</span>
+                <span className="font-mono text-[9px] text-mist-500">{timeAgo(n.ts, state.lang)}</span>
                 <button onClick={() => api.deleteNote(n.id)} className="text-mist-500 opacity-0 transition-all hover:text-coral-400 group-hover:opacity-100">
                   <IconTrash className="h-3.5 w-3.5" />
                 </button>

@@ -21,6 +21,15 @@ npm run typecheck
 npm run build
 ```
 
+Kiểm thử không cần trình duyệt (chạy được ở mọi môi trường, kể cả khi mạng chặn
+các nguồn giá):
+
+```bash
+npm test                # typecheck + i18n + chuỗi nguồn giá
+npm run test:i18n       # mọi khoá i18n mà mã nguồn yêu cầu đều có đủ vi lẫn en
+npm run test:prices     # thứ tự xoay vòng nguồn giá, có stub fetch
+```
+
 Smoke test WebGL/UI (chạy `npm run dev` ở terminal khác trước):
 
 ```bash
@@ -33,6 +42,7 @@ Bộ ảnh kiểm chứng tính năng và bài kiểm tra luồng thi đậu:
 npm run test:features   # ngày/đêm, bốn mùa, chín kiểu thời tiết
 npm run test:panels     # các bảng bên phải, luồng khảo thí, bầu trời đêm
 npm run test:exam       # tự trả lời đúng cả 5 câu rồi kiểm tra màn hình "Đạt"
+npm run test:feed       # bảng Hoạt động đổi ngôn ngữ đúng ở cả hai chiều
 ```
 
 `test:exam` biên dịch `src/lib/quiz.ts` tại chỗ để lấy đúng đáp án theo cùng
@@ -97,12 +107,33 @@ Nâng cấp trong bảng *Khí hậu & thời gian → Xưởng du thuyền*.
 ## Dữ liệu thị trường thời gian thực
 
 - **100 mã crypto** trực tiếp từ Binance WebSocket, cập nhật theo tick và batch
-  render để không làm nghẽn UI.
+  render để không làm nghẽn UI. Mạng chặn Binance thì sau 8 giây client tự chuyển
+  sang `/api/crypto` — cùng origin, chạy phía máy chủ nên không dính chặn theo
+  vùng — và hỏi lại mỗi 20 giây.
 - **50 mã Việt Nam** (HOSE/HNX) và **100 mã Mỹ** qua endpoint cùng-origin
-  `/api/quotes` lấy dữ liệu Yahoo Finance. Client chỉ lấy giá cho phần đang hiển
-  thị cộng bảng chạy của bạn, gửi theo lô 25 mã song song; server cache 20 giây và
-  giới hạn 8 request đồng thời tới upstream.
+  `/api/quotes`. Client chỉ lấy giá cho phần đang hiển thị cộng bảng chạy của bạn,
+  gửi theo lô 25 mã song song; server cache 20 giây và giới hạn 8 request đồng
+  thời tới upstream.
 - Tỷ giá USD/VND từ open.er-api, refresh mỗi 30 phút.
+
+**Mỗi endpoint xoay vòng nhiều nguồn**, không phụ thuộc một nhà cung cấp duy nhất:
+
+| Endpoint | Thứ tự nguồn | Ghi chú |
+| --- | --- | --- |
+| `/api/quotes` | Yahoo `query1` → Yahoo `query2` → Stooq | Stooq chỉ phủ sàn Mỹ; mã `.VN` vẫn trông vào Yahoo |
+| `/api/crypto` | Binance REST → CoinGecko → CoinMarketCap | CoinMarketCap chỉ bật khi có `CMC_API_KEY` phía máy chủ |
+
+CoinGecko được hỏi theo `id`, mà bản đồ ký hiệu → `id` thì có thể sai. Nên máy chủ
+**đối chiếu lại `symbol` mà CoinGecko trả về**: lệch là loại luôn mục đó. Thà thiếu
+một dòng giá còn hơn hiện giá đồng này dưới tên đồng khác.
+
+Cả hai endpoint trả kèm trường `tried` nói rõ nguồn nào hỏng vì lý do gì. Khi bảng
+giá không lên, mở thẳng trên trình duyệt để biết đang tắc ở đâu:
+
+```
+/api/crypto?symbols=BTC,ETH
+/api/quotes?symbols=AAPL,VCB.VN
+```
 - Khi nguồn thật không khả dụng, giao diện giữ giá tham chiếu và hiển thị chấm
   xám cùng trạng thái `reference`; không bao giờ gắn nhãn giả là dữ liệu trực tiếp.
 
@@ -125,6 +156,16 @@ không thu thập gì. Bật tài khoản để giữ tiến độ khi đổi m�
 2. Chạy `supabase/migrations/0001_isle_saves.sql` để tạo bảng `isle_saves` cùng
    các policy Row Level Security.
 3. Đặt `VITE_SUPABASE_URL` và `VITE_SUPABASE_ANON_KEY` (xem `.env.example`).
+
+Bản deploy trong repo này đã trỏ sẵn vào một dự án Supabase qua `.env.production`.
+Hai giá trị đó là public theo thiết kế — mọi biến `VITE_*` đều nằm trong bundle
+trình duyệt, và anon key vốn được Supabase phát hành để lộ ra client. Thứ giữ dữ
+liệu an toàn là RLS ở tầng cơ sở dữ liệu, không phải việc giấu khoá. Muốn dùng dự
+án riêng thì thay hai biến đó là xong.
+
+Migration cũng `revoke` quyền `execute` trên hàm trigger `isle_saves_touch()`.
+Không revoke thì PostgREST phơi nó ra ở `/rest/v1/rpc/isle_saves_touch` cho cả
+`anon` lẫn `authenticated` — Supabase advisor báo đúng hai cảnh báo về việc này.
 
 Không cấu hình hai biến đó thì ứng dụng chạy ở **chế độ lưu-trên-máy** và nói rõ
 điều đó trong màn hình Tài khoản — mọi tính năng khác vẫn đầy đủ.
@@ -170,6 +211,12 @@ ghi đè ngầm là cách nhanh nhất để người dùng mất tiến độ.
   lưu trữ và migration.
 - `src/state/sync.ts` — khôi phục phiên và tự đẩy bản lưu lên máy chủ.
 - `api/quotes.js` — proxy giá cổ phiếu có validate, chia lô, cache và giới hạn tải.
+- `api/crypto.js` — giá crypto qua máy chủ, đường lui khi WebSocket Binance bị chặn.
+- `api/_providers.js` — các nguồn giá dùng chung cho hai endpoint trên.
+- `src/lib/events.ts` — phát hiện biến động mạnh để ghi sự kiện thị trường.
 - `supabase/migrations/` — schema và policy RLS.
 - `tests/ui_audit.cjs` — smoke test Playwright cho WebGL/UI.
 - `tests/feature_shots.cjs` — bộ ảnh kiểm chứng tính năng.
+- `tests/i18n_keys.cjs` — đối chiếu mọi khoá i18n mã nguồn yêu cầu với hai từ điển.
+- `tests/price_providers.cjs` — chuỗi xoay vòng nguồn giá, chạy offline.
+- `tests/feed_language.cjs` — bảng Hoạt động đổi ngôn ngữ ở cả hai chiều.

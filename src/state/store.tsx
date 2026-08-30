@@ -58,9 +58,28 @@ export type LogKind = "xp" | "level" | "goal" | "milestone" | "system" | "event"
 export interface LogEntry {
   id: string;
   ts: number;
-  text: string;
+  /**
+   * Khoá i18n của dòng nhật ký. Nhật ký được dịch lại mỗi lần vẽ, nên đổi ngôn
+   * ngữ là đổi luôn những dòng đã ghi từ trước — trước đây câu chữ bị "nướng"
+   * vào state lúc sự kiện xảy ra nên bảng Hoạt động lẫn hai thứ tiếng.
+   */
+  k?: string;
+  /** Tham số đã là giá trị cuối: con số, hoặc chuỗi do chính người dùng nhập. */
+  p?: Record<string, string | number>;
+  /** Tham số mà giá trị lại là một khoá i18n khác (tên quận, tên công trình…). */
+  pk?: Record<string, string>;
+  /** Bản lưu cũ đã nướng sẵn câu chữ. Chỉ dùng khi thiếu `k`. */
+  text?: string;
   kind: LogKind;
   xp?: number;
+}
+
+/** Dựng câu chữ cho một dòng nhật ký theo ngôn ngữ đang chọn. */
+export function renderLog(t: TFn, entry: LogEntry): string {
+  if (!entry.k) return entry.text ?? "";
+  const vars: Record<string, string | number> = { ...entry.p };
+  if (entry.pk) for (const [name, key] of Object.entries(entry.pk)) vars[name] = t(key);
+  return t(entry.k, vars);
 }
 
 export interface Toast {
@@ -152,10 +171,17 @@ export const DISTRICTS: Record<DistrictId, { accent: string }> = {
 };
 
 export function dLabel(t: TFn, d: DistrictId): string {
-  return t(`d.${d}.name`);
+  return t(dLabelKey(d));
 }
 export function dBuilding(t: TFn, d: DistrictId): string {
-  return t(`d.${d}.building`);
+  return t(dBuildingKey(d));
+}
+/* Nhật ký lưu khoá chứ không lưu câu đã dịch, nên cần hai hàm khoá riêng. */
+export function dLabelKey(d: DistrictId): string {
+  return `d.${d}.name`;
+}
+export function dBuildingKey(d: DistrictId): string {
+  return `d.${d}.building`;
 }
 
 /**
@@ -372,7 +398,8 @@ type Action =
   | { type: "ADD_TASK"; task: Task }
   | { type: "TOGGLE_TASK"; id: string }
   | { type: "SET_GOAL_PROGRESS"; id: string; current: number }
-  | { type: "LOG_TRADE"; district: DistrictId; label: string; xp: number }
+  | { type: "LOG_TRADE"; district: DistrictId; labelKey: string; xp: number }
+  | { type: "AWARD_ACH"; district: DistrictId; achId: string; xp: number }
   | { type: "LOG_NETWORTH"; value: number }
   | { type: "ADD_NOTE"; note: Note }
   | { type: "DELETE_NOTE"; id: string }
@@ -393,7 +420,7 @@ type Action =
   | { type: "SET_ACCOUNT"; account: AccountInfo | null }
   | { type: "ACCEPT_PRIVACY" }
   | { type: "HYDRATE"; state: State }
-  | { type: "LOG_EVENT"; text: string }
+  | { type: "LOG_EVENT"; k: string; p?: Record<string, string | number> }
   | { type: "MARK_TUTORIAL" }
   | { type: "VISIT"; view: string }
   | { type: "START_VOYAGE" }
@@ -429,13 +456,13 @@ function gainXp(state: State, district: DistrictId, amount: number): State {
   if (eligible >= EXAM_FREE_LEVEL && certified[district] < EXAM_FREE_LEVEL) {
     certified = { ...certified, [district]: EXAM_FREE_LEVEL };
     const b = dBuilding(t, district);
-    log = pushLog(log, { text: t("log.lvl", { b, n: EXAM_FREE_LEVEL }), kind: "level" });
+    log = pushLog(log, { k: "log.lvl", pk: { b: dBuildingKey(district) }, p: { n: EXAM_FREE_LEVEL }, kind: "level" });
     toasts = withToast(toasts, { title: t("toast.lvl", { b, n: EXAM_FREE_LEVEL }), sub: t("toast.lvlSub"), kind: "gold" });
   } else if (eligible > certified[district] && levelFor(state.xp[district]) <= certified[district]) {
     /* Vừa vượt ngưỡng XP: mời vào phòng khảo thí thay vì thăng cấp thẳng. */
     const b = dBuilding(t, district);
     const next = certified[district] + 1;
-    log = pushLog(log, { text: t("log.examReady", { b, n: next }), kind: "exam" });
+    log = pushLog(log, { k: "log.examReady", pk: { b: dBuildingKey(district) }, p: { n: next }, kind: "exam" });
     toasts = withToast(toasts, { title: t("toast.examReady", { b }), sub: t("toast.examReadySub", { n: next }), kind: "gold" });
   }
   return { ...state, xp, certified, log, toasts };
@@ -513,7 +540,7 @@ function seedOnboarded(state: State, name: string, focus: DistrictId): State {
     totalTasksDone: 1,
     visits: [focus],
     tasks: [{ id: uid(), district: focus, title: first, xp: 60, done: true, ts: now }],
-    log: pushLog([], { text: t("log.founded", { c: city, d: dLabel(t, focus) }), kind: "system" }),
+    log: pushLog([], { k: "log.founded", p: { c: city }, pk: { d: dLabelKey(focus) }, kind: "system" }),
     toasts: withToast([], { title: t("toast.welcome"), sub: t("toast.welcomeSub"), kind: "info" }),
   };
   s = gainXp(s, focus, 60);
@@ -590,11 +617,11 @@ function demoState(lang: Lang): State {
       t: now - (15 - i) * 4 * D,
       v: 388e6 + i * 9.1e6 + Math.sin(i * 1.7) * 11e6,
     })),
-    log: pushLog([], { text: t("log.demo"), kind: "system" }),
+    log: pushLog([], { k: "log.demo", kind: "system" }),
     toasts: [{ id: uid(), title: t("toast.welcome"), sub: t("toast.welcomeSub"), kind: "info" }],
   };
-  s.log = pushLog(s.log, { text: t("log.isle"), kind: "milestone" });
-  s.log = pushLog(s.log, { text: t("log.lvl", { b: dBuilding(t, "stocks"), n: levelFor(xp.stocks) }), kind: "level" });
+  s.log = pushLog(s.log, { k: "log.isle", kind: "milestone" });
+  s.log = pushLog(s.log, { k: "log.lvl", pk: { b: dBuildingKey("stocks") }, p: { n: levelFor(xp.stocks) }, kind: "level" });
   return s;
 }
 
@@ -611,10 +638,10 @@ function reducer(state: State, action: Action): State {
       const cont = s.lastVisit === action.yesterday;
       const streak = cont ? s.streak + 1 : 1;
       s = { ...s, streak, lastVisit: action.today };
-      s = { ...s, log: pushLog(s.log, { text: t("log.streak", { n: streak }), kind: "system" }) };
+      s = { ...s, log: pushLog(s.log, { k: "log.streak", p: { n: streak }, kind: "system" }) };
       if (cont) {
         s = gainXp(s, s.focus, 20);
-        s = { ...s, log: pushLog(s.log, { text: t("log.streakXp", { x: 20, d: dLabel(t, s.focus) }), kind: "xp", xp: 20 }) };
+        s = { ...s, log: pushLog(s.log, { k: "log.streakXp", p: { x: 20 }, pk: { d: dLabelKey(s.focus) }, kind: "xp", xp: 20 }) };
         s = { ...s, toasts: withToast(s.toasts, { title: t("toast.streak", { n: streak }), sub: t("toast.streakSub"), kind: "jade" }) };
       }
       return s;
@@ -623,11 +650,11 @@ function reducer(state: State, action: Action): State {
       return action.demo ? demoState(state.lang) : seedOnboarded(state, action.name, action.focus);
     case "ADD_GOAL": {
       const s = { ...state, goals: [action.goal, ...state.goals] };
-      return { ...s, log: pushLog(s.log, { text: t("log.goalNew", { t: action.goal.title, d: dLabel(t, action.goal.district) }), kind: "system" }) };
+      return { ...s, log: pushLog(s.log, { k: "log.goalNew", p: { t: action.goal.title }, pk: { d: dLabelKey(action.goal.district) }, kind: "system" }) };
     }
     case "ADD_TASK": {
       const s = { ...state, tasks: [action.task, ...state.tasks] };
-      return { ...s, log: pushLog(s.log, { text: t("log.taskNew", { t: action.task.title }), kind: "system" }) };
+      return { ...s, log: pushLog(s.log, { k: "log.taskNew", p: { t: action.task.title }, kind: "system" }) };
     }
     case "TOGGLE_TASK": {
       const task = state.tasks.find((x) => x.id === action.id);
@@ -640,7 +667,7 @@ function reducer(state: State, action: Action): State {
       let s: State = { ...state, tasks, totalTasksDone: Math.max(0, state.totalTasksDone + (nowDone ? 1 : -1)) };
       if (nowDone) {
         s = gainXp(s, task.district, gained);
-        s = { ...s, log: pushLog(s.log, { text: t("log.taskDone", { t: task.title, x: gained }), kind: "xp", xp: gained }) };
+        s = { ...s, log: pushLog(s.log, { k: "log.taskDone", p: { t: task.title, x: gained }, kind: "xp", xp: gained }) };
         s = { ...s, quests: bumpQuests(s.quests, "task") };
       } else {
         s = gainXp(s, task.district, -gained);
@@ -656,7 +683,7 @@ function reducer(state: State, action: Action): State {
       let s: State = { ...state, goals, quests: bumpQuests(state.quests, "goal") };
       if (justDone) {
         s = gainXp(s, goal.district, GOAL_BONUS_XP);
-        s = { ...s, log: pushLog(s.log, { text: `${t("toast.goal")} ${goal.title} (+${GOAL_BONUS_XP} XP)`, kind: "goal", xp: GOAL_BONUS_XP }) };
+        s = { ...s, log: pushLog(s.log, { k: "log.goalDone", p: { t: goal.title, x: GOAL_BONUS_XP }, kind: "goal", xp: GOAL_BONUS_XP }) };
         s = { ...s, toasts: withToast(s.toasts, { title: t("toast.goal"), sub: t("toast.goalSub", { t: goal.title }), kind: "gold" }) };
       }
       return s;
@@ -664,8 +691,15 @@ function reducer(state: State, action: Action): State {
     case "LOG_TRADE": {
       const gained = Math.round(action.xp * xpMult(state.streak));
       let s = gainXp(state, action.district, gained);
-      s = { ...s, log: pushLog(s.log, { text: `${action.label} (+${gained} XP)`, kind: "xp", xp: gained }) };
+      s = { ...s, log: pushLog(s.log, { k: "log.trade", pk: { a: action.labelKey }, p: { x: gained }, kind: "xp", xp: gained }) };
       s = { ...s, quests: bumpQuests(s.quests, "quick") };
+      return s;
+    }
+    case "AWARD_ACH": {
+      /* Tách khỏi LOG_TRADE: thành tựu ghi tên bằng khoá `ach.*` chứ không đi
+         qua nhãn thao tác nhanh, và không tính vào nhiệm vụ ngày "quick". */
+      let s = gainXp(state, action.district, action.xp);
+      s = { ...s, log: pushLog(s.log, { k: "log.ach", pk: { n: `ach.${action.achId}.n` }, p: { x: action.xp }, kind: "ach", xp: action.xp }) };
       return s;
     }
     case "LOG_NETWORTH": {
@@ -673,7 +707,7 @@ function reducer(state: State, action: Action): State {
       const snapshots = [...state.snapshots, { t: Date.now(), v }].slice(-120);
       let s: State = { ...state, snapshots, quests: bumpQuests(state.quests, "networth") };
       s = gainXp(s, "vault", NETWORTH_XP);
-      s = { ...s, log: pushLog(s.log, { text: t("log.nw"), kind: "milestone" }) };
+      s = { ...s, log: pushLog(s.log, { k: "log.nw", kind: "milestone" }) };
       return s;
     }
     case "ADD_NOTE":
@@ -692,7 +726,7 @@ function reducer(state: State, action: Action): State {
       const customAch = state.customAch.map((a) => (a.id === action.id ? { ...a, done: true, ts: Date.now() } : a));
       let s: State = { ...state, customAch };
       s = gainXp(s, s.focus, CUSTOM_ACH_XP);
-      s = { ...s, log: pushLog(s.log, { text: t("log.custom", { n: ach.name }), kind: "ach", xp: CUSTOM_ACH_XP }) };
+      s = { ...s, log: pushLog(s.log, { k: "log.custom", p: { n: ach.name }, kind: "ach", xp: CUSTOM_ACH_XP }) };
       s = { ...s, toasts: withToast(s.toasts, { title: t("toast.ach", { n: ach.name }), sub: `+${CUSTOM_ACH_XP} XP`, kind: "gold" }) };
       return s;
     }
@@ -734,7 +768,7 @@ function reducer(state: State, action: Action): State {
       const reward = Math.round(checkinReward(checkinDay) * xpMult(state.streak));
       let s: State = { ...state, lastClaim: action.today, claims: state.claims + 1, checkinDay };
       s = gainXp(s, s.focus, reward);
-      s = { ...s, log: pushLog(s.log, { text: t("log.daily", { d: dLabel(t, s.focus), x: reward }), kind: "xp", xp: reward }) };
+      s = { ...s, log: pushLog(s.log, { k: "log.daily", p: { x: reward }, pk: { d: dLabelKey(s.focus) }, kind: "xp", xp: reward }) };
       s = {
         ...s,
         toasts: withToast(s.toasts, {
@@ -751,7 +785,7 @@ function reducer(state: State, action: Action): State {
       const reward = Math.round(def.xp * xpMult(state.streak));
       let s: State = { ...state, quests: { ...state.quests, claimed: [...state.quests.claimed, action.id] } };
       s = gainXp(s, s.focus, reward);
-      s = { ...s, log: pushLog(s.log, { text: t("log.quest", { q: t(`quest.${def.id}.n`), x: reward }), kind: "quest", xp: reward }) };
+      s = { ...s, log: pushLog(s.log, { k: "log.quest", pk: { q: `quest.${def.id}.n` }, p: { x: reward }, kind: "quest", xp: reward }) };
       s = { ...s, toasts: withToast(s.toasts, { title: t("toast.quest"), sub: `${t(`quest.${def.id}.n`)} · +${reward} XP`, kind: "jade" }) };
       return s;
     }
@@ -769,10 +803,10 @@ function reducer(state: State, action: Action): State {
         examsPassed: state.examsPassed + 1,
         quests: bumpQuests(state.quests, "exam"),
       };
-      s = { ...s, log: pushLog(s.log, { text: t("log.lvl", { b, n: target }), kind: "level" }) };
+      s = { ...s, log: pushLog(s.log, { k: "log.lvl", pk: { b: dBuildingKey(action.district) }, p: { n: target }, kind: "level" }) };
       s = { ...s, toasts: withToast(s.toasts, { title: t("toast.lvl", { b, n: target }), sub: t("toast.lvlSub"), kind: "gold" }) };
       if (action.district === "crypto" && target >= ISLE_UNLOCK_LV && state.certified.crypto < ISLE_UNLOCK_LV) {
-        s = { ...s, log: pushLog(s.log, { text: t("log.isle"), kind: "milestone" }) };
+        s = { ...s, log: pushLog(s.log, { k: "log.isle", kind: "milestone" }) };
         s = { ...s, toasts: withToast(s.toasts, { title: t("toast.isle"), sub: t("toast.isleSub"), kind: "gold" }) };
       }
       return s;
@@ -782,7 +816,7 @@ function reducer(state: State, action: Action): State {
       if (available <= state.yachtTier || state.yachtTier >= MAX_YACHT_TIER) return state;
       const yachtTier = (state.yachtTier + 1) as YachtTier;
       let s: State = { ...state, yachtTier };
-      s = { ...s, log: pushLog(s.log, { text: t("log.yacht", { n: yachtTier }), kind: "milestone" }) };
+      s = { ...s, log: pushLog(s.log, { k: "log.yacht", pk: { n: `yacht.tier${yachtTier}` }, kind: "milestone" }) };
       s = { ...s, toasts: withToast(s.toasts, { title: t("toast.yacht"), sub: t(`yacht.tier${yachtTier}`), kind: "gold" }) };
       return s;
     }
@@ -796,7 +830,7 @@ function reducer(state: State, action: Action): State {
       return { ...action.state, toasts: state.toasts };
     case "LOG_EVENT": {
       let s: State = { ...state, events: state.events + 1 };
-      s = { ...s, log: pushLog(s.log, { text: action.text, kind: "event" }) };
+      s = { ...s, log: pushLog(s.log, { k: action.k, p: action.p, kind: "event" }) };
       return s;
     }
     case "MARK_TUTORIAL":
@@ -829,7 +863,8 @@ export interface StoreApi {
   addTask(district: DistrictId, title: string, xp: number): void;
   toggleTask(id: string): void;
   setGoalProgress(id: string, current: number): void;
-  logTrade(district: DistrictId, label: string, xp?: number): void;
+  logTrade(district: DistrictId, labelKey: string, xp?: number): void;
+  awardAch(district: DistrictId, achId: string, xp: number): void;
   logNetWorth(v: number): void;
   addNote(title: string, body: string): void;
   deleteNote(id: string): void;
@@ -850,7 +885,7 @@ export interface StoreApi {
   setAccount(account: AccountInfo | null): void;
   acceptPrivacy(): void;
   hydrate(state: State): void;
-  logEvent(text: string): void;
+  logEvent(k: string, p?: Record<string, string | number>): void;
   markTutorial(): void;
   visit(view: string): void;
   startVoyage(): void;
@@ -1003,7 +1038,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         dispatch({ type: "ADD_TASK", task: { id: uid(), district, title, xp: Math.max(5, Math.min(100, xp)), done: false, ts: Date.now() } }),
       toggleTask: (id) => dispatch({ type: "TOGGLE_TASK", id }),
       setGoalProgress: (id, current) => dispatch({ type: "SET_GOAL_PROGRESS", id, current }),
-      logTrade: (district, label, xp = TRADE_XP) => dispatch({ type: "LOG_TRADE", district, label, xp }),
+      logTrade: (district, labelKey, xp = TRADE_XP) => dispatch({ type: "LOG_TRADE", district, labelKey, xp }),
+      awardAch: (district, achId, xp) => dispatch({ type: "AWARD_ACH", district, achId, xp }),
       logNetWorth: (v) => dispatch({ type: "LOG_NETWORTH", value: v }),
       addNote: (title, body) => dispatch({ type: "ADD_NOTE", note: { id: uid(), title, body, ts: Date.now() } }),
       deleteNote: (id) => dispatch({ type: "DELETE_NOTE", id }),
@@ -1027,7 +1063,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setAccount: (account) => dispatch({ type: "SET_ACCOUNT", account }),
       acceptPrivacy: () => dispatch({ type: "ACCEPT_PRIVACY" }),
       hydrate: (next) => dispatch({ type: "HYDRATE", state: next }),
-      logEvent: (text) => dispatch({ type: "LOG_EVENT", text }),
+      logEvent: (k, p) => dispatch({ type: "LOG_EVENT", k, p }),
       markTutorial: () => dispatch({ type: "MARK_TUTORIAL" }),
       visit: (view) => dispatch({ type: "VISIT", view }),
       startVoyage: () => dispatch({ type: "START_VOYAGE" }),

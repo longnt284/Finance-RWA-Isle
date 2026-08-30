@@ -235,6 +235,10 @@ const vi: Dict = {
   "log.isle": "Đảo Genesis trồi lên từ đại dương!",
   "log.ach": "Thành tựu chinh phục: {n} (+{x} XP)",
   "log.custom": "Cột mốc cá nhân hoàn thành: {n} (+50 XP)",
+  "log.goalDone": "Mục tiêu hoàn thành: {t} (+{x} XP)",
+  "log.trade": "{a} (+{x} XP)",
+  "log.evUp": "Sóng thị trường: {s} bứt phá +{c}% trong 24 giờ",
+  "log.evDown": "Sóng thị trường: {s} lao dốc −{c}% trong 24 giờ",
   "log.founded": "{c} được khai mở — trọng tâm {d}",
   "log.demo": "Quần đảo Thịnh Vượng khởi tạo từ dữ liệu mẫu",
 
@@ -257,6 +261,12 @@ const vi: Dict = {
   "ach.a12.n": "Học giả", "ach.a12.d": "Học Viện đạt Cấp 5",
   "ach.a13.n": "Văn minh hưng thịnh", "ach.a13.d": "Tổng XP toàn đảo vượt 3.000",
   "ach.a14.n": "Săn cá voi", "ach.a14.d": "Chứng kiến 5 sự kiện thị trường",
+  "ach.a15.n": "Vượt vũ môn", "ach.a15.d": "Vượt qua kỳ khảo thí đầu tiên",
+  "ach.a16.n": "Bảng vàng khảo thí", "ach.a16.d": "Vượt qua 10 kỳ khảo thí",
+  "ach.a17.n": "Chủ nhân siêu du thuyền", "ach.a17.d": "Nâng đội tàu lên Siêu Du Thuyền Hoàng Kim",
+  "ach.a18.n": "Kỳ hạm vạn đảo", "ach.a18.d": "Nâng đội tàu lên hạng cao nhất",
+  "ach.a19.n": "Bậc thầy lĩnh vực", "ach.a19.d": "Đưa một quận lên Cấp 15",
+  "ach.a20.n": "Trọn vòng điểm danh", "ach.a20.d": "Nhận quà ngày mới đủ 7 lần",
 
   "misc.visits": "lượt ghé thăm",
   "misc.close": "Đóng",
@@ -356,7 +366,7 @@ const vi: Dict = {
   "yacht.max": "Đã đạt hạng cao nhất",
   "yacht.hint": "Tổng cấp của cả bốn lĩnh vực quyết định hạng du thuyền.",
   "toast.yacht": "Hạ thủy tàu mới!",
-  "log.yacht": "Du thuyền nâng lên hạng {n}",
+  "log.yacht": "Du thuyền nâng cấp thành {n}",
 
   /* ---------- thế giới: thời gian, mùa, thời tiết ---------- */
   "wd.title": "Khí hậu & thời gian",
@@ -683,6 +693,10 @@ const en: Dict = {
   "log.isle": "Genesis Isle rose from the ocean!",
   "log.ach": "Achievement conquered: {n} (+{x} XP)",
   "log.custom": "Personal milestone completed: {n} (+50 XP)",
+  "log.goalDone": "Goal completed: {t} (+{x} XP)",
+  "log.trade": "{a} (+{x} XP)",
+  "log.evUp": "Market swing: {s} surged +{c}% in 24h",
+  "log.evDown": "Market swing: {s} dropped −{c}% in 24h",
   "log.founded": "{c} founded — focused on {d}",
   "log.demo": "Prosperity Isles initialized with sample data",
 
@@ -705,6 +719,12 @@ const en: Dict = {
   "ach.a12.n": "Scholar", "ach.a12.d": "Academy reaches Level 5",
   "ach.a13.n": "Flourishing civilization", "ach.a13.d": "Total island XP beyond 3,000",
   "ach.a14.n": "Whale watcher", "ach.a14.d": "Witness 5 market events",
+  "ach.a15.n": "Through the gate", "ach.a15.d": "Pass your first exam",
+  "ach.a16.n": "Honour roll", "ach.a16.d": "Pass 10 exams",
+  "ach.a17.n": "Superyacht owner", "ach.a17.d": "Upgrade the fleet to the Golden Superyacht",
+  "ach.a18.n": "Flagship of the isles", "ach.a18.d": "Upgrade the fleet to its highest class",
+  "ach.a19.n": "Domain master", "ach.a19.d": "Take one district to Level 15",
+  "ach.a20.n": "Full check-in cycle", "ach.a20.d": "Claim the daily gift all 7 times",
 
   "misc.visits": "visits",
   "misc.close": "Close",
@@ -804,7 +824,7 @@ const en: Dict = {
   "yacht.max": "Highest class reached",
   "yacht.hint": "Your combined level across all four districts sets the yacht class.",
   "toast.yacht": "A new ship is launched!",
-  "log.yacht": "Yacht upgraded to class {n}",
+  "log.yacht": "Yacht upgraded to {n}",
 
   /* ---------- world: time, season, weather ---------- */
   "wd.title": "Climate & time",

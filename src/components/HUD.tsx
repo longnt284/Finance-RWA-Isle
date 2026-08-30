@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   useStore, cityLevel, netWorth, xpMult, DISTRICT_IDS, ISLE_UNLOCK_LEVELS,
-  MAX_LEVEL, checkinIndex, checkinReward, questClaimable, pendingExamLevel,
+  MAX_LEVEL, checkinIndex, checkinReward, questClaimable, pendingExamLevel, renderLog,
 } from "../state/store";
 import type { DistrictId, ViewId } from "../state/store";
 import { makeT } from "../lib/i18n";
@@ -370,8 +370,8 @@ export default function HUD({ selected, onSelect, drawer, onDrawer, muted, onTog
                         : "#5f7d82",
                     }}
                   />
-                  <span className="min-w-0 flex-1 text-mist-400">{l.text}</span>
-                  <span className="shrink-0 font-mono text-[8.5px] text-mist-500">{timeAgo(l.ts)}</span>
+                  <span className="min-w-0 flex-1 text-mist-400">{renderLog(t, l)}</span>
+                  <span className="shrink-0 font-mono text-[8.5px] text-mist-500">{timeAgo(l.ts, state.lang)}</span>
                 </div>
               ))}
             </div>

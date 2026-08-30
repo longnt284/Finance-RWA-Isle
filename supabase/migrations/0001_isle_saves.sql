@@ -34,26 +34,26 @@ drop policy if exists "isle_saves_select_own" on public.isle_saves;
 create policy "isle_saves_select_own"
   on public.isle_saves for select
   to authenticated
-  using (auth.uid() = user_id);
+  using ((select auth.uid()) = user_id);
 
 drop policy if exists "isle_saves_insert_own" on public.isle_saves;
 create policy "isle_saves_insert_own"
   on public.isle_saves for insert
   to authenticated
-  with check (auth.uid() = user_id);
+  with check ((select auth.uid()) = user_id);
 
 drop policy if exists "isle_saves_update_own" on public.isle_saves;
 create policy "isle_saves_update_own"
   on public.isle_saves for update
   to authenticated
-  using (auth.uid() = user_id)
-  with check (auth.uid() = user_id);
+  using ((select auth.uid()) = user_id)
+  with check ((select auth.uid()) = user_id);
 
 drop policy if exists "isle_saves_delete_own" on public.isle_saves;
 create policy "isle_saves_delete_own"
   on public.isle_saves for delete
   to authenticated
-  using (auth.uid() = user_id);
+  using ((select auth.uid()) = user_id);
 
 -- ---------------------------------------------------------------------------
 -- updated_at luôn do máy chủ đặt, client không thể khai gian thời điểm lưu.
@@ -75,3 +75,11 @@ drop trigger if exists isle_saves_touch on public.isle_saves;
 create trigger isle_saves_touch
   before insert or update on public.isle_saves
   for each row execute function public.isle_saves_touch();
+
+-- ---------------------------------------------------------------------------
+-- Hàm trigger không cần quyền EXECUTE cho vai trò API: trigger luôn chạy dưới
+-- quyền chủ bảng. Không revoke thì PostgREST phơi nó ra ở
+-- /rest/v1/rpc/isle_saves_touch cho cả anon lẫn authenticated.
+-- ---------------------------------------------------------------------------
+
+revoke all on function public.isle_saves_touch() from public, anon, authenticated;

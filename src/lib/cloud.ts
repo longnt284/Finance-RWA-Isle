@@ -244,18 +244,27 @@ export async function pullSave<T>(): Promise<RemoteSave<T> | null> {
   return { payload: row.payload, updatedAt: Date.parse(row.updated_at) || Date.now() };
 }
 
+/**
+ * Trả về mốc `updated_at` do MÁY CHỦ đặt.
+ *
+ * Cố ý không gửi `updated_at` từ client: trigger `isle_saves_touch` ghi đè bằng
+ * `now()` của máy chủ, nên giá trị client gửi lên vô nghĩa. Đọc lại bản ghi
+ * (`return=representation`) để nhãn "đã đồng bộ lúc…" khớp đúng thứ mà lần
+ * `pullSave` sau sẽ thấy, kể cả khi đồng hồ máy người dùng chạy lệch.
+ */
 export async function pushSave<T>(payload: T): Promise<number> {
   if (!cloudEnabled) throw new CloudError("not_configured");
   const active = await ensureFreshToken();
-  const updatedAt = new Date().toISOString();
-  const response = await restRequest(`/${TABLE}?on_conflict=user_id`, {
+  const response = await restRequest(`/${TABLE}?on_conflict=user_id&select=updated_at`, {
     method: "POST",
-    headers: { Prefer: "resolution=merge-duplicates,return=minimal" },
-    body: JSON.stringify([{ user_id: active.userId, payload, updated_at: updatedAt }]),
+    headers: { Prefer: "resolution=merge-duplicates,return=representation" },
+    body: JSON.stringify([{ user_id: active.userId, payload }]),
   });
   if (response.status === 401) throw new CloudError("unauthorized");
   if (!response.ok) throw new CloudError("unknown", `http_${response.status}`);
-  return Date.parse(updatedAt);
+  const rows = (await response.json().catch(() => [])) as Array<{ updated_at?: string }>;
+  const serverStamp = Date.parse(rows[0]?.updated_at ?? "");
+  return Number.isFinite(serverStamp) ? serverStamp : Date.now();
 }
 
 /** Xoá toàn bộ dữ liệu tiến độ trên máy chủ — quyền được xoá của người dùng. */

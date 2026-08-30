@@ -218,7 +218,7 @@ export default function AccountPanel({ onClose }: { onClose: () => void }) {
               <div className="truncate font-mono text-[11px] text-mist-500">{account.email}</div>
               <div className="mt-2.5 flex items-center gap-1.5 font-mono text-[10px] text-jade-300">
                 <IconCloud className="h-3.5 w-3.5" />
-                {account.syncedAt ? t("ac.synced", { t: timeAgo(account.syncedAt) }) : t("ac.neverSynced")}
+                {account.syncedAt ? t("ac.synced", { t: timeAgo(account.syncedAt, state.lang) }) : t("ac.neverSynced")}
               </div>
               <p className="mt-1.5 text-[10.5px] text-mist-500">{t("ac.autoSync")}</p>
             </section>

@@ -10,6 +10,7 @@ import type { DrawerId } from "./components/HUD";
 import { Hero, OnboardingModal, TutorialOverlay } from "./components/Modals";
 import { makeT } from "./lib/i18n";
 import { sound } from "./lib/audio";
+import { useMarketEvents } from "./lib/events";
 
 const Workspace = lazy(() => import("./components/Workspace"));
 const WorldScene = lazy(() => import("./world/WorldScene"));
@@ -53,6 +54,11 @@ function Shell() {
   );
   const canVoyage = DISTRICT_IDS.some((district) => islands[district].unlocked);
 
+  /* ---------- market events ----------
+     Nguồn duy nhất làm `state.events` nhích lên, tức là thứ khiến thành tựu
+     "Săn cá voi" có thể đạt được. */
+  useMarketEvents(state.watchlist, (event) => api.logEvent(event.k, event.p));
+
   /* ---------- achievement scanner ---------- */
   const rewarded = useRef<Set<string> | null>(null);
   useEffect(() => {
@@ -69,7 +75,7 @@ function Shell() {
       if (a.done(state)) {
         rewarded.current.add(a.id);
         const name = t(`ach.${a.id}.n`);
-        api.logTrade(state.focus, t("log.ach", { n: name, x: a.reward }), a.reward);
+        api.awardAch(state.focus, a.id, a.reward);
         api.pushToast({ title: t("toast.ach", { n: name }), sub: `+${a.reward} XP`, kind: "gold" });
         worldRef.current?.fireBurst("center", "gold");
         sound.levelUp();
