@@ -17,24 +17,25 @@ import {
   buildIsleGhost,
   makeTree,
   makeRock,
-  makeCloud,
-  makeSky,
-  makeSunSprite,
-  makeWater,
   makeDust,
   makeBurstPool,
   makeMats,
   makePerson,
   makeBoat,
-  makeYacht,
   makeBird,
   makeLamp,
   makeDecor,
   DECOR_IDS,
 } from "./build";
 import type { TickFn, Mats, DecorId } from "./build";
+import { makeSky, makeSun, makeMoon, makeShootingStars, makeCloudLayer, skyStateFor } from "./atmosphere";
+import { makeOcean, makeSandShelf, makeBoundary, TERRITORY_RADIUS, WATER_LEVEL } from "./ocean";
+import { makeWeather } from "./weather";
+import { makeYacht, YACHT_LENGTH } from "./yacht";
+import { SEASON_PALETTES, WEATHER_PROFILES, seasonForDate, autoWeather } from "../lib/season";
+import type { Season, WeatherId } from "../lib/season";
 import { DISTRICTS, ISLE_UNLOCK_LEVELS, VISUAL_MAX } from "../state/store";
-import type { DistrictId, ViewId, IslandTheme } from "../state/store";
+import type { DistrictId, ViewId, IslandTheme, WorldPrefs, YachtTier } from "../state/store";
 import { makeT } from "../lib/i18n";
 import type { Lang } from "../lib/i18n";
 import { sound } from "../lib/audio";
@@ -65,6 +66,8 @@ interface Props {
   activeIsle: DistrictId;
   voyage: boolean;
   helmInput: HelmInput;
+  yachtTier: YachtTier;
+  world: WorldPrefs;
 }
 
 const DISTRICT_IDS: DistrictId[] = ["crypto", "stocks", "vault", "academy"];
@@ -86,13 +89,17 @@ const LABEL_HEIGHT: Record<string, (lv: number) => number> = {
   isle: () => 6.5,
 };
 
+/** Du thuyền không được vượt vành san hô; chừa một khoảng để không cấn vào rạn. */
+const SAIL_LIMIT = TERRITORY_RADIUS - 6;
+
 function easeInOutCubic(k: number): number {
   return k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
 }
 
 function viewPose(view: ViewId, activeIsle: DistrictId = "crypto"): { pos: THREE.Vector3; target: THREE.Vector3 } {
   if (view === "overview") {
-    return { pos: new THREE.Vector3(54, 39, 64), target: new THREE.Vector3(0, 1.2, 6) };
+    /* Lùi ra và hạ thấp một chút so với bản trước để thấy trọn vành lãnh thổ. */
+    return { pos: new THREE.Vector3(62, 44, 74), target: new THREE.Vector3(0, 1.2, 4) };
   }
   if (view === "center") {
     return { pos: new THREE.Vector3(11.5, 8, 13.5), target: new THREE.Vector3(0, 3.6, 0) };
@@ -113,20 +120,24 @@ function viewPose(view: ViewId, activeIsle: DistrictId = "crypto"): { pos: THREE
   };
 }
 
-export default function WorldScene({ levels, selected, onSelect, handleRef, lang, islands, activeIsle, voyage, helmInput }: Props) {
+export default function WorldScene({
+  levels, selected, onSelect, handleRef, lang, islands, activeIsle, voyage, helmInput, yachtTier, world,
+}: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
   const labelEls = useRef<Record<string, HTMLDivElement | null>>({});
-  const propsRef = useRef({ levels, selected, onSelect, lang, islands, activeIsle, voyage, helmInput });
-  propsRef.current = { levels, selected, onSelect, lang, islands, activeIsle, voyage, helmInput };
+  const propsRef = useRef({ levels, selected, onSelect, lang, islands, activeIsle, voyage, helmInput, yachtTier, world });
+  propsRef.current = { levels, selected, onSelect, lang, islands, activeIsle, voyage, helmInput, yachtTier, world };
 
   const sceneApi = useRef<{
     flyTo: (view: ViewId, dur?: number) => void;
     rebuildDistrict: (d: DistrictId) => void;
     rebuildIsle: (district: DistrictId) => void;
     rebuildDecor: (district: DistrictId) => void;
+    rebuildYacht: () => void;
     syncIslands: () => void;
     setVoyage: (active: boolean) => void;
+    refreshEnvironment: () => void;
     burst: (view: ViewId, kind: "gold" | "jade") => void;
   } | null>(null);
 
@@ -159,16 +170,16 @@ export default function WorldScene({ levels, selected, onSelect, handleRef, lang
     const scene = new THREE.Scene();
     scene.fog = new THREE.FogExp2(0x08222b, 0.011);
 
-    const camera = new THREE.PerspectiveCamera(46, Math.max(0.1, container.clientWidth / Math.max(1, container.clientHeight)), 0.1, 900);
-    camera.position.set(4, 85, 140);
+    const camera = new THREE.PerspectiveCamera(46, Math.max(0.1, container.clientWidth / Math.max(1, container.clientHeight)), 0.1, 1400);
+    camera.position.set(4, 95, 155);
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.07;
     controls.minDistance = 9;
-    controls.maxDistance = 120;
-    controls.maxPolarAngle = 1.42;
-    controls.minPolarAngle = 0.12;
+    controls.maxDistance = 165;
+    controls.maxPolarAngle = 1.5;
+    controls.minPolarAngle = 0.1;
     controls.autoRotateSpeed = 0.4;
     controls.target.set(0, 1.2, 0);
 
@@ -190,67 +201,81 @@ export default function WorldScene({ levels, selected, onSelect, handleRef, lang
     /* ------------------------------ lights ------------------------------ */
     const hemi = new THREE.HemisphereLight(0x9fd4cf, 0x1c2a2c, 0.55);
     scene.add(hemi);
-    const sun = new THREE.DirectionalLight(0xffd9a8, 2.0);
-    sun.position.set(-42, 52, -30);
-    sun.castShadow = true;
-    sun.shadow.mapSize.set(compactGpu ? 1024 : 2048, compactGpu ? 1024 : 2048);
-    sun.shadow.camera.left = -46;
-    sun.shadow.camera.right = 46;
-    sun.shadow.camera.top = 46;
-    sun.shadow.camera.bottom = -46;
-    sun.shadow.camera.far = 160;
-    sun.shadow.bias = -0.0004;
-    scene.add(sun);
+    const sunLight = new THREE.DirectionalLight(0xffd9a8, 2.0);
+    sunLight.castShadow = true;
+    sunLight.shadow.mapSize.set(compactGpu ? 1024 : 2048, compactGpu ? 1024 : 2048);
+    sunLight.shadow.camera.left = -52;
+    sunLight.shadow.camera.right = 52;
+    sunLight.shadow.camera.top = 52;
+    sunLight.shadow.camera.bottom = -52;
+    sunLight.shadow.camera.far = 200;
+    sunLight.shadow.bias = -0.0004;
+    scene.add(sunLight);
+    /* Ánh trăng là nguồn sáng riêng nên ban đêm vẫn đọc được hình khối. */
+    const moonLight = new THREE.DirectionalLight(0x9fc4ff, 0);
+    scene.add(moonLight);
     const rim = new THREE.DirectionalLight(0x5ce8c4, 0.5);
     rim.position.set(38, 18, 42);
     scene.add(rim);
+    /* Chớp giông: đèn bán cầu trắng, bình thường tắt hẳn. */
+    const lightning = new THREE.HemisphereLight(0xdbe7ff, 0x7d8fa8, 0);
+    scene.add(lightning);
 
     /* ------------------------------ world ------------------------------ */
     const m = makeMats();
     const staticTicks: TickFn[] = [];
 
     const sky = makeSky();
-    scene.add(sky);
-    const sunSprite = makeSunSprite();
-    scene.add(sunSprite);
-    const water = makeWater();
-    scene.add(water.mesh);
-    staticTicks.push(water.tick);
+    scene.add(sky.mesh);
+    staticTicks.push(sky.tick);
+    const sunBody = makeSun();
+    scene.add(sunBody.sprite);
+    const moonBody = makeMoon();
+    scene.add(moonBody.sprite);
+    const shootingStars = makeShootingStars(compactGpu ? 2 : 3);
+    scene.add(shootingStars.group);
+    staticTicks.push(shootingStars.tick);
+    const cloudLayer = makeCloudLayer(compactGpu ? 6 : 9);
+    scene.add(cloudLayer.group);
+    staticTicks.push(cloudLayer.tick);
+
+    const ocean = makeOcean();
+    scene.add(ocean.mesh);
+    staticTicks.push(ocean.tick);
+    const sandShelf = makeSandShelf();
+    scene.add(sandShelf);
+    const boundary = makeBoundary();
+    scene.add(boundary.group);
+    staticTicks.push(boundary.tick);
+
+    const weather = makeWeather();
+    scene.add(weather.group);
+    staticTicks.push(weather.tick);
+
     const dust = makeDust();
     scene.add(dust.points);
     staticTicks.push(dust.tick);
 
-    let lastDayMinute = -1;
-    function applyDaylight() {
-      const now = new Date();
-      const minute = now.getHours() * 60 + now.getMinutes();
-      if (minute === lastDayMinute) return;
-      lastDayMinute = minute;
-      const hour = minute / 60;
-      const solar = Math.sin(((hour - 6) / 12) * Math.PI);
-      const daylight = THREE.MathUtils.smoothstep(solar, -0.12, 0.42);
-      const dusk = Math.max(0, 1 - Math.min(1, Math.abs(solar) * 3.2));
-      const azimuth = ((hour - 12) / 24) * Math.PI * 2;
-      sun.position.set(Math.cos(azimuth) * 85, 8 + Math.max(0, solar) * 74, Math.sin(azimuth) * 85);
-      sun.intensity = 0.22 + daylight * 2.05;
-      sun.color.copy(new THREE.Color(0xff9a63)).lerp(new THREE.Color(0xffe2bd), daylight);
-      hemi.intensity = 0.24 + daylight * 0.52;
-      rim.intensity = 0.24 + (1 - daylight) * 0.42;
-      renderer.toneMappingExposure = 0.84 + daylight * 0.34;
-      const fogColor = new THREE.Color(0x06141f).lerp(new THREE.Color(0x174751), daylight * 0.72);
-      (scene.fog as THREE.FogExp2).color.copy(fogColor);
-      const skyMat = sky.material as THREE.ShaderMaterial;
-      skyMat.uniforms.uDaylight.value = daylight;
-      skyMat.uniforms.uDusk.value = dusk;
-      const waterMat = water.mesh.material as THREE.ShaderMaterial;
-      waterMat.uniforms.uDaylight.value = daylight;
-      waterMat.uniforms.uFog.value.copy(fogColor);
-      sunSprite.position.copy(sun.position).multiplyScalar(2.2);
-      (sunSprite.material as THREE.SpriteMaterial).opacity = 0.12 + daylight * 0.58;
+    /* ---------------------- terrain (rebuilt per season) ---------------------- */
+    let terrain: THREE.Mesh | null = null;
+    let terrainSeason: Season | null = null;
+    function rebuildTerrain(season: Season) {
+      if (terrainSeason === season) return;
+      terrainSeason = season;
+      if (terrain) {
+        scene.remove(terrain);
+        terrain.geometry.dispose();
+        (terrain.material as THREE.Material).dispose();
+      }
+      const palette = SEASON_PALETTES[season];
+      terrain = buildTerrain({ foliage: palette.foliage, foliageAlt: palette.foliageAlt, snow: palette.snow });
+      scene.add(terrain);
+      /* Cây và thảm cỏ dùng vật liệu dùng chung nên chỉ cần đổi màu, không dựng lại. */
+      m.leaves1.color.setHex(palette.foliage);
+      m.leaves2.color.setHex(palette.foliageAlt);
     }
-    applyDaylight();
+    rebuildTerrain(seasonForDate(new Date()));
 
-    scene.add(buildTerrain());
     scene.add(buildPaths(m));
     scene.add(buildGate(m));
 
@@ -258,6 +283,83 @@ export default function WorldScene({ levels, selected, onSelect, handleRef, lang
     lighthouse.position.copy(DISTRICT_POS.center);
     lighthouse.userData.tag = "center";
     scene.add(lighthouse);
+
+    /* ------------------------ môi trường: giờ, mùa, thời tiết ------------------------ */
+    const fogColor = new THREE.Color();
+    const shallowColor = new THREE.Color();
+    const sunWarm = new THREE.Color(0xff9a63);
+    const sunPale = new THREE.Color(0xffe2bd);
+    const seasonTint = new THREE.Color();
+    const cloudTint = new THREE.Color();
+    let lastEnvKey = "";
+    let currentWeather: WeatherId = "clear";
+    let currentDaylight = 0.7;
+
+    /** Cường độ hạt theo thiết lập chất lượng — máy yếu vẫn mượt. */
+    function effectStrength(): number {
+      const prefs = propsRef.current.world;
+      if (!prefs.effects || reduceMotion) return 0;
+      if (prefs.quality === "balanced") return 0.5;
+      if (prefs.quality === "high") return 1;
+      return compactGpu ? 0.5 : 1;
+    }
+
+    function applyEnvironment(force = false) {
+      const now = new Date();
+      const prefs = propsRef.current.world;
+      const minute = now.getHours() * 60 + now.getMinutes();
+      const season: Season = prefs.mode === "manual" ? prefs.season : seasonForDate(now);
+      const state = skyStateFor(now);
+      const isNight = state.daylight < 0.28;
+      const chosen: WeatherId = prefs.mode === "manual" ? prefs.weather : autoWeather(now, season, isNight);
+      const key = `${minute}|${season}|${chosen}|${prefs.quality}|${prefs.effects}`;
+      if (!force && key === lastEnvKey) return;
+      lastEnvKey = key;
+
+      const palette = SEASON_PALETTES[season];
+      const profile = WEATHER_PROFILES[chosen];
+      currentWeather = chosen;
+      currentDaylight = state.daylight;
+      rebuildTerrain(season);
+
+      /* ---- ánh sáng ---- */
+      const lit = state.daylight * profile.lightScale;
+      sunLight.position.copy(state.sunDir).multiplyScalar(110);
+      sunLight.intensity = 0.18 + lit * 2.1;
+      sunLight.color.copy(sunWarm).lerp(sunPale, state.daylight);
+      seasonTint.setHex(palette.sunTint);
+      sunLight.color.lerp(seasonTint, 0.35);
+      sunLight.castShadow = state.sunDir.y > 0.02;
+
+      moonLight.position.copy(state.moonDir).multiplyScalar(110);
+      moonLight.intensity = Math.max(0, state.moonDir.y) * (1 - state.daylight) * 0.55 * profile.lightScale;
+
+      hemi.intensity = 0.2 + lit * 0.55;
+      rim.intensity = 0.2 + (1 - state.daylight) * 0.4;
+      renderer.toneMappingExposure = 0.82 + state.daylight * 0.32 + palette.warmth * 0.06;
+
+      /* ---- sương mù và biển ---- */
+      fogColor.setHex(palette.fog).multiplyScalar(0.35 + state.daylight * 0.85);
+      (scene.fog as THREE.FogExp2).color.copy(fogColor);
+      (scene.fog as THREE.FogExp2).density = 0.0085 * profile.fogScale;
+      shallowColor.setHex(palette.shallow);
+      ocean.apply({ daylight: state.daylight, sunDir: state.sunDir, moonDir: state.moonDir, fog: fogColor, shallow: shallowColor, rain: profile.rain });
+      boundary.setTint(shallowColor);
+
+      /* ---- bầu trời ---- */
+      sky.apply(state, profile.overcast);
+      sunBody.apply(state);
+      moonBody.apply(state);
+      shootingStars.setActive(isNight && profile.overcast < 0.4 && effectStrength() > 0);
+      cloudTint.setHex(palette.fog).lerp(new THREE.Color(0xd8e6e2), 0.25 + state.daylight * 0.5);
+      cloudLayer.setCover(profile.overcast, cloudTint);
+
+      /* ---- hạt thời tiết ---- */
+      weather.set(chosen, effectStrength());
+      (dust.points.material as THREE.PointsMaterial).opacity = 0.18 + state.daylight * 0.42;
+      dust.points.visible = effectStrength() > 0;
+    }
+    applyEnvironment(true);
 
     /* district groups */
     const districtGroups = {} as Record<DistrictId, THREE.Group>;
@@ -284,9 +386,9 @@ export default function WorldScene({ levels, selected, onSelect, handleRef, lang
     /* scenery: trees, rocks, lamps */
     const scenery = new THREE.Group();
     const treeSpots: [number, number, number][] = [
-      [18, 3, 1.2], [-17.5, 4, 1.05], [16, -13, 0.9], [-16, -13.5, 1.15], [5.5, 15, 1.0],
-      [-5.5, 15.5, 0.85], [19.5, -4, 0.8], [-19.5, -4.5, 0.95], [0.5, -16.5, 1.1], [-8, -17, 0.8],
-      [8.5, -17.5, 0.9], [13, 12.5, 0.95], [-13, 12.5, 1.05], [21, 9, 0.85], [-21, 9.5, 0.9],
+      [15.5, 3, 1.2], [-15, 4, 1.05], [14, -12, 0.9], [-14, -12.5, 1.15], [5.5, 14, 1.0],
+      [-5.5, 14.5, 0.85], [17.5, -4, 0.8], [-17.5, -4.5, 0.95], [0.5, -15.5, 1.1], [-8, -16, 0.8],
+      [8.5, -16.5, 0.9], [12, 11.5, 0.95], [-12, 11.5, 1.05], [18, 8, 0.85], [-18, 8.5, 0.9],
     ];
     for (const [x, z, s] of treeSpots) {
       const tree = makeTree(m, s, Math.random() > 0.5 ? m.leaves1 : m.leaves2);
@@ -294,9 +396,11 @@ export default function WorldScene({ levels, selected, onSelect, handleRef, lang
       tree.rotation.y = x * z;
       scenery.add(tree);
     }
+    /* Đá rải trên bãi cát mới mở rộng, làm mép đảo có nhịp chứ không trống trơn. */
     const rockSpots: [number, number, number][] = [
-      [22.5, -6, 1.3], [-23, -5, 1.1], [20, 14, 0.9], [-20, 14.5, 1.2], [3, 21.5, 1.0],
-      [-4, 22, 0.8], [24, 2, 0.7], [-24.5, 1, 0.9], [10, -21, 1.1], [-10, -21.5, 0.8],
+      [21.5, -6, 1.3], [-22, -5, 1.1], [19, 14, 0.9], [-19, 14.5, 1.2], [3, 20.5, 1.0],
+      [-4, 21, 0.8], [23, 2, 0.7], [-23.5, 1, 0.9], [10, -20, 1.1], [-10, -20.5, 0.8],
+      [24.2, -10.5, 0.6], [-24.6, 8.2, 0.65], [13.5, 20.4, 0.55], [-6.5, -22.6, 0.7],
     ];
     for (const [x, z, s] of rockSpots) {
       const rock = makeRock(m, s);
@@ -314,25 +418,6 @@ export default function WorldScene({ levels, selected, onSelect, handleRef, lang
       scenery.add(lamp);
     }
     scene.add(scenery);
-
-    /* clouds */
-    const clouds: THREE.Group[] = [];
-    for (let i = 0; i < 7; i++) {
-      const c = makeCloud();
-      const a = (i / 7) * Math.PI * 2;
-      const r = 88 + Math.random() * 52;
-      c.position.set(Math.cos(a) * r, 45 + Math.random() * 18, Math.sin(a) * r);
-      c.scale.setScalar(1.35 + Math.random() * 1.25);
-      scene.add(c);
-      clouds.push(c);
-    }
-    staticTicks.push((t, dt) => {
-      clouds.forEach((c, i) => {
-        c.position.x += dt * (0.4 + i * 0.06);
-        if (c.position.x > 150) c.position.x = -150;
-        c.position.y += Math.sin(t * 0.3 + i) * 0.003;
-      });
-    });
 
     /* --------------------------- living world --------------------------- */
     const shirtColors = [0x5ce8c4, 0xe0aa50, 0xff7f6e, 0x9fd0ff, 0xdde9e4, 0xf0c268, 0x7fe8bb, 0xd9a066, 0x8ba4a7, 0xffd88a];
@@ -368,8 +453,9 @@ export default function WorldScene({ levels, selected, onSelect, handleRef, lang
     });
 
     const boats = [
-      { g: makeBoat(m), r: 34, speed: 0.05, phase: 0.8 },
-      { g: makeBoat(m), r: 41, speed: -0.034, phase: 3.6 },
+      { g: makeBoat(m), r: 52, speed: 0.04, phase: 0.8 },
+      { g: makeBoat(m), r: 68, speed: -0.028, phase: 3.6 },
+      { g: makeBoat(m), r: 88, speed: 0.021, phase: 5.1 },
     ];
     boats.forEach((b) => scene.add(b.g));
 
@@ -411,7 +497,7 @@ export default function WorldScene({ levels, selected, onSelect, handleRef, lang
       }
       for (const b of boats) {
         const a = b.phase + t * b.speed;
-        b.g.position.set(Math.cos(a) * b.r, -1.25 + Math.sin(t * 1.2 + b.phase) * 0.1, Math.sin(a) * b.r);
+        b.g.position.set(Math.cos(a) * b.r, WATER_LEVEL + 0.2 + Math.sin(t * 1.2 + b.phase) * 0.1, Math.sin(a) * b.r);
         b.g.rotation.y = -a + (b.speed > 0 ? -Math.PI / 2 : Math.PI / 2);
         b.g.rotation.z = Math.sin(t * 1.4 + b.phase) * 0.04;
       }
@@ -494,19 +580,33 @@ export default function WorldScene({ levels, selected, onSelect, handleRef, lang
     syncIslands();
 
     /* ---------------------------- player yacht ---------------------------- */
-    const yacht = makeYacht(m);
-    yacht.position.set(0, -1.02, 31.5);
-    yacht.visible = propsRef.current.voyage;
-    scene.add(yacht);
+    const yachtHolder = new THREE.Group();
+    yachtHolder.position.set(0, WATER_LEVEL + 0.43, 34);
+    yachtHolder.visible = propsRef.current.voyage;
+    scene.add(yachtHolder);
+    let yachtTicks: TickFn[] = [];
+    let yachtCamera = { height: 8, distance: 13 };
+    let yachtLength = YACHT_LENGTH[1];
+
+    function rebuildYacht() {
+      disposeGroup(yachtHolder);
+      const build = makeYacht(propsRef.current.yachtTier, m);
+      yachtHolder.add(build.group);
+      yachtTicks = build.ticks;
+      yachtCamera = { height: build.cameraHeight, distance: build.cameraDistance };
+      yachtLength = build.length;
+    }
+    rebuildYacht();
+
     let yachtHeading = 0;
     let yachtSpeed = 0;
     let wakeCooldown = 0;
     const heldKeys = new Set<string>();
-    const wakes = Array.from({ length: 14 }, (_, index) => {
+    const wakes = Array.from({ length: 18 }, (_, index) => {
       const material = new THREE.MeshBasicMaterial({ color: index % 2 ? 0xc9f4ef : 0xffffff, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending });
       const mesh = new THREE.Mesh(new THREE.RingGeometry(0.18, 0.34, 16), material);
       mesh.rotation.x = -Math.PI / 2;
-      mesh.position.y = -1.36;
+      mesh.position.y = WATER_LEVEL + 0.09;
       mesh.visible = false;
       scene.add(mesh);
       return { mesh, life: 0 };
@@ -518,11 +618,11 @@ export default function WorldScene({ levels, selected, onSelect, handleRef, lang
       wake.life = 1;
       wake.mesh.visible = true;
       wake.mesh.position.set(
-        yacht.position.x - Math.sin(yachtHeading) * 2.2,
-        -1.35,
-        yacht.position.z - Math.cos(yachtHeading) * 2.2
+        yachtHolder.position.x - Math.sin(yachtHeading) * (yachtLength * 0.55),
+        WATER_LEVEL + 0.1,
+        yachtHolder.position.z - Math.cos(yachtHeading) * (yachtLength * 0.55)
       );
-      wake.mesh.scale.setScalar(0.65);
+      wake.mesh.scale.setScalar(0.55 + yachtLength * 0.07);
     }
     function onKey(e: KeyboardEvent, down: boolean) {
       if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "KeyW", "KeyA", "KeyS", "KeyD"].includes(e.code)) return;
@@ -545,7 +645,7 @@ export default function WorldScene({ levels, selected, onSelect, handleRef, lang
       const { pos, target } = viewPose(view, propsRef.current.activeIsle);
       tween = {
         t0: performance.now(),
-        dur: dur * 1000,
+        dur: (reduceMotion ? 0.25 : dur) * 1000,
         fromPos: camera.position.clone(),
         toPos: pos,
         fromTgt: controls.target.clone(),
@@ -555,19 +655,23 @@ export default function WorldScene({ levels, selected, onSelect, handleRef, lang
     }
 
     function setVoyage(active: boolean) {
-      yacht.visible = active;
+      yachtHolder.visible = active;
       yachtSpeed = 0;
       heldKeys.clear();
       controls.minDistance = active ? 6 : 9;
-      controls.maxDistance = active ? 32 : 120;
+      controls.maxDistance = active ? 38 : 165;
       if (active) {
-        const target = yacht.position.clone().add(new THREE.Vector3(0, 1.2, 0));
-        const behind = new THREE.Vector3(-Math.sin(yachtHeading) * 13, 8, -Math.cos(yachtHeading) * 13);
+        const target = yachtHolder.position.clone().add(new THREE.Vector3(0, 1.2, 0));
+        const behind = new THREE.Vector3(
+          -Math.sin(yachtHeading) * yachtCamera.distance,
+          yachtCamera.height,
+          -Math.cos(yachtHeading) * yachtCamera.distance
+        );
         tween = {
           t0: performance.now(),
           dur: reduceMotion ? 250 : 1200,
           fromPos: camera.position.clone(),
-          toPos: yacht.position.clone().add(behind),
+          toPos: yachtHolder.position.clone().add(behind),
           fromTgt: controls.target.clone(),
           toTgt: target,
         };
@@ -578,6 +682,7 @@ export default function WorldScene({ levels, selected, onSelect, handleRef, lang
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
     let hovered: string | null = null;
+    let lastPickAt = 0;
     const downPos = { x: 0, y: 0 };
 
     function pickAt(cx: number, cy: number): string | null {
@@ -603,16 +708,23 @@ export default function WorldScene({ levels, selected, onSelect, handleRef, lang
     }
 
     function onPointerMove(e: PointerEvent) {
-      const tag = pickAt(e.clientX, e.clientY);
-      if (tag !== hovered) {
-        hovered = tag;
-        renderer.domElement.style.cursor = tag ? "pointer" : "grab";
-      }
+      /* Raycast là phần đắt nhất trong khung hình; 60ms một lần là đủ mượt
+         với con trỏ mà không ăn hết ngân sách CPU khi rê chuột nhanh. */
+      const now = performance.now();
       const tip = tooltipRef.current;
+      if (now - lastPickAt >= 60) {
+        lastPickAt = now;
+        const tag = pickAt(e.clientX, e.clientY);
+        if (tag !== hovered) {
+          hovered = tag;
+          renderer.domElement.style.cursor = tag ? "pointer" : "grab";
+        }
+      }
       if (tip) {
-        if (tag) {
+        if (hovered) {
+          const rect = container.getBoundingClientRect();
           tip.style.opacity = "1";
-          tip.style.transform = `translate(${e.clientX - container.getBoundingClientRect().left + 14}px, ${e.clientY - container.getBoundingClientRect().top + 10}px)`;
+          tip.style.transform = `translate(${e.clientX - rect.left + 14}px, ${e.clientY - rect.top + 10}px)`;
         } else {
           tip.style.opacity = "0";
         }
@@ -670,7 +782,7 @@ export default function WorldScene({ levels, selected, onSelect, handleRef, lang
         const islandId = id.startsWith("isle:") ? (id.slice(5) as DistrictId) : null;
         const base = islandId ? ISLE_POSITIONS[islandId] : DISTRICT_POS[id];
         const lv = id === "center" || islandId ? 0 : propsRef.current.levels[id as DistrictId];
-        const height = islandId ? LABEL_HEIGHT.isle(lv) : LABEL_HEIGHT[id](lv);
+        const height = islandId ? LABEL_HEIGHT.isle(lv) : LABEL_HEIGHT[id](Math.min(lv, VISUAL_MAX));
         tmpV.set(base.x, base.y + height + 1.2, base.z);
         tmpV.project(camera);
         const behind = tmpV.z > 1;
@@ -727,8 +839,10 @@ export default function WorldScene({ levels, selected, onSelect, handleRef, lang
       rebuildDistrict,
       rebuildIsle,
       rebuildDecor,
+      rebuildYacht,
       syncIslands,
       setVoyage,
+      refreshEnvironment: () => applyEnvironment(true),
       burst: (view, kind) => {
         const origin =
           view === "isle"
@@ -764,7 +878,7 @@ export default function WorldScene({ levels, selected, onSelect, handleRef, lang
       for (const district of DISTRICT_IDS) {
         if (position.distanceToSquared(ISLE_POSITIONS[district]) < Math.pow(ISLE_RADIUS + 2.1, 2)) return false;
       }
-      return Math.hypot(position.x, position.z) < 112;
+      return Math.hypot(position.x, position.z) < SAIL_LIMIT;
     }
 
     function frame() {
@@ -772,7 +886,12 @@ export default function WorldScene({ levels, selected, onSelect, handleRef, lang
       const rawDt = clock.getDelta();
       const dt = Math.min(0.05, rawDt);
       const t = clock.elapsedTime;
-      applyDaylight();
+      applyEnvironment();
+
+      /* ---- chớp giông ---- */
+      const flash = weather.flash;
+      lightning.intensity = flash * 2.6;
+      if (flash > 0.01) renderer.toneMappingExposure = (0.82 + currentDaylight * 0.32) + flash * 0.5;
 
       perfFrames++;
       perfTime += rawDt * 1000;
@@ -810,27 +929,35 @@ export default function WorldScene({ levels, selected, onSelect, handleRef, lang
         const keyboardTurn = heldKeys.has("ArrowLeft") || heldKeys.has("KeyA") ? -1 : heldKeys.has("ArrowRight") || heldKeys.has("KeyD") ? 1 : 0;
         const throttle = THREE.MathUtils.clamp(keyboardThrottle + propsRef.current.helmInput.throttle, -1, 1);
         const turn = THREE.MathUtils.clamp(keyboardTurn + propsRef.current.helmInput.turn, -1, 1);
-        const targetSpeed = throttle > 0 ? throttle * 7.2 : throttle < 0 ? throttle * 3.2 : 0;
+        /* Tàu càng lớn càng nhanh nhưng cũng càng ì khi bẻ lái. */
+        const topSpeed = 6.4 + propsRef.current.yachtTier * 0.7;
+        const targetSpeed = throttle > 0 ? throttle * topSpeed : throttle < 0 ? throttle * (topSpeed * 0.42) : 0;
         yachtSpeed = THREE.MathUtils.damp(yachtSpeed, targetSpeed, throttle === 0 ? 2.7 : 1.9, dt);
-        yachtHeading -= turn * dt * (0.7 + Math.abs(yachtSpeed) * 0.075) * (yachtSpeed < 0 ? -1 : 1);
-        nextYachtPosition.copy(yacht.position);
+        const agility = 0.82 - propsRef.current.yachtTier * 0.055;
+        yachtHeading -= turn * dt * (agility + Math.abs(yachtSpeed) * 0.07) * (yachtSpeed < 0 ? -1 : 1);
+        nextYachtPosition.copy(yachtHolder.position);
         nextYachtPosition.x += Math.sin(yachtHeading) * yachtSpeed * dt;
         nextYachtPosition.z += Math.cos(yachtHeading) * yachtSpeed * dt;
-        if (yachtPositionAllowed(nextYachtPosition)) yacht.position.copy(nextYachtPosition);
+        if (yachtPositionAllowed(nextYachtPosition)) yachtHolder.position.copy(nextYachtPosition);
         else yachtSpeed *= -0.18;
-        yacht.position.y = -1.02 + Math.sin(t * 1.65) * 0.075;
-        yacht.rotation.set(Math.sin(t * 1.3) * 0.025, yachtHeading, -turn * 0.07 - Math.sin(t * 1.1) * 0.018);
+        yachtHolder.position.y = WATER_LEVEL + 0.43 + Math.sin(t * 1.65) * 0.075;
+        yachtHolder.rotation.set(Math.sin(t * 1.3) * 0.025, yachtHeading, -turn * 0.07 - Math.sin(t * 1.1) * 0.018);
         wakeCooldown -= dt;
         if (Math.abs(yachtSpeed) > 0.8 && wakeCooldown <= 0) {
           emitWake();
           wakeCooldown = THREE.MathUtils.clamp(0.24 - Math.abs(yachtSpeed) * 0.018, 0.09, 0.22);
         }
+        /* Vách sáng ranh giới hiện dần trong 22 đơn vị cuối trước rạn san hô. */
+        const distanceOut = Math.hypot(yachtHolder.position.x, yachtHolder.position.z);
+        boundary.setProximity(THREE.MathUtils.smoothstep(distanceOut, SAIL_LIMIT - 22, SAIL_LIMIT));
         if (!tween) {
-          desiredYachtTarget.set(yacht.position.x, yacht.position.y + 1.15, yacht.position.z);
+          desiredYachtTarget.set(yachtHolder.position.x, yachtHolder.position.y + 1.15, yachtHolder.position.z);
           followDelta.subVectors(desiredYachtTarget, controls.target).multiplyScalar(1 - Math.exp(-dt * 5));
           controls.target.add(followDelta);
           camera.position.add(followDelta);
         }
+      } else {
+        boundary.setProximity(0);
       }
       for (const wake of wakes) {
         if (wake.life <= 0) continue;
@@ -843,10 +970,14 @@ export default function WorldScene({ levels, selected, onSelect, handleRef, lang
         (wake.mesh.material as THREE.MeshBasicMaterial).opacity = wake.life * 0.34;
       }
 
+      /* Trường hạt thời tiết luôn bám quanh camera nên không bao giờ thấy mép. */
+      if (currentWeather !== "clear") weather.setCenter(controls.target.x, controls.target.z);
+
       controls.autoRotate = !propsRef.current.voyage && propsRef.current.selected === "overview" && !tween && !userInteracting && introDone && !reduceMotion;
       controls.update();
 
       for (const fn of staticTicks) fn(t, dt);
+      for (const fn of yachtTicks) fn(t, dt);
       for (const d of DISTRICT_IDS) for (const fn of districtTicks[d]) fn(t, dt);
       for (const district of DISTRICT_IDS) for (const fn of isleTicks[district]) fn(t, dt);
       for (const district of DISTRICT_IDS) for (const fn of decorTicks[district]) fn(t, dt);
@@ -882,6 +1013,11 @@ export default function WorldScene({ levels, selected, onSelect, handleRef, lang
           const mat = mesh.material;
           if (Array.isArray(mat)) mat.forEach((mm) => mm.dispose());
           else mat.dispose();
+        }
+        const sprite = o as THREE.Sprite;
+        if (sprite.isSprite) {
+          sprite.material.map?.dispose();
+          sprite.material.dispose();
         }
       });
       renderer.dispose();
@@ -944,6 +1080,15 @@ export default function WorldScene({ levels, selected, onSelect, handleRef, lang
   useEffect(() => {
     sceneApi.current?.setVoyage(voyage);
   }, [voyage]);
+
+  useEffect(() => {
+    sceneApi.current?.rebuildYacht();
+  }, [yachtTier]);
+
+  /* Đổi mùa, thời tiết hoặc chất lượng thì áp dụng ngay, không đợi sang phút mới. */
+  useEffect(() => {
+    sceneApi.current?.refreshEnvironment();
+  }, [world.mode, world.season, world.weather, world.quality, world.effects]);
 
   /* ------------------------------ render ------------------------------ */
   return (

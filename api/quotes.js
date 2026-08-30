@@ -1,12 +1,38 @@
 const CACHE_TTL_MS = 20_000;
+const MAX_SYMBOLS = 30;
+/** Trần request đồng thời tới upstream để không bị chặn tốc độ. */
+const UPSTREAM_CONCURRENCY = 8;
+/** Cache tối đa vài trăm mã; xoá mục cũ nhất khi vượt ngưỡng. */
+const CACHE_MAX_ENTRIES = 400;
 const cache = new Map();
 
 function normalizeSymbols(raw) {
-  return String(raw || "")
-    .split(",")
-    .map((symbol) => symbol.trim().toUpperCase())
-    .filter((symbol) => /^[A-Z0-9.^-]{1,16}$/.test(symbol))
-    .slice(0, 24);
+  const seen = new Set();
+  for (const symbol of String(raw || "").split(",")) {
+    const clean = symbol.trim().toUpperCase();
+    if (!/^[A-Z0-9.^-]{1,16}$/.test(clean)) continue;
+    seen.add(clean);
+    if (seen.size >= MAX_SYMBOLS) break;
+  }
+  return [...seen];
+}
+
+/** Chạy `worker` trên từng phần tử với trần đồng thời cố định. */
+async function mapWithLimit(items, limit, worker) {
+  const results = new Array(items.length);
+  let cursor = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor++;
+      try {
+        results[index] = { status: "fulfilled", value: await worker(items[index]) };
+      } catch (error) {
+        results[index] = { status: "rejected", reason: error };
+      }
+    }
+  });
+  await Promise.all(runners);
+  return results;
 }
 
 async function fetchQuote(symbol) {
@@ -33,6 +59,10 @@ async function fetchQuote(symbol) {
     marketState: meta?.marketState || null,
     updatedAt: Date.now(),
   };
+  if (cache.size >= CACHE_MAX_ENTRIES) {
+    const oldest = cache.keys().next();
+    if (!oldest.done) cache.delete(oldest.value);
+  }
   cache.set(symbol, { cachedAt: Date.now(), value });
   return value;
 }
@@ -61,7 +91,7 @@ export default async function handler(request, response) {
     return;
   }
 
-  const settled = await Promise.allSettled(symbols.map(fetchQuote));
+  const settled = await mapWithLimit(symbols, UPSTREAM_CONCURRENCY, fetchQuote);
   const quotes = settled.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
   const failed = symbols.filter((_, index) => settled[index].status === "rejected");
   response.statusCode = quotes.length ? 200 : 502;

@@ -3,11 +3,11 @@ import { useStore } from "../state/store";
 import { makeT } from "../lib/i18n";
 import { fmtPrice, fmtMoney, fmt, USD_RATE, timeAgo } from "../lib/format";
 import { useMarket, market, ASSETS, ASSET_BY_ID } from "../lib/market";
-import type { Asset } from "../lib/market";
+import type { Asset, MarketVenue, StockSector } from "../lib/market";
 import { sound } from "../lib/audio";
 import { IconClose, IconSearch, IconPlus, IconCheck, IconSwap, IconTrash, IconTrendUp, IconTrendDown, IconCoins, IconCalc, IconNote } from "./icons";
 
-function DrawerShell({ title, icon, onClose, children, wide }: { title: string; icon: React.ReactNode; onClose: () => void; children: React.ReactNode; wide?: boolean }) {
+function DrawerShell({ title, icon, onClose, children }: { title: string; icon: React.ReactNode; onClose: () => void; children: React.ReactNode }) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
@@ -16,7 +16,7 @@ function DrawerShell({ title, icon, onClose, children, wide }: { title: string; 
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
   return (
-    <div role="dialog" aria-modal="true" aria-label={title} className={`anim-slide-left panel absolute bottom-0 right-0 top-0 z-40 flex w-full flex-col ${wide ? "sm:w-[460px]" : "sm:w-[400px]"}`}>
+    <div role="dialog" aria-modal="true" aria-label={title} className="anim-slide-left panel absolute inset-y-0 right-0 z-40 flex w-full flex-col sm:inset-y-auto sm:bottom-10 sm:top-[88px] sm:w-[420px] sm:rounded-l-2xl sm:border-l">
       <div className="flex items-center justify-between border-b border-mist-500/10 px-5 py-4">
         <div className="flex items-center gap-2.5">
           <span className="text-gold-400">{icon}</span>
@@ -79,25 +79,52 @@ function AssetRow({ a }: { a: Asset }) {
   );
 }
 
+/** Số mã hiển thị ban đầu; nhấn "xem thêm" mới nạp tiếp và mới lấy giá thật. */
+const PAGE_SIZE = 40;
+
 export function MarketDrawer({ onClose }: { onClose: () => void }) {
   const { state, api } = useStore();
   const t = makeT(state.lang);
-  const [tab, setTab] = useState<"crypto" | "stocks">("crypto");
+  const [tab, setTab] = useState<MarketVenue>("crypto");
+  const [sector, setSector] = useState<StockSector | "all">("all");
   const [query, setQuery] = useState("");
+  const [limit, setLimit] = useState(PAGE_SIZE);
+
+  /* Đổi tab hoặc gõ tìm kiếm thì cuộn lại từ đầu danh sách. */
+  useEffect(() => {
+    setLimit(PAGE_SIZE);
+  }, [tab, sector, query]);
+
+  const sectors = useMemo(() => {
+    if (tab === "crypto") return [] as StockSector[];
+    const found = new Set<StockSector>();
+    for (const asset of ASSETS) if (asset.venue === tab && asset.sector) found.add(asset.sector);
+    return [...found];
+  }, [tab]);
 
   const list = useMemo(() => {
     const ql = query.trim().toLowerCase();
     return ASSETS.filter(
-      (a) => a.type === tab && (!ql || a.sym.toLowerCase().includes(ql) || a.name.toLowerCase().includes(ql))
+      (a) =>
+        a.venue === tab &&
+        (tab === "crypto" || sector === "all" || a.sector === sector) &&
+        (!ql || a.sym.toLowerCase().includes(ql) || a.name.toLowerCase().includes(ql))
     );
-  }, [tab, query]);
-  const trackedIds = useMemo(() => [...state.watchlist, ...list.slice(0, 36).map((asset) => asset.id)], [state.watchlist, list]);
+  }, [tab, sector, query]);
+
+  const visible = useMemo(() => list.slice(0, limit), [list, limit]);
+  /* Chỉ theo dõi giá của phần đang hiển thị + watchlist — 250 mã cùng lúc là
+     vô nghĩa vì người dùng không nhìn thấy hết. */
+  const trackedIds = useMemo(
+    () => [...state.watchlist, ...visible.map((asset) => asset.id)],
+    [state.watchlist, visible]
+  );
   useMarket(trackedIds);
 
   const watchAssets = state.watchlist.map((id) => ASSET_BY_ID.get(id)).filter(Boolean) as Asset[];
 
   return (
-    <DrawerShell title={t("mk.title")} icon={<IconCoins className="h-4.5 w-4.5 h-[18px] w-[18px]" />} onClose={onClose} wide>
+    <DrawerShell title={t("mk.title")} icon={<IconCoins className="h-4.5 w-4.5 h-[18px] w-[18px]" />} onClose={onClose}>
       {/* watchlist */}
       <div className="border-b border-mist-500/10 px-5 py-3">
         <div className="mb-2 flex items-center justify-between">
@@ -129,38 +156,69 @@ export function MarketDrawer({ onClose }: { onClose: () => void }) {
       </div>
 
       {/* tabs + search */}
-      <div className="flex items-center gap-2 border-b border-mist-500/10 px-5 py-3">
-        <div className="chip flex shrink-0 items-center rounded-lg p-0.5">
-          {(["crypto", "stocks"] as const).map((tb) => (
-            <button
-              key={tb}
-              onClick={() => { setTab(tb); sound.tick(); }}
-              className={`rounded-md px-3 py-1.5 font-display text-[9px] tracking-wider transition-all ${
-                tab === tb ? "bg-gold-500/90 text-ink-950" : "text-mist-400 hover:text-mist-100"
-              }`}
-            >
-              {tb === "crypto" ? t("mk.tabs.crypto") : t("mk.tabs.stocks")}
-            </button>
-          ))}
+      <div className="space-y-2 border-b border-mist-500/10 px-5 py-3">
+        <div className="flex items-center gap-2">
+          <div className="chip flex shrink-0 items-center rounded-lg p-0.5">
+            {(["crypto", "vn", "us"] as MarketVenue[]).map((venue) => (
+              <button
+                key={venue}
+                onClick={() => { setTab(venue); setSector("all"); sound.tick(); }}
+                className={`rounded-md px-2.5 py-1.5 font-display text-[9px] tracking-wider transition-all ${
+                  tab === venue ? "bg-gold-500/90 text-ink-950" : "text-mist-400 hover:text-mist-100"
+                }`}
+              >
+                {venue === "crypto" ? "Crypto" : venue === "vn" ? t("mk.tabs.vn") : t("mk.tabs.us")}
+              </button>
+            ))}
+          </div>
+          <div className="relative min-w-0 flex-1">
+            <IconSearch className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-mist-500" />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={t("mk.search")}
+              className="field w-full rounded-lg py-1.5 pl-8 pr-3 text-[12px] text-mist-100"
+            />
+          </div>
         </div>
-        <div className="relative min-w-0 flex-1">
-          <IconSearch className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-mist-500" />
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder={t("mk.search")}
-            className="field w-full rounded-lg py-1.5 pl-8 pr-3 text-[12px] text-mist-100"
-          />
-        </div>
+
+        {sectors.length > 0 && (
+          <div className="flex flex-wrap gap-1">
+            {(["all", ...sectors] as (StockSector | "all")[]).map((candidate) => (
+              <button
+                key={candidate}
+                onClick={() => { setSector(candidate); sound.tick(); }}
+                className={`rounded-full border px-2.5 py-1 text-[10px] transition-all ${
+                  sector === candidate
+                    ? "border-jade-500/55 bg-jade-500/10 text-jade-300"
+                    : "border-mist-500/18 text-mist-400 hover:border-gold-500/40 hover:text-mist-100"
+                }`}
+              >
+                {t(`mk.sector.${candidate}`)}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* list */}
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
         <div className="mb-1 flex items-center justify-between px-2.5 font-mono text-[8.5px] uppercase tracking-[0.18em] text-mist-500">
-          <span>{t("mk.asset")}</span>
+          <span>{t("mk.asset")} · {t("mk.count", { n: list.length })}</span>
           <span>{t("mk.price")} · {t("mk.24h")}</span>
         </div>
-        {list.map((a) => <AssetRow key={a.id} a={a} />)}
+        {visible.map((a) => <AssetRow key={a.id} a={a} />)}
+        {list.length === 0 && (
+          <p className="px-2.5 py-6 text-center text-[11.5px] text-mist-500">{t("mk.noResult", { q: query.trim() })}</p>
+        )}
+        {limit < list.length && (
+          <button
+            onClick={() => { setLimit(limit + PAGE_SIZE); sound.tick(); }}
+            className="btn-ghost mx-2.5 my-2 flex w-[calc(100%-1.25rem)] items-center justify-center rounded-lg py-2 text-[11px]"
+          >
+            {t("mk.more", { n: Math.min(PAGE_SIZE, list.length - limit) })}
+          </button>
+        )}
       </div>
 
       <div className="border-t border-mist-500/10 px-5 py-2.5 text-[9.5px] leading-relaxed text-mist-500">{t("mk.note")}</div>

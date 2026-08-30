@@ -11,7 +11,10 @@
     "dev": "vite",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
-    "test:ui": "node tests/ui_audit.cjs --out .artifacts/ui-audit"
+    "test:ui": "node tests/ui_audit.cjs --out .artifacts/ui-audit",
+    "test:features": "node tests/feature_shots.cjs --out .artifacts/features",
+    "test:panels": "node tests/panel_shots.cjs --out .artifacts/panels",
+    "test:exam": "node tests/exam_pass.cjs --out .artifacts/panels"
   },
   "dependencies": {
     "react": "^18.2.0",

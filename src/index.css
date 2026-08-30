@@ -1,9 +1,15 @@
 @import "tailwindcss";
 
 @theme {
-  --font-display: "Unbounded", sans-serif;
-  --font-body: "Be Vietnam Pro", sans-serif;
-  --font-mono: "JetBrains Mono", monospace;
+  /* Ngăn xếp dự phòng đầy đủ: nếu Google Fonts chậm hoặc bị chặn, chữ vẫn có
+     dấu tiếng Việt đúng thay vì rơi về serif mặc định của trình duyệt. */
+  --font-display: "Unbounded", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font-body: "Be Vietnam Pro", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", "Cascadia Mono", Consolas, "Liberation Mono", monospace;
+
+  /* Đường cong chuyển động dùng chung — mọi hiệu ứng cùng một "tính cách". */
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out-soft: cubic-bezier(0.65, 0, 0.35, 1);
 
   --color-ink-950: #03111a;
   --color-ink-900: #04141b;
@@ -31,8 +37,21 @@ html, body, #root {
   overflow: hidden;
   background: #04141b;
   color: #e9f3f0;
-  font-family: "Be Vietnam Pro", sans-serif;
+  font-family: var(--font-body);
+  font-synthesis-weight: none;
+  line-height: 1.5;
+  text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Dấu tiếng Việt chồng hai tầng (ế, ỗ, ự) cần khoảng thở lớn hơn tiếng Anh. */
+h1, h2, h3, .font-display { line-height: 1.28; }
+
+/* Chữ số cùng bề rộng: giá và XP không giật ngang mỗi lần nhảy số. */
+.font-mono, code, kbd, samp, .tabular {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1, "lnum" 1;
 }
 
 canvas { display: block; outline: none; }
@@ -233,6 +252,48 @@ input[type="range"] { accent-color: #e0aa50; }
   .world-label .chip { font-size: 8px; padding: 3px 7px; }
 }
 
+
+/* ---------- motion bổ sung ---------- */
+@keyframes breathe {
+  0%, 100% { opacity: 0.45; transform: scale(0.97); }
+  50%      { opacity: 1;    transform: scale(1.03); }
+}
+.anim-breathe { animation: breathe 2s var(--ease-in-out-soft) infinite; }
+
+@keyframes riseIn {
+  from { opacity: 0; transform: translateY(8px) scale(0.985); }
+  to   { opacity: 1; transform: translateY(0)   scale(1); }
+}
+.anim-rise { animation: riseIn 0.34s var(--ease-out-soft) both; }
+
+@keyframes countUp {
+  from { transform: translateY(0.35em); opacity: 0; }
+  to   { transform: translateY(0);      opacity: 1; }
+}
+.anim-count { animation: countUp 0.28s var(--ease-out-soft) both; }
+
+/* Nút và ô bấm dùng chung một nhịp phản hồi, tránh cảm giác chắp vá. */
+button, [role="button"] {
+  transition: transform 0.14s var(--ease-out-soft), background-color 0.18s ease,
+              border-color 0.18s ease, color 0.18s ease, box-shadow 0.22s ease, opacity 0.18s ease;
+}
+button:active:not(:disabled) { transform: translateY(0.5px) scale(0.985); }
+button:disabled { cursor: not-allowed; }
+
+/* Vùng cuộn mượt hơn trên trackpad và cảm ứng. */
+.overflow-y-auto { scroll-behavior: smooth; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+
+/* Tooltip 3D: hai dòng, dòng dưới nhạt hơn. */
+.chip strong { display: block; font-weight: 600; color: #e9f3f0; }
+.chip span.tt-lv { color: #f0c268; }
+.chip > span:not(.tt-lv) { color: #8ba4a7; }
+
+/* Vùng bấm tối thiểu 40px trên cảm ứng — ngón tay không phải ngắm. */
+@media (pointer: coarse) {
+  button, [role="button"] { min-height: 40px; }
+  .helm-key { width: 48px; height: 44px; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     scroll-behavior: auto !important;
@@ -241,5 +302,7 @@ input[type="range"] { accent-color: #e0aa50; }
     transition-duration: 0.01ms !important;
   }
   .marquee-track { animation: none; transform: none; }
+  .anim-breathe, .glow-pulse, .anim-floaty, .scanline, .drift-a, .drift-b, .xp-bar { animation: none !important; }
+  .overflow-y-auto { scroll-behavior: auto; }
 }
 
