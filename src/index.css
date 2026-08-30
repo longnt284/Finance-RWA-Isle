@@ -1,0 +1,186 @@
+@import "tailwindcss";
+
+@theme {
+  --font-display: "Unbounded", sans-serif;
+  --font-body: "Be Vietnam Pro", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+
+  --color-ink-950: #03111a;
+  --color-ink-900: #04141b;
+  --color-ink-850: #071c25;
+  --color-ink-800: #0a2530;
+  --color-ink-700: #103441;
+  --color-ink-600: #1a4a56;
+  --color-mist-500: #5f7d82;
+  --color-mist-400: #8ba4a7;
+  --color-mist-300: #b7cbc9;
+  --color-mist-100: #e9f3f0;
+  --color-gold-600: #b9873a;
+  --color-gold-500: #e0aa50;
+  --color-gold-400: #f0c268;
+  --color-gold-300: #ffd88a;
+  --color-jade-500: #2fbf83;
+  --color-jade-400: #4cd99a;
+  --color-jade-300: #7fe8bb;
+  --color-coral-500: #e2604f;
+  --color-coral-400: #ff7f6e;
+}
+
+html, body, #root {
+  height: 100%;
+  overflow: hidden;
+  background: #04141b;
+  color: #e9f3f0;
+  font-family: "Be Vietnam Pro", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+canvas { display: block; outline: none; }
+
+/* ---------- UI surfaces ---------- */
+.panel {
+  background: linear-gradient(160deg, rgba(9, 30, 39, 0.92), rgba(5, 18, 25, 0.94));
+  border: 1px solid rgba(224, 170, 80, 0.16);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 216, 138, 0.06);
+  backdrop-filter: blur(14px);
+}
+.chip {
+  background: rgba(6, 22, 30, 0.72);
+  border: 1px solid rgba(224, 170, 80, 0.14);
+  backdrop-filter: blur(10px);
+}
+.hairline-gold { border-color: rgba(224, 170, 80, 0.16); }
+
+.btn-gold {
+  background: linear-gradient(180deg, #f0c268, #d99f45);
+  color: #1c1305;
+  box-shadow: 0 6px 18px rgba(224, 170, 80, 0.28), inset 0 1px 0 rgba(255, 246, 220, 0.5);
+  transition: transform 0.15s ease, box-shadow 0.2s ease, filter 0.2s ease;
+}
+.btn-gold:hover { filter: brightness(1.07); transform: translateY(-1px); box-shadow: 0 10px 24px rgba(224,170,80,0.36), inset 0 1px 0 rgba(255,246,220,0.5); }
+.btn-gold:active { transform: translateY(0px) scale(0.98); }
+.btn-ghost {
+  border: 1px solid rgba(224, 170, 80, 0.22);
+  color: #f0c268;
+  transition: all 0.18s ease;
+}
+.btn-ghost:hover { background: rgba(224, 170, 80, 0.1); border-color: rgba(240, 194, 104, 0.45); }
+
+.field {
+  background: rgba(4, 16, 22, 0.8);
+  border: 1px solid rgba(139, 164, 167, 0.22);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.field:focus {
+  outline: none;
+  border-color: rgba(240, 194, 104, 0.55);
+  box-shadow: 0 0 0 3px rgba(224, 170, 80, 0.12);
+}
+
+input[type="range"] { accent-color: #e0aa50; }
+
+/* ---------- scrollbars ---------- */
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: rgba(224, 170, 80, 0.22); border-radius: 8px; }
+*::-webkit-scrollbar-thumb:hover { background: rgba(224, 170, 80, 0.4); }
+
+/* ---------- motion ---------- */
+@keyframes fadeUp { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes slideLeft { from { opacity: 0; transform: translateX(40px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes toastIn { from { opacity: 0; transform: translateY(-12px) scale(0.96); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes pulseGold { 0%,100% { opacity: 0.55; } 50% { opacity: 1; } }
+@keyframes tickerFlashUp { 0% { color: #7fe8bb; } 100% { color: inherit; } }
+@keyframes tickerFlashDown { 0% { color: #ff7f6e; } 100% { color: inherit; } }
+@keyframes beaconSweep { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+@keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+
+.anim-fade-up { animation: fadeUp 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.anim-fade-in { animation: fadeIn 0.6s ease both; }
+.anim-slide-left { animation: slideLeft 0.45s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.anim-toast { animation: toastIn 0.35s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.flash-up { animation: tickerFlashUp 1.2s ease-out; }
+.flash-down { animation: tickerFlashDown 1.2s ease-out; }
+
+.xp-bar {
+  background: linear-gradient(90deg, #b9873a, #f0c268, #ffd88a, #f0c268);
+  background-size: 200% 100%;
+  animation: shimmer 3s linear infinite;
+}
+
+.world-label {
+  position: absolute;
+  pointer-events: none;
+  transform: translate(-50%, -110%);
+  white-space: nowrap;
+  will-change: transform, opacity;
+  transition: opacity 0.3s ease;
+}
+.world-label .chip { transition: border-color 0.25s ease, color 0.25s ease, box-shadow 0.25s ease; }
+.world-label.label-active .chip {
+  border-color: rgba(240, 194, 104, 0.55);
+  color: #ffd88a;
+  box-shadow: 0 0 18px rgba(224, 170, 80, 0.22);
+}
+.world-label.label-locked .chip { opacity: 0.6; border-style: dashed; }
+
+/* ---------- display type ---------- */
+.text-outline {
+  color: transparent;
+  -webkit-text-stroke: 1.5px rgba(240, 194, 104, 0.85);
+}
+.text-outline-mist {
+  color: transparent;
+  -webkit-text-stroke: 1px rgba(183, 203, 201, 0.5);
+}
+
+/* ---------- marquee ticker ---------- */
+@keyframes marqueeX {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+.marquee-track {
+  display: flex;
+  width: max-content;
+  animation: marqueeX 48s linear infinite;
+}
+.marquee-track:hover { animation-play-state: paused; }
+
+/* ---------- hero scanline ---------- */
+@keyframes scan {
+  0%, 100% { transform: translateY(-30vh); opacity: 0; }
+  10% { opacity: 0.5; }
+  50% { opacity: 0.25; }
+  90% { opacity: 0.5; }
+  100% { transform: translateY(110vh); opacity: 0; }
+}
+.scanline {
+  animation: scan 9s ease-in-out infinite;
+}
+
+@keyframes floaty {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+.anim-floaty { animation: floaty 5s ease-in-out infinite; }
+
+@keyframes popIn {
+  0% { opacity: 0; transform: scale(0.92) translateY(10px); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+.anim-pop { animation: popIn 0.4s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+@keyframes glowPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(240, 194, 104, 0.35); }
+  50% { box-shadow: 0 0 0 8px rgba(240, 194, 104, 0); }
+}
+.glow-pulse { animation: glowPulse 2.4s ease-out infinite; }
+
+@keyframes driftA {
+  from { transform: translate3d(-4vw, 0, 0); }
+  to { transform: translate3d(4vw, 0, 0); }
+}
+.drift-a { animation: driftA 14s ease-in-out infinite alternate; }
+.drift-b { animation: driftA 19s ease-in-out infinite alternate-reverse; }
+
