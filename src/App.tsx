@@ -1,6 +1,9 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { StoreProvider, useStore, districtLevels, ACH_DEFS, ISLE_UNLOCK_LEVELS, DISTRICT_IDS } from "./state/store";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  StoreProvider, useStore, districtLevels, ACH_DEFS, ISLE_UNLOCK_LEVELS, DISTRICT_IDS,
+} from "./state/store";
 import type { DistrictId, ViewId } from "./state/store";
+import { useCloudSync } from "./state/sync";
 import type { WorldHandle } from "./world/WorldScene";
 import HUD from "./components/HUD";
 import type { DrawerId } from "./components/HUD";
@@ -10,23 +13,29 @@ import { sound } from "./lib/audio";
 
 const Workspace = lazy(() => import("./components/Workspace"));
 const WorldScene = lazy(() => import("./world/WorldScene"));
+const ExamModal = lazy(() => import("./components/Exam"));
+const AccountPanel = lazy(() => import("./components/Account"));
 const MarketDrawer = lazy(() => import("./components/Drawers").then((module) => ({ default: module.MarketDrawer })));
 const ToolsDrawer = lazy(() => import("./components/Drawers").then((module) => ({ default: module.ToolsDrawer })));
 const NotesDrawer = lazy(() => import("./components/Drawers").then((module) => ({ default: module.NotesDrawer })));
+const QuestsPanel = lazy(() => import("./components/Panels").then((module) => ({ default: module.QuestsPanel })));
+const WorldPanel = lazy(() => import("./components/Panels").then((module) => ({ default: module.WorldPanel })));
 
 function Shell() {
   const { state, api } = useStore();
   const t = makeT(state.lang);
+  useCloudSync();
   const [selected, setSelected] = useState<ViewId>("overview");
   const [drawer, setDrawer] = useState<DrawerId>(null);
   const [showOnboard, setShowOnboard] = useState(false);
   const [muted, setMuted] = useState(sound.isMuted());
   const [activeIsle, setActiveIsle] = useState<DistrictId>("crypto");
   const [voyage, setVoyage] = useState(false);
+  const [examDistrict, setExamDistrict] = useState<DistrictId | null>(null);
   const [helmInput, setHelmInput] = useState({ throttle: 0, turn: 0 });
   const worldRef = useRef<WorldHandle | null>(null);
 
-  const levels = useMemo(() => districtLevels(state), [state.xp]);
+  const levels = useMemo(() => districtLevels(state), [state.certified]);
   const islands = useMemo(
     () =>
       Object.fromEntries(
@@ -75,6 +84,7 @@ function Shell() {
     if (!state.onboarded) {
       setSelected("overview");
       setDrawer(null);
+      setExamDistrict(null);
     } else if (!prevOnboarded.current && state.onboarded) {
       setSelected(state.focus);
       if (!state.tutorialSeen) {
@@ -84,6 +94,15 @@ function Shell() {
     }
     prevOnboarded.current = state.onboarded;
   }, [state.onboarded, state.focus, state.tutorialSeen]);
+
+  const openExam = useCallback((district: DistrictId) => {
+    setDrawer(null);
+    setExamDistrict(district);
+  }, []);
+
+  const onExamPassed = useCallback((district: DistrictId) => {
+    worldRef.current?.fireBurst(district, district === "crypto" ? "jade" : "gold");
+  }, []);
 
   function handleSelect(view: ViewId, island?: DistrictId) {
     const requestedIsle = island ?? activeIsle;
@@ -116,6 +135,8 @@ function Shell() {
           activeIsle={activeIsle}
           voyage={voyage}
           helmInput={helmInput}
+          yachtTier={state.yachtTier}
+          world={state.world}
         />
       </Suspense>
 
@@ -134,10 +155,14 @@ function Shell() {
               setDrawer(null);
               setHelmInput({ throttle: 0, turn: 0 });
               const next = !voyage;
-              if (next) setSelected("overview");
+              if (next) {
+                setSelected("overview");
+                api.startVoyage();
+              }
               setVoyage(next);
             }}
             onHelmInput={setHelmInput}
+            onExam={openExam}
           />
           <Suspense fallback={<div className="panel absolute right-4 top-24 z-40 h-24 w-72 animate-pulse rounded-xl" />}>
             {selected !== "overview" && (
@@ -147,11 +172,18 @@ function Shell() {
                 onSelect={handleSelect}
                 activeIsle={activeIsle}
                 onIslandSelect={(district) => handleSelect("isle", district)}
+                onExam={openExam}
               />
             )}
             {drawer === "market" && <MarketDrawer onClose={() => setDrawer(null)} />}
             {drawer === "tools" && <ToolsDrawer onClose={() => setDrawer(null)} />}
             {drawer === "notes" && <NotesDrawer onClose={() => setDrawer(null)} />}
+            {drawer === "quests" && <QuestsPanel onClose={() => setDrawer(null)} />}
+            {drawer === "world" && <WorldPanel onClose={() => setDrawer(null)} />}
+            {drawer === "account" && <AccountPanel onClose={() => setDrawer(null)} />}
+            {examDistrict && (
+              <ExamModal district={examDistrict} onClose={() => setExamDistrict(null)} onPassed={onExamPassed} />
+            )}
           </Suspense>
           <TutorialOverlay open={drawer === "tutorial"} onClose={() => setDrawer(null)} />
         </>

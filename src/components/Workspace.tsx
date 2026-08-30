@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import {
   useStore, DISTRICTS, xpIntoLevel, cityLevel, netWorth, levelFor, xpMult,
-  ACH_DEFS, DISTRICT_IDS, ISLE_UNLOCK_LEVELS, LEVEL_XP, MAX_LEVEL,
+  ACH_DEFS, DISTRICT_IDS, ISLE_UNLOCK_LEVELS, LEVEL_XP, MAX_LEVEL, pendingExamLevel,
 } from "../state/store";
 import type { DistrictId, Goal, Task, ViewId, AchTier, IslandTheme } from "../state/store";
 import { makeT } from "../lib/i18n";
@@ -9,9 +9,9 @@ import { compactVND, fmt, fmtMoney, fmtSmart, pct, timeAgo } from "../lib/format
 import { sound } from "../lib/audio";
 import {
   IconCheck, IconClose, IconPlus, IconTarget, IconMedal, IconReset,
-  IconIsland, IconLock, IconSpark,
+  IconIsland, IconLock, IconSpark, IconBrain,
 } from "./icons";
-import { DECOR_IDS } from "../world/build";
+import { DECOR_IDS } from "../lib/decor";
 
 /* ------------------------------ sparkline ------------------------------ */
 
@@ -53,34 +53,68 @@ function Sparkline({ values }: { values: number[] }) {
 
 /* ------------------------------ level header ------------------------------ */
 
-function LevelHeader({ district }: { district: DistrictId }) {
+/** Thanh 15 đoạn — đọc được cấp hiện tại và quãng đường còn lại chỉ bằng một liếc mắt. */
+function LevelLadder({ district, level, pending }: { district: DistrictId; level: number; pending: number | null }) {
+  return (
+    <div className="flex items-center gap-[2px]" aria-hidden="true">
+      {Array.from({ length: MAX_LEVEL }).map((_, i) => {
+        const reached = i < level;
+        const isPending = pending !== null && i === pending - 1;
+        return (
+          <span
+            key={i}
+            className={`h-2.5 w-[3px] rounded-sm transition-all duration-300 ${isPending ? "anim-breathe" : ""}`}
+            style={{
+              background: reached ? DISTRICTS[district].accent : isPending ? `${DISTRICTS[district].accent}66` : "rgba(139,164,167,0.18)",
+            }}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function LevelHeader({ district, onExam }: { district: DistrictId; onExam?: (district: DistrictId) => void }) {
   const { state } = useStore();
   const t = makeT(state.lang);
   const xp = state.xp[district];
-  const lv = levelFor(xp);
+  const lv = state.certified[district];
+  const eligible = levelFor(xp);
+  const pending = pendingExamLevel(state, district);
   const prog = xpIntoLevel(xp);
   return (
-    <div>
-      <div className="flex items-center justify-between">
-        <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-mist-500">{t(`d.${district}.name`)}</div>
-        <div className="flex items-center gap-1.5">
-          {[0, 1, 2, 3, 4].map((i) => (
-            <span key={i} className={`h-2 w-2 rotate-45 ${i < Math.min(lv, 5) ? "" : "opacity-25"}`} style={{ background: DISTRICTS[district].accent }} />
-          ))}
-        </div>
+    <div className="min-w-0">
+      <div className="flex items-center justify-between gap-3">
+        <div className="truncate font-mono text-[10px] uppercase tracking-[0.2em] text-mist-500">{t(`d.${district}.name`)}</div>
+        <LevelLadder district={district} level={lv} pending={pending} />
       </div>
       <div className="mt-1 font-display text-lg font-semibold text-mist-100">{t(`d.${district}.building`)}</div>
       <div className="text-[11px] text-mist-500">{t(`d.${district}.tagline`)}</div>
       <div className="mt-3">
-        <div className="flex items-center justify-between text-[10px] font-mono text-mist-500">
+        <div className="flex items-center justify-between font-mono text-[10px] text-mist-500">
           <span>{t("ws.lvl", { n: lv })}{lv >= MAX_LEVEL ? ` · ${t("ws.max")}` : ""}</span>
-          <span>{lv >= MAX_LEVEL ? `${fmt(xp)} XP` : `${prog.have}/${prog.need} XP`}</span>
+          <span>{eligible >= MAX_LEVEL ? `${fmt(xp)} XP` : `${fmt(prog.have)}/${fmt(prog.need)} XP`}</span>
         </div>
         <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-ink-700">
           <div className="xp-bar h-full rounded-full transition-all duration-700" style={{ width: `${prog.pct}%` }} />
         </div>
       </div>
-      <div className="mt-1.5 font-mono text-[9px] text-mist-500">{t("hud.mult", { x: xpMult(state.streak).toFixed(2) })}</div>
+      {pending !== null && onExam ? (
+        <button
+          onClick={() => {
+            onExam(district);
+            sound.whoosh();
+          }}
+          className="btn-gold glow-pulse mt-2.5 flex w-full items-center justify-center gap-2 rounded-lg py-2 font-display text-[10px] tracking-[0.14em]"
+        >
+          <IconBrain className="h-3.5 w-3.5" />
+          {t("exam.ready", { n: pending })}
+        </button>
+      ) : (
+        <div className="mt-1.5 font-mono text-[9px] text-mist-500">
+          {lv >= MAX_LEVEL ? t("exam.maxed", { n: MAX_LEVEL }) : t("hud.mult", { x: xpMult(state.streak).toFixed(2) })}
+        </div>
+      )}
     </div>
   );
 }
@@ -340,16 +374,16 @@ function VaultExtra() {
 
 /* ------------------------------ district panel ------------------------------ */
 
-function DistrictPanel({ district, onClose }: { district: DistrictId; onClose: () => void }) {
+function DistrictPanel({ district, onClose, onExam }: { district: DistrictId; onClose: () => void; onExam: (district: DistrictId) => void }) {
   const { state } = useStore();
   const t = makeT(state.lang);
   const goals = state.goals.filter((g) => g.district === district);
   const tasks = state.tasks.filter((tk) => tk.district === district);
   const done = tasks.filter((tk) => tk.done).length;
   return (
-    <div className="anim-slide-left panel absolute bottom-0 right-0 top-0 z-40 flex w-full flex-col sm:w-[400px]">
+    <div className="anim-slide-left panel absolute inset-y-0 right-0 z-40 flex w-full flex-col sm:inset-y-auto sm:bottom-10 sm:top-[88px] sm:w-[420px] sm:rounded-l-2xl sm:border-l">
       <div className="flex items-start justify-between border-b border-mist-500/10 p-5 pb-4">
-        <LevelHeader district={district} />
+        <LevelHeader district={district} onExam={onExam} />
         <button onClick={onClose} className="ml-3 shrink-0 rounded-md p-1.5 text-mist-500 transition-colors hover:bg-ink-700 hover:text-mist-100">
           <IconClose className="h-4 w-4" />
         </button>
@@ -394,17 +428,24 @@ function DistrictPanel({ district, onClose }: { district: DistrictId; onClose: (
 
 /* ------------------------------ isle panel ------------------------------ */
 
-function IslePanel({ onClose, activeIsle, onIslandSelect }: { onClose: () => void; activeIsle: DistrictId; onIslandSelect: (district: DistrictId) => void }) {
+function IslePanel({
+  onClose, activeIsle, onIslandSelect, onExam,
+}: {
+  onClose: () => void;
+  activeIsle: DistrictId;
+  onIslandSelect: (district: DistrictId) => void;
+  onExam: (district: DistrictId) => void;
+}) {
   const { state, api } = useStore();
   const t = makeT(state.lang);
-  const lv = levelFor(state.xp[activeIsle]);
+  const lv = state.certified[activeIsle];
   const unlockLevel = ISLE_UNLOCK_LEVELS[activeIsle];
   const unlocked = lv >= unlockLevel;
   const prog = xpIntoLevel(state.xp[activeIsle]);
 
   if (!unlocked) {
     return (
-      <div className="anim-slide-left panel absolute bottom-0 right-0 top-0 z-40 flex w-full flex-col sm:w-[400px]">
+      <div className="anim-slide-left panel absolute inset-y-0 right-0 z-40 flex w-full flex-col sm:inset-y-auto sm:bottom-10 sm:top-[88px] sm:w-[420px] sm:rounded-l-2xl sm:border-l">
         <div className="flex items-start justify-between border-b border-mist-500/10 p-5 pb-4">
           <div>
             <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-mist-500">{t(`ct.isle.${activeIsle}`)}</div>
@@ -427,8 +468,20 @@ function IslePanel({ onClose, activeIsle, onIslandSelect }: { onClose: () => voi
               <div className="xp-bar h-full rounded-full transition-all duration-700" style={{ width: `${(Math.min(lv, unlockLevel) / unlockLevel) * 100}%` }} />
             </div>
             <div className="mt-2 font-mono text-[10px] text-mist-500">
-              {lv >= MAX_LEVEL ? t("il.max", { n: MAX_LEVEL }) : t("il.progress", { have: prog.have, need: prog.need })} · {LEVEL_XP[unlockLevel]} XP
+              {lv >= MAX_LEVEL ? t("il.max", { n: MAX_LEVEL }) : t("il.progress", { have: fmt(prog.have), need: fmt(prog.need) })} · {fmt(LEVEL_XP[unlockLevel])} XP
             </div>
+            {pendingExamLevel(state, activeIsle) !== null && (
+              <button
+                onClick={() => {
+                  onExam(activeIsle);
+                  sound.whoosh();
+                }}
+                className="btn-gold glow-pulse mt-3 flex w-full items-center justify-center gap-2 rounded-lg py-2.5 font-display text-[10px] tracking-[0.14em]"
+              >
+                <IconBrain className="h-3.5 w-3.5" />
+                {t("exam.ready", { n: pendingExamLevel(state, activeIsle) ?? lv + 1 })}
+              </button>
+            )}
           </div>
           <p className="text-[11px] leading-relaxed text-mist-500">{t("il.lvHint")}</p>
         </div>
@@ -437,7 +490,7 @@ function IslePanel({ onClose, activeIsle, onIslandSelect }: { onClose: () => voi
   }
 
   return (
-    <div className="anim-slide-left panel absolute bottom-0 right-0 top-0 z-40 flex w-full flex-col sm:w-[400px]">
+    <div className="anim-slide-left panel absolute inset-y-0 right-0 z-40 flex w-full flex-col sm:inset-y-auto sm:bottom-10 sm:top-[88px] sm:w-[420px] sm:rounded-l-2xl sm:border-l">
       <div className="flex items-start justify-between border-b border-mist-500/10 p-5 pb-4">
         <div>
           <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-jade-400/80">{t(`ct.isle.${activeIsle}`)}</div>
@@ -448,7 +501,7 @@ function IslePanel({ onClose, activeIsle, onIslandSelect }: { onClose: () => voi
           <div className="mt-2 flex items-center gap-2">
             <span className="chip rounded-full px-2.5 py-1 font-mono text-[10px] text-jade-300">{t("ws.lvl", { n: lv })}</span>
             {lv < MAX_LEVEL && (
-              <span className="font-mono text-[10px] text-mist-500">{t("il.progress", { have: prog.have, need: prog.need })}</span>
+              <span className="font-mono text-[10px] text-mist-500">{t("il.progress", { have: fmt(prog.have), need: fmt(prog.need) })}</span>
             )}
           </div>
         </div>
@@ -461,7 +514,7 @@ function IslePanel({ onClose, activeIsle, onIslandSelect }: { onClose: () => voi
           <div className="mb-2 font-display text-[9px] tracking-[0.22em] text-mist-500">{t("il.choose")}</div>
           <div className="grid grid-cols-2 gap-2">
             {DISTRICT_IDS.map((district) => {
-              const districtLv = levelFor(state.xp[district]);
+              const districtLv = state.certified[district];
               const districtUnlocked = districtLv >= ISLE_UNLOCK_LEVELS[district];
               return (
                 <button
@@ -562,7 +615,7 @@ function CenterPanel({ onClose, onIslandSelect }: { onClose: () => void; onIslan
   const [achDesc, setAchDesc] = useState("");
 
   return (
-    <div className="anim-slide-left panel absolute bottom-0 right-0 top-0 z-40 flex w-full flex-col sm:w-[420px]">
+    <div className="anim-slide-left panel absolute inset-y-0 right-0 z-40 flex w-full flex-col sm:inset-y-auto sm:bottom-10 sm:top-[88px] sm:w-[420px] sm:rounded-l-2xl sm:border-l">
       <div className="flex items-start justify-between border-b border-mist-500/10 p-5 pb-4">
         <div>
           <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-mist-500">{t("ct.heart")}</div>
@@ -592,7 +645,7 @@ function CenterPanel({ onClose, onIslandSelect }: { onClose: () => void; onIslan
           <h3 className="mb-2 font-display text-[10px] tracking-[0.22em] text-mist-400">{t("ct.isles")}</h3>
           <div className="space-y-1.5">
             {(["crypto", "stocks", "vault", "academy"] as DistrictId[]).map((d) => {
-              const districtLv = levelFor(state.xp[d]);
+              const districtLv = state.certified[d];
               const unlockLevel = ISLE_UNLOCK_LEVELS[d];
               const unlocked = districtLv >= unlockLevel;
               return (
@@ -616,12 +669,12 @@ function CenterPanel({ onClose, onIslandSelect }: { onClose: () => void; onIslan
           <h3 className="mb-2 font-display text-[10px] tracking-[0.22em] text-mist-400">{t("ct.districts")}</h3>
           <div className="space-y-2">
             {DISTRICT_IDS.map((d) => {
-              const lv = levelFor(state.xp[d]);
+              const lv = state.certified[d];
               return (
                 <div key={d} className="flex items-center gap-3">
                   <span className="w-32 shrink-0 truncate text-[12px] text-mist-300">{t(`d.${d}.building`)}</span>
                   <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-ink-700">
-                    <div className="h-full rounded-full" style={{ width: `${(Math.min(lv, 5) / 5) * 100}%`, background: DISTRICTS[d].accent }} />
+                    <div className="h-full rounded-full transition-all duration-500" style={{ width: `${(lv / MAX_LEVEL) * 100}%`, background: DISTRICTS[d].accent }} />
                   </div>
                   <span className="w-9 shrink-0 text-right font-mono text-[11px]" style={{ color: DISTRICTS[d].accent }}>{t("misc.levelShort", { n: lv })}</span>
                 </div>
@@ -749,9 +802,18 @@ function CenterPanel({ onClose, onIslandSelect }: { onClose: () => void; onIslan
 
 /* ------------------------------ root ------------------------------ */
 
-export default function Workspace({ view, onClose, activeIsle, onIslandSelect }: { view: ViewId; onClose: () => void; onSelect: (v: ViewId, island?: DistrictId) => void; activeIsle: DistrictId; onIslandSelect: (district: DistrictId) => void }) {
+export default function Workspace({
+  view, onClose, activeIsle, onIslandSelect, onExam,
+}: {
+  view: ViewId;
+  onClose: () => void;
+  onSelect: (v: ViewId, island?: DistrictId) => void;
+  activeIsle: DistrictId;
+  onIslandSelect: (district: DistrictId) => void;
+  onExam: (district: DistrictId) => void;
+}) {
   if (view === "overview") return null;
   if (view === "center") return <CenterPanel onClose={onClose} onIslandSelect={onIslandSelect} />;
-  if (view === "isle") return <IslePanel onClose={onClose} activeIsle={activeIsle} onIslandSelect={onIslandSelect} />;
-  return <DistrictPanel district={view} onClose={onClose} />;
+  if (view === "isle") return <IslePanel onClose={onClose} activeIsle={activeIsle} onIslandSelect={onIslandSelect} onExam={onExam} />;
+  return <DistrictPanel district={view} onClose={onClose} onExam={onExam} />;
 }

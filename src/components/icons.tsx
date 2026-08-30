@@ -258,3 +258,92 @@ export const IconChevD = ({ className }: P) => (
     <path d="M6 9.5l6 6 6-6" />
   </svg>
 );
+
+/* ---------- khảo thí, nhiệm vụ, tài khoản, khí hậu ---------- */
+
+export const IconScroll = ({ className }: P) => (
+  <svg {...base(className)}>
+    <path d="M7 4h10a2 2 0 0 1 2 2v11a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3V6a2 2 0 0 1 2-2Z" />
+    <path d="M9 8.5h6M9 12h6M9 15.5h3.5" />
+  </svg>
+);
+
+export const IconBrain = ({ className }: P) => (
+  <svg {...base(className)}>
+    <path d="M12 5.5a2.5 2.5 0 0 0-4.7-1.2A2.6 2.6 0 0 0 4.6 7 2.6 2.6 0 0 0 4 11.4a2.6 2.6 0 0 0 1.2 3.9A2.5 2.5 0 0 0 9.5 19a2.5 2.5 0 0 0 2.5-1.6Z" />
+    <path d="M12 5.5a2.5 2.5 0 0 1 4.7-1.2A2.6 2.6 0 0 1 19.4 7 2.6 2.6 0 0 1 20 11.4a2.6 2.6 0 0 1-1.2 3.9A2.5 2.5 0 0 1 14.5 19a2.5 2.5 0 0 1-2.5-1.6Z" />
+    <path d="M12 5.5v11.9" />
+  </svg>
+);
+
+export const IconCalendar = ({ className }: P) => (
+  <svg {...base(className)}>
+    <rect x="3.5" y="5" width="17" height="15" rx="2.5" />
+    <path d="M3.5 9.5h17M8 3.2v3.4M16 3.2v3.4" />
+    <path d="M7.6 13.4h2M11 13.4h2M14.4 13.4h2M7.6 16.6h2M11 16.6h2" />
+  </svg>
+);
+
+export const IconFlag = ({ className }: P) => (
+  <svg {...base(className)}>
+    <path d="M5.5 21V3.5" />
+    <path d="M5.5 4.6h11.2l-1.8 3.6 1.8 3.6H5.5" />
+  </svg>
+);
+
+export const IconUser = ({ className }: P) => (
+  <svg {...base(className)}>
+    <circle cx="12" cy="8.2" r="3.6" />
+    <path d="M4.8 20a7.4 7.4 0 0 1 14.4 0" />
+  </svg>
+);
+
+export const IconShield = ({ className }: P) => (
+  <svg {...base(className)}>
+    <path d="M12 3.2 5 5.9v5.3c0 4.3 2.9 8.1 7 9.6 4.1-1.5 7-5.3 7-9.6V5.9Z" />
+    <path d="m9.2 11.9 2 2 3.6-3.9" />
+  </svg>
+);
+
+export const IconCloud = ({ className }: P) => (
+  <svg {...base(className)}>
+    <path d="M7.2 18.5A4.2 4.2 0 0 1 7 10.1a5.2 5.2 0 0 1 9.9-1.3 3.9 3.9 0 0 1 .4 7.7Z" />
+    <path d="M12 11.5v6M9.6 15.1 12 17.5l2.4-2.4" />
+  </svg>
+);
+
+export const IconYacht = ({ className }: P) => (
+  <svg {...base(className)}>
+    <path d="M3 17.4h18l-2.2 3.2H5.2Z" />
+    <path d="M5.4 17.4V12h11.2l2.2 5.4" />
+    <path d="M8.4 12V8.6h5.4V12" />
+    <path d="M11.1 8.6V4.4" />
+  </svg>
+);
+
+export const IconSun = ({ className }: P) => (
+  <svg {...base(className)}>
+    <circle cx="12" cy="12" r="4.2" />
+    <path d="M12 2.6v2.2M12 19.2v2.2M4.2 12H2M22 12h-2.2M6.5 6.5 4.9 4.9M19.1 19.1l-1.6-1.6M17.5 6.5l1.6-1.6M4.9 19.1l1.6-1.6" />
+  </svg>
+);
+
+export const IconMoon = ({ className }: P) => (
+  <svg {...base(className)}>
+    <path d="M20.2 14.2A8.4 8.4 0 0 1 9.8 3.8a8.4 8.4 0 1 0 10.4 10.4Z" />
+  </svg>
+);
+
+export const IconDroplet = ({ className }: P) => (
+  <svg {...base(className)}>
+    <path d="M12 3.2c3 3.6 5.6 6.6 5.6 9.5A5.6 5.6 0 0 1 6.4 12.7c0-2.9 2.6-5.9 5.6-9.5Z" />
+  </svg>
+);
+
+export const IconSliders = ({ className }: P) => (
+  <svg {...base(className)}>
+    <path d="M4 7.5h9M17.5 7.5H20M4 16.5h3.5M12 16.5h8" />
+    <circle cx="15" cy="7.5" r="2.2" />
+    <circle cx="9.5" cy="16.5" r="2.2" />
+  </svg>
+);

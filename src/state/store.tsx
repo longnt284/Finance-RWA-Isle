@@ -5,6 +5,7 @@ import type { Currency } from "../lib/format";
 import { makeT } from "../lib/i18n";
 import type { Lang, TFn } from "../lib/i18n";
 import { DEFAULT_WATCH } from "../lib/market";
+import type { Season, WeatherId } from "../lib/season";
 
 /* ============================== Types ============================== */
 
@@ -52,7 +53,7 @@ export interface Snapshot {
   v: number;
 }
 
-export type LogKind = "xp" | "level" | "goal" | "milestone" | "system" | "event" | "ach";
+export type LogKind = "xp" | "level" | "goal" | "milestone" | "system" | "event" | "ach" | "exam" | "quest";
 
 export interface LogEntry {
   id: string;
@@ -69,6 +70,36 @@ export interface Toast {
   kind: "gold" | "jade" | "info";
 }
 
+export type YachtTier = 1 | 2 | 3 | 4 | 5;
+export type IslandTheme = "emerald" | "sunset" | "lagoon" | "violet";
+export type QualityMode = "auto" | "high" | "balanced";
+
+/** Cấu hình thế giới: để `auto` thì mùa và thời tiết bám theo đồng hồ thật. */
+export interface WorldPrefs {
+  mode: "auto" | "manual";
+  season: Season;
+  weather: WeatherId;
+  quality: QualityMode;
+  /** cho phép tắt hiệu ứng hạt trên máy yếu */
+  effects: boolean;
+}
+
+/** Thông tin tài khoản đám mây. Không bao giờ chứa mật khẩu hay token. */
+export interface AccountInfo {
+  id: string;
+  email: string;
+  displayName: string;
+  syncedAt: number;
+}
+
+/** Tiến độ nhiệm vụ hằng ngày, làm mới mỗi 0h theo giờ máy người dùng. */
+export interface DailyQuestState {
+  day: string;
+  ids: string[];
+  progress: Record<string, number>;
+  claimed: string[];
+}
+
 export interface State {
   city: string;
   focus: DistrictId;
@@ -76,6 +107,11 @@ export interface State {
   lang: Lang;
   currency: Currency;
   xp: Record<DistrictId, number>;
+  /** Cấp đã được cấp chứng nhận qua bài khảo thí — đây mới là cấp có hiệu lực. */
+  certified: Record<DistrictId, number>;
+  /** Số lần đã thi ở mỗi lĩnh vực; dùng làm hạt giống để mỗi lần thi ra đề khác. */
+  examAttempts: Record<DistrictId, number>;
+  examsPassed: number;
   goals: Goal[];
   tasks: Task[];
   notes: Note[];
@@ -86,12 +122,20 @@ export interface State {
   lastVisit: string;
   lastClaim: string;
   claims: number;
+  /** Vị trí trong chu kỳ điểm danh 7 ngày (0..6). */
+  checkinDay: number;
+  quests: DailyQuestState;
   events: number;
   totalTasksDone: number;
   visits: string[];
   watchlist: string[];
   isleDecor: Record<DistrictId, string[]>;
   isleTheme: Record<DistrictId, IslandTheme>;
+  yachtTier: YachtTier;
+  world: WorldPrefs;
+  account: AccountInfo | null;
+  /** Người dùng đã đọc và đồng ý cam kết riêng tư trước khi tạo tài khoản. */
+  privacyAccepted: boolean;
   tutorialSeen: boolean;
   toasts: Toast[];
 }
@@ -114,10 +158,14 @@ export function dBuilding(t: TFn, d: DistrictId): string {
   return t(`d.${d}.building`);
 }
 
-/* Cấp 0 → 10. Kiến trúc hiển thị tối đa bậc 5, cấp số vẫn tăng tiếp. */
-export const LEVEL_XP = [0, 60, 200, 450, 850, 1450, 2300, 3500, 5000, 7000, 9500];
-export const MAX_LEVEL = 10;
-export const VISUAL_MAX = 5;
+/**
+ * Cấp 0 → 15. Khoảng cách giữa các cấp giãn dần: 60 XP cho cấp 1 nhưng 8.400 XP
+ * cho cấp 15, nên hành trình cuối đòi hỏi kỷ luật thật chứ không cày vặt được.
+ */
+export const LEVEL_XP = [0, 60, 200, 450, 850, 1450, 2300, 3500, 5000, 7000, 9500, 12800, 17000, 22400, 29200, 37600];
+export const MAX_LEVEL = 15;
+/** Kiến trúc trong thế giới 3D thay đổi tới bậc 8; cấp cao hơn tiếp tục cộng chỉ số. */
+export const VISUAL_MAX = 8;
 export const ISLE_UNLOCK_LV = 8;
 export const ISLE_UNLOCK_LEVELS: Record<DistrictId, number> = {
   crypto: ISLE_UNLOCK_LV,
@@ -125,8 +173,8 @@ export const ISLE_UNLOCK_LEVELS: Record<DistrictId, number> = {
   vault: 6,
   academy: 5,
 };
-export const DAILY_XP = 30;
-export type IslandTheme = "emerald" | "sunset" | "lagoon" | "violet";
+/** Cấp 1 được trao tự động; từ cấp 2 trở đi mỗi lần thăng cấp phải qua khảo thí. */
+export const EXAM_FREE_LEVEL = 1;
 
 export function levelFor(xp: number): number {
   let lv = 0;
@@ -147,6 +195,140 @@ export function xpMult(streak: number): number {
   return 1 + Math.min(10, Math.max(0, streak)) * 0.05;
 }
 
+/**
+ * Cấp đang chờ khảo thí ở một lĩnh vực, hoặc `null` nếu chưa đủ XP.
+ * Đây là điều kiện hiển thị nút "Vào phòng khảo thí".
+ */
+export function pendingExamLevel(state: State, district: DistrictId): number | null {
+  const eligible = levelFor(state.xp[district]);
+  const certified = state.certified[district];
+  return eligible > certified ? certified + 1 : null;
+}
+
+export function totalLevels(state: State): number {
+  return DISTRICT_IDS.reduce((sum, d) => sum + state.certified[d], 0);
+}
+
+/* ============================== Du thuyền ============================== */
+
+export const MAX_YACHT_TIER: YachtTier = 5;
+export const YACHT_TIERS: YachtTier[] = [1, 2, 3, 4, 5];
+/** Tổng cấp của cả bốn lĩnh vực cần đạt để mở khoá từng hạng du thuyền. */
+export const YACHT_REQUIREMENT: Record<YachtTier, number> = { 1: 0, 2: 10, 3: 20, 4: 34, 5: 48 };
+
+export function yachtTierFor(levels: number): YachtTier {
+  let tier: YachtTier = 1;
+  for (const candidate of YACHT_TIERS) if (levels >= YACHT_REQUIREMENT[candidate]) tier = candidate;
+  return tier;
+}
+
+/** Hạng cao nhất người chơi đủ điều kiện nâng lên ngay lúc này. */
+export function availableYachtTier(state: State): YachtTier {
+  return yachtTierFor(totalLevels(state));
+}
+
+/* ============================== Điểm danh ============================== */
+
+/** Phần thưởng chu kỳ 7 ngày; ngày thứ bảy là mốc lớn để giữ chân. */
+export const CHECKIN_REWARDS = [30, 40, 55, 70, 90, 115, 180];
+export const CHECKIN_CYCLE = CHECKIN_REWARDS.length;
+/** Giữ tên cũ cho các chuỗi dịch và tài liệu tham chiếu tới quà ngày đầu. */
+export const DAILY_XP = CHECKIN_REWARDS[0];
+
+export function checkinReward(day: number): number {
+  return CHECKIN_REWARDS[Math.max(0, Math.min(CHECKIN_CYCLE - 1, day))];
+}
+
+/**
+ * Ô trong chu kỳ mà lần điểm danh tới sẽ rơi vào — hoặc ô vừa nhận nếu hôm nay
+ * đã điểm danh rồi. Dùng chung cho HUD, bảng điểm danh và reducer để ba nơi
+ * không bao giờ hiển thị lệch nhau khi người chơi bỏ lỡ một ngày.
+ */
+export function checkinIndex(state: State, now: number = Date.now()): number {
+  if (state.lastClaim === dayKey(now)) return state.checkinDay;
+  const continued = state.lastClaim === dayKey(now - 86400000);
+  return continued ? (state.checkinDay + 1) % CHECKIN_CYCLE : 0;
+}
+
+/* ============================== Nhiệm vụ ngày ============================== */
+
+export type QuestMetric = "task" | "quick" | "goal" | "networth" | "watch" | "note" | "visit" | "exam" | "voyage" | "decor";
+
+export interface QuestDef {
+  id: string;
+  metric: QuestMetric;
+  target: number;
+  xp: number;
+}
+
+export const QUEST_DEFS: QuestDef[] = [
+  { id: "q_task3", metric: "task", target: 3, xp: 45 },
+  { id: "q_task5", metric: "task", target: 5, xp: 75 },
+  { id: "q_quick2", metric: "quick", target: 2, xp: 35 },
+  { id: "q_goal1", metric: "goal", target: 1, xp: 40 },
+  { id: "q_networth", metric: "networth", target: 1, xp: 35 },
+  { id: "q_watch1", metric: "watch", target: 1, xp: 25 },
+  { id: "q_note1", metric: "note", target: 1, xp: 30 },
+  { id: "q_visit3", metric: "visit", target: 3, xp: 35 },
+  { id: "q_voyage", metric: "voyage", target: 1, xp: 35 },
+  { id: "q_exam", metric: "exam", target: 1, xp: 90 },
+  { id: "q_decor", metric: "decor", target: 1, xp: 25 },
+];
+
+export const QUEST_BY_ID = new Map(QUEST_DEFS.map((quest) => [quest.id, quest]));
+export const QUESTS_PER_DAY = 3;
+
+function dayHash(day: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < day.length; i++) {
+    h ^= day.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+/** Ba nhiệm vụ cố định trong ngày — cùng một ngày luôn ra cùng bộ. */
+export function questsForDay(day: string): string[] {
+  const pool = QUEST_DEFS.map((quest) => quest.id);
+  const seed = dayHash(day);
+  const picked: string[] = [];
+  for (let i = 0; i < QUESTS_PER_DAY && pool.length; i++) {
+    const index = (seed >>> (i * 5)) % pool.length;
+    picked.push(pool.splice(index, 1)[0]);
+  }
+  return picked;
+}
+
+function emptyQuests(day: string): DailyQuestState {
+  return { day, ids: questsForDay(day), progress: {}, claimed: [] };
+}
+
+export function questDone(state: State, id: string): boolean {
+  const def = QUEST_BY_ID.get(id);
+  if (!def) return false;
+  return (state.quests.progress[id] ?? 0) >= def.target;
+}
+
+export function questClaimable(state: State, id: string): boolean {
+  return questDone(state, id) && !state.quests.claimed.includes(id);
+}
+
+/** Cộng tiến độ cho mọi nhiệm vụ hôm nay đang đo cùng một chỉ số. */
+function bumpQuests(quests: DailyQuestState, metric: QuestMetric, amount = 1): DailyQuestState {
+  let changed = false;
+  const progress = { ...quests.progress };
+  for (const id of quests.ids) {
+    const def = QUEST_BY_ID.get(id);
+    if (!def || def.metric !== metric) continue;
+    const next = Math.min(def.target, (progress[id] ?? 0) + amount);
+    if (next !== (progress[id] ?? 0)) {
+      progress[id] = next;
+      changed = true;
+    }
+  }
+  return changed ? { ...quests, progress } : quests;
+}
+
 /* ============================== Achievements ============================== */
 
 export type AchTier = "easy" | "mid" | "hard";
@@ -165,20 +347,26 @@ export const ACH_DEFS: AchDef[] = [
   { id: "a4", tier: "mid", reward: 60, done: (s) => s.totalTasksDone >= 10 },
   { id: "a5", tier: "mid", reward: 60, done: (s) => s.claims >= 5 },
   { id: "a6", tier: "mid", reward: 60, done: (s) => s.watchlist.length >= 5 },
-  { id: "a7", tier: "mid", reward: 70, done: (s) => DISTRICT_IDS.filter((d) => levelFor(s.xp[d]) >= 3).length >= 2 },
-  { id: "a8", tier: "hard", reward: 150, done: (s) => levelFor(s.xp.crypto) >= 5 },
+  { id: "a7", tier: "mid", reward: 70, done: (s) => DISTRICT_IDS.filter((d) => s.certified[d] >= 3).length >= 2 },
+  { id: "a8", tier: "hard", reward: 150, done: (s) => s.certified.crypto >= 5 },
   { id: "a9", tier: "hard", reward: 150, done: (s) => (s.snapshots.length ? s.snapshots[s.snapshots.length - 1].v >= 5e8 : false) },
   { id: "a10", tier: "hard", reward: 120, done: (s) => s.streak >= 7 },
-  { id: "a11", tier: "hard", reward: 250, done: (s) => levelFor(s.xp.crypto) >= ISLE_UNLOCK_LV },
-  { id: "a12", tier: "hard", reward: 150, done: (s) => levelFor(s.xp.academy) >= 5 },
+  { id: "a11", tier: "hard", reward: 250, done: (s) => s.certified.crypto >= ISLE_UNLOCK_LV },
+  { id: "a12", tier: "hard", reward: 150, done: (s) => s.certified.academy >= 5 },
   { id: "a13", tier: "hard", reward: 200, done: (s) => DISTRICT_IDS.reduce((sum, d) => sum + s.xp[d], 0) >= 3000 },
   { id: "a14", tier: "mid", reward: 50, done: (s) => s.events >= 5 },
+  { id: "a15", tier: "easy", reward: 30, done: (s) => s.examsPassed >= 1 },
+  { id: "a16", tier: "mid", reward: 80, done: (s) => s.examsPassed >= 10 },
+  { id: "a17", tier: "hard", reward: 220, done: (s) => s.yachtTier >= 4 },
+  { id: "a18", tier: "hard", reward: 320, done: (s) => s.yachtTier >= MAX_YACHT_TIER },
+  { id: "a19", tier: "hard", reward: 400, done: (s) => DISTRICT_IDS.some((d) => s.certified[d] >= MAX_LEVEL) },
+  { id: "a20", tier: "mid", reward: 70, done: (s) => s.claims >= CHECKIN_CYCLE },
 ];
 
 /* ============================== Actions ============================== */
 
 type Action =
-  | { type: "INIT_STREAK"; today: string; yesterday: string }
+  | { type: "INIT_DAY"; today: string; yesterday: string }
   | { type: "COMPLETE_ONBOARDING"; name: string; focus: DistrictId; demo: boolean }
   | { type: "ADD_GOAL"; goal: Goal }
   | { type: "ADD_TASK"; task: Task }
@@ -197,10 +385,18 @@ type Action =
   | { type: "SET_LANG"; lang: Lang }
   | { type: "SET_CURRENCY"; currency: Currency }
   | { type: "RENAME_CITY"; name: string }
-  | { type: "CLAIM_DAILY"; today: string }
+  | { type: "CLAIM_DAILY"; today: string; yesterday: string }
+  | { type: "CLAIM_QUEST"; id: string }
+  | { type: "EXAM_RESULT"; district: DistrictId; passed: boolean }
+  | { type: "UPGRADE_YACHT" }
+  | { type: "SET_WORLD"; patch: Partial<WorldPrefs> }
+  | { type: "SET_ACCOUNT"; account: AccountInfo | null }
+  | { type: "ACCEPT_PRIVACY" }
+  | { type: "HYDRATE"; state: State }
   | { type: "LOG_EVENT"; text: string }
   | { type: "MARK_TUTORIAL" }
   | { type: "VISIT"; view: string }
+  | { type: "START_VOYAGE" }
   | { type: "PUSH_TOAST"; toast: Toast }
   | { type: "DISMISS_TOAST"; id: string }
   | { type: "RESET_ALL" };
@@ -211,30 +407,38 @@ const GOAL_BONUS_XP = 120;
 const CUSTOM_ACH_XP = 50;
 
 function pushLog(log: LogEntry[], entry: Omit<LogEntry, "id" | "ts">): LogEntry[] {
-  return [{ id: uid(), ts: Date.now(), ...entry }, ...log].slice(0, 50);
+  return [{ id: uid(), ts: Date.now(), ...entry }, ...log].slice(0, 60);
 }
 
 function withToast(toasts: Toast[], t: Omit<Toast, "id">): Toast[] {
   return [...toasts, { id: uid(), ...t }].slice(-4);
 }
 
+/**
+ * Cộng XP. Cấp 1 được trao ngay; từ cấp 2 chỉ mở ra lời mời khảo thí chứ không
+ * tự thăng cấp — người chơi phải trả lời đúng 4/5 câu mới được công nhận.
+ */
 function gainXp(state: State, district: DistrictId, amount: number): State {
   const t = makeT(state.lang);
-  const before = levelFor(state.xp[district]);
   const xp = { ...state.xp, [district]: Math.max(0, state.xp[district] + amount) };
-  const after = levelFor(xp[district]);
+  let certified = state.certified;
   let log = state.log;
   let toasts = state.toasts;
-  if (after > before) {
+
+  const eligible = levelFor(xp[district]);
+  if (eligible >= EXAM_FREE_LEVEL && certified[district] < EXAM_FREE_LEVEL) {
+    certified = { ...certified, [district]: EXAM_FREE_LEVEL };
     const b = dBuilding(t, district);
-    log = pushLog(log, { text: t("log.lvl", { b, n: after }), kind: "level" });
-    toasts = withToast(toasts, { title: t("toast.lvl", { b, n: after }), sub: t("toast.lvlSub"), kind: "gold" });
-    if (district === "crypto" && before < ISLE_UNLOCK_LV && after >= ISLE_UNLOCK_LV) {
-      log = pushLog(log, { text: t("log.isle"), kind: "milestone" });
-      toasts = withToast(toasts, { title: t("toast.isle"), sub: t("toast.isleSub"), kind: "gold" });
-    }
+    log = pushLog(log, { text: t("log.lvl", { b, n: EXAM_FREE_LEVEL }), kind: "level" });
+    toasts = withToast(toasts, { title: t("toast.lvl", { b, n: EXAM_FREE_LEVEL }), sub: t("toast.lvlSub"), kind: "gold" });
+  } else if (eligible > certified[district] && levelFor(state.xp[district]) <= certified[district]) {
+    /* Vừa vượt ngưỡng XP: mời vào phòng khảo thí thay vì thăng cấp thẳng. */
+    const b = dBuilding(t, district);
+    const next = certified[district] + 1;
+    log = pushLog(log, { text: t("log.examReady", { b, n: next }), kind: "exam" });
+    toasts = withToast(toasts, { title: t("toast.examReady", { b }), sub: t("toast.examReadySub", { n: next }), kind: "gold" });
   }
-  return { ...state, xp, log, toasts };
+  return { ...state, xp, certified, log, toasts };
 }
 
 /* ============================== Seeds ============================== */
@@ -251,7 +455,12 @@ function defaultIsleThemes(): Record<DistrictId, IslandTheme> {
   return { crypto: "emerald", stocks: "sunset", vault: "lagoon", academy: "violet" };
 }
 
+function defaultWorld(): WorldPrefs {
+  return { mode: "auto", season: "spring", weather: "clear", quality: "auto", effects: true };
+}
+
 export function freshState(): State {
+  const today = dayKey(Date.now());
   return {
     city: "",
     focus: "crypto",
@@ -259,6 +468,9 @@ export function freshState(): State {
     lang: "vi",
     currency: "VND",
     xp: emptyXp(),
+    certified: emptyXp(),
+    examAttempts: emptyXp(),
+    examsPassed: 0,
     goals: [],
     tasks: [],
     notes: [],
@@ -269,12 +481,18 @@ export function freshState(): State {
     lastVisit: "",
     lastClaim: "",
     claims: 0,
+    checkinDay: 0,
+    quests: emptyQuests(today),
     events: 0,
     totalTasksDone: 0,
     visits: [],
     watchlist: [...DEFAULT_WATCH],
     isleDecor: emptyIsleDecor(),
     isleTheme: defaultIsleThemes(),
+    yachtTier: 1,
+    world: defaultWorld(),
+    account: null,
+    privacyAccepted: false,
     tutorialSeen: false,
     toasts: [],
   };
@@ -284,8 +502,7 @@ function seedOnboarded(state: State, name: string, focus: DistrictId): State {
   const t = makeT(state.lang);
   const now = Date.now();
   const city = name.trim() || (state.lang === "vi" ? "Đảo Thịnh Vượng" : "Prosperity Isle");
-  const first =
-    state.lang === "vi" ? "Đặt nền móng đầu tiên" : "Lay the first foundation";
+  const first = state.lang === "vi" ? "Đặt nền móng đầu tiên" : "Lay the first foundation";
   let s: State = {
     ...state,
     city,
@@ -308,6 +525,7 @@ function demoState(lang: Lang): State {
   const now = Date.now();
   const D = 86400000;
   const vi = lang === "vi";
+  const xp = { crypto: 9500, stocks: 5000, vault: 3500, academy: 2300 };
   let s: State = {
     ...freshState(),
     lang,
@@ -317,11 +535,16 @@ function demoState(lang: Lang): State {
     lastVisit: dayKey(now),
     lastClaim: dayKey(now),
     claims: 6,
+    checkinDay: 5,
     events: 5,
     streak: 6,
     totalTasksDone: 9,
     visits: ["crypto", "stocks", "vault"],
-    xp: { crypto: 5650, stocks: 3500, vault: 2300, academy: 1450 },
+    xp,
+    /* Bản demo đã qua khảo thí đầy đủ nên hiện ngay kiến trúc bậc cao. */
+    certified: { crypto: levelFor(xp.crypto), stocks: levelFor(xp.stocks), vault: levelFor(xp.vault), academy: levelFor(xp.academy) },
+    examsPassed: 12,
+    yachtTier: 3,
     isleDecor: {
       crypto: ["palms", "neon", "dock"],
       stocks: ["flags", "torch", "dock"],
@@ -371,7 +594,7 @@ function demoState(lang: Lang): State {
     toasts: [{ id: uid(), title: t("toast.welcome"), sub: t("toast.welcomeSub"), kind: "info" }],
   };
   s.log = pushLog(s.log, { text: t("log.isle"), kind: "milestone" });
-  s.log = pushLog(s.log, { text: t("log.lvl", { b: dBuilding(t, "stocks"), n: 2 }), kind: "level" });
+  s.log = pushLog(s.log, { text: t("log.lvl", { b: dBuilding(t, "stocks"), n: levelFor(xp.stocks) }), kind: "level" });
   return s;
 }
 
@@ -380,15 +603,18 @@ function demoState(lang: Lang): State {
 function reducer(state: State, action: Action): State {
   const t = makeT(state.lang);
   switch (action.type) {
-    case "INIT_STREAK": {
-      if (state.lastVisit === action.today || !state.onboarded) return state;
-      const cont = state.lastVisit === action.yesterday;
-      const streak = cont ? state.streak + 1 : 1;
-      let s: State = { ...state, streak, lastVisit: action.today };
+    case "INIT_DAY": {
+      let s = state;
+      /* Bộ nhiệm vụ mới khi sang ngày mới. */
+      if (s.quests.day !== action.today) s = { ...s, quests: emptyQuests(action.today) };
+      if (s.lastVisit === action.today || !s.onboarded) return s;
+      const cont = s.lastVisit === action.yesterday;
+      const streak = cont ? s.streak + 1 : 1;
+      s = { ...s, streak, lastVisit: action.today };
       s = { ...s, log: pushLog(s.log, { text: t("log.streak", { n: streak }), kind: "system" }) };
       if (cont) {
-        s = gainXp(s, state.focus, 20);
-        s = { ...s, log: pushLog(s.log, { text: t("log.streakXp", { x: 20, d: dLabel(t, state.focus) }), kind: "xp", xp: 20 }) };
+        s = gainXp(s, s.focus, 20);
+        s = { ...s, log: pushLog(s.log, { text: t("log.streakXp", { x: 20, d: dLabel(t, s.focus) }), kind: "xp", xp: 20 }) };
         s = { ...s, toasts: withToast(s.toasts, { title: t("toast.streak", { n: streak }), sub: t("toast.streakSub"), kind: "jade" }) };
       }
       return s;
@@ -415,6 +641,7 @@ function reducer(state: State, action: Action): State {
       if (nowDone) {
         s = gainXp(s, task.district, gained);
         s = { ...s, log: pushLog(s.log, { text: t("log.taskDone", { t: task.title, x: gained }), kind: "xp", xp: gained }) };
+        s = { ...s, quests: bumpQuests(s.quests, "task") };
       } else {
         s = gainXp(s, task.district, -gained);
       }
@@ -426,7 +653,7 @@ function reducer(state: State, action: Action): State {
       const current = Math.max(0, Math.min(goal.target, action.current));
       const justDone = current >= goal.target && !goal.done;
       const goals = state.goals.map((g) => (g.id === action.id ? { ...g, current, done: current >= goal.target } : g));
-      let s: State = { ...state, goals };
+      let s: State = { ...state, goals, quests: bumpQuests(state.quests, "goal") };
       if (justDone) {
         s = gainXp(s, goal.district, GOAL_BONUS_XP);
         s = { ...s, log: pushLog(s.log, { text: `${t("toast.goal")} ${goal.title} (+${GOAL_BONUS_XP} XP)`, kind: "goal", xp: GOAL_BONUS_XP }) };
@@ -435,22 +662,26 @@ function reducer(state: State, action: Action): State {
       return s;
     }
     case "LOG_TRADE": {
-      const mult = xpMult(state.streak);
-      const gained = Math.round(action.xp * mult);
+      const gained = Math.round(action.xp * xpMult(state.streak));
       let s = gainXp(state, action.district, gained);
       s = { ...s, log: pushLog(s.log, { text: `${action.label} (+${gained} XP)`, kind: "xp", xp: gained }) };
+      s = { ...s, quests: bumpQuests(s.quests, "quick") };
       return s;
     }
     case "LOG_NETWORTH": {
       const v = Math.max(0, action.value);
       const snapshots = [...state.snapshots, { t: Date.now(), v }].slice(-120);
-      let s: State = { ...state, snapshots };
+      let s: State = { ...state, snapshots, quests: bumpQuests(state.quests, "networth") };
       s = gainXp(s, "vault", NETWORTH_XP);
       s = { ...s, log: pushLog(s.log, { text: t("log.nw"), kind: "milestone" }) };
       return s;
     }
     case "ADD_NOTE":
-      return { ...state, notes: [action.note, ...state.notes].slice(0, 60) };
+      return {
+        ...state,
+        notes: [action.note, ...state.notes].slice(0, 60),
+        quests: bumpQuests(state.quests, "note"),
+      };
     case "DELETE_NOTE":
       return { ...state, notes: state.notes.filter((n) => n.id !== action.id) };
     case "ADD_CUSTOM_ACH":
@@ -467,12 +698,17 @@ function reducer(state: State, action: Action): State {
     }
     case "ADD_WATCH":
       if (state.watchlist.includes(action.id)) return state;
-      return { ...state, watchlist: [...state.watchlist, action.id].slice(0, 24) };
+      return {
+        ...state,
+        watchlist: [...state.watchlist, action.id].slice(0, 40),
+        quests: bumpQuests(state.quests, "watch"),
+      };
     case "REMOVE_WATCH":
       return { ...state, watchlist: state.watchlist.filter((w) => w !== action.id) };
     case "TOGGLE_DECOR":
       return {
         ...state,
+        quests: bumpQuests(state.quests, "decor"),
         isleDecor: {
           ...state.isleDecor,
           [action.district]: state.isleDecor[action.district].includes(action.id)
@@ -490,12 +726,74 @@ function reducer(state: State, action: Action): State {
       return { ...state, city: action.name.trim() || state.city };
     case "CLAIM_DAILY": {
       if (state.lastClaim === action.today) return state;
-      let s: State = { ...state, lastClaim: action.today, claims: state.claims + 1 };
-      s = gainXp(s, s.focus, DAILY_XP);
-      s = { ...s, log: pushLog(s.log, { text: t("log.daily", { d: dLabel(t, s.focus) }), kind: "xp", xp: DAILY_XP }) };
-      s = { ...s, toasts: withToast(s.toasts, { title: t("toast.daily"), sub: t("toast.dailySub", { d: dLabel(t, s.focus) }), kind: "jade" }) };
+      /* Điểm danh liên tục thì tiến trong chu kỳ; đứt một ngày là quay về mốc đầu. */
+      const continued = state.lastClaim === action.yesterday;
+      const checkinDay = continued ? (state.checkinDay + 1) % CHECKIN_CYCLE : 0;
+      /* `checkinIndex` phải dự đoán ra đúng con số này, nếu không HUD hứa một
+         phần thưởng còn reducer trao một phần thưởng khác. */
+      const reward = Math.round(checkinReward(checkinDay) * xpMult(state.streak));
+      let s: State = { ...state, lastClaim: action.today, claims: state.claims + 1, checkinDay };
+      s = gainXp(s, s.focus, reward);
+      s = { ...s, log: pushLog(s.log, { text: t("log.daily", { d: dLabel(t, s.focus), x: reward }), kind: "xp", xp: reward }) };
+      s = {
+        ...s,
+        toasts: withToast(s.toasts, {
+          title: t("toast.daily", { n: checkinDay + 1 }),
+          sub: t("toast.dailySub", { x: reward, d: dLabel(t, s.focus) }),
+          kind: "jade",
+        }),
+      };
       return s;
     }
+    case "CLAIM_QUEST": {
+      const def = QUEST_BY_ID.get(action.id);
+      if (!def || !questClaimable(state, action.id)) return state;
+      const reward = Math.round(def.xp * xpMult(state.streak));
+      let s: State = { ...state, quests: { ...state.quests, claimed: [...state.quests.claimed, action.id] } };
+      s = gainXp(s, s.focus, reward);
+      s = { ...s, log: pushLog(s.log, { text: t("log.quest", { q: t(`quest.${def.id}.n`), x: reward }), kind: "quest", xp: reward }) };
+      s = { ...s, toasts: withToast(s.toasts, { title: t("toast.quest"), sub: `${t(`quest.${def.id}.n`)} · +${reward} XP`, kind: "jade" }) };
+      return s;
+    }
+    case "EXAM_RESULT": {
+      const attempts = { ...state.examAttempts, [action.district]: state.examAttempts[action.district] + 1 };
+      if (!action.passed) return { ...state, examAttempts: attempts };
+      const target = pendingExamLevel(state, action.district);
+      if (target === null) return { ...state, examAttempts: attempts };
+      const certified = { ...state.certified, [action.district]: target };
+      const b = dBuilding(t, action.district);
+      let s: State = {
+        ...state,
+        certified,
+        examAttempts: attempts,
+        examsPassed: state.examsPassed + 1,
+        quests: bumpQuests(state.quests, "exam"),
+      };
+      s = { ...s, log: pushLog(s.log, { text: t("log.lvl", { b, n: target }), kind: "level" }) };
+      s = { ...s, toasts: withToast(s.toasts, { title: t("toast.lvl", { b, n: target }), sub: t("toast.lvlSub"), kind: "gold" }) };
+      if (action.district === "crypto" && target >= ISLE_UNLOCK_LV && state.certified.crypto < ISLE_UNLOCK_LV) {
+        s = { ...s, log: pushLog(s.log, { text: t("log.isle"), kind: "milestone" }) };
+        s = { ...s, toasts: withToast(s.toasts, { title: t("toast.isle"), sub: t("toast.isleSub"), kind: "gold" }) };
+      }
+      return s;
+    }
+    case "UPGRADE_YACHT": {
+      const available = availableYachtTier(state);
+      if (available <= state.yachtTier || state.yachtTier >= MAX_YACHT_TIER) return state;
+      const yachtTier = (state.yachtTier + 1) as YachtTier;
+      let s: State = { ...state, yachtTier };
+      s = { ...s, log: pushLog(s.log, { text: t("log.yacht", { n: yachtTier }), kind: "milestone" }) };
+      s = { ...s, toasts: withToast(s.toasts, { title: t("toast.yacht"), sub: t(`yacht.tier${yachtTier}`), kind: "gold" }) };
+      return s;
+    }
+    case "SET_WORLD":
+      return { ...state, world: { ...state.world, ...action.patch } };
+    case "SET_ACCOUNT":
+      return { ...state, account: action.account };
+    case "ACCEPT_PRIVACY":
+      return { ...state, privacyAccepted: true };
+    case "HYDRATE":
+      return { ...action.state, toasts: state.toasts };
     case "LOG_EVENT": {
       let s: State = { ...state, events: state.events + 1 };
       s = { ...s, log: pushLog(s.log, { text: action.text, kind: "event" }) };
@@ -504,15 +802,20 @@ function reducer(state: State, action: Action): State {
     case "MARK_TUTORIAL":
       return { ...state, tutorialSeen: true };
     case "VISIT": {
-      if (state.visits.includes(action.view)) return state;
-      return { ...state, visits: [...state.visits, action.view] };
+      const quests = DISTRICT_IDS.includes(action.view as DistrictId) && !state.visits.includes(action.view)
+        ? bumpQuests(state.quests, "visit")
+        : state.quests;
+      if (state.visits.includes(action.view)) return { ...state, quests };
+      return { ...state, visits: [...state.visits, action.view], quests };
     }
+    case "START_VOYAGE":
+      return { ...state, quests: bumpQuests(state.quests, "voyage") };
     case "PUSH_TOAST":
       return { ...state, toasts: withToast(state.toasts, action.toast) };
     case "DISMISS_TOAST":
       return { ...state, toasts: state.toasts.filter((x) => x.id !== action.id) };
     case "RESET_ALL":
-      return { ...freshState(), lang: state.lang, currency: state.currency };
+      return { ...freshState(), lang: state.lang, currency: state.currency, world: state.world };
     default:
       return state;
   }
@@ -540,9 +843,17 @@ export interface StoreApi {
   setCurrency(c: Currency): void;
   renameCity(name: string): void;
   claimDaily(): void;
+  claimQuest(id: string): void;
+  submitExam(district: DistrictId, passed: boolean): void;
+  upgradeYacht(): void;
+  setWorld(patch: Partial<WorldPrefs>): void;
+  setAccount(account: AccountInfo | null): void;
+  acceptPrivacy(): void;
+  hydrate(state: State): void;
   logEvent(text: string): void;
   markTutorial(): void;
   visit(view: string): void;
+  startVoyage(): void;
   pushToast(t: Omit<Toast, "id">): void;
   dismissToast(id: string): void;
   resetAll(): void;
@@ -550,56 +861,134 @@ export interface StoreApi {
 
 const StoreCtx = createContext<{ state: State; api: StoreApi } | null>(null);
 
-const STORAGE_KEY = "vuong-state-v2";
+const STORAGE_KEY = "vuong-state-v3";
+const LEGACY_KEY = "vuong-state-v2";
+
+function pickRecord<T>(source: unknown, fallback: Record<DistrictId, T>, guard: (value: unknown) => value is T): Record<DistrictId, T> {
+  const table = source && typeof source === "object" && !Array.isArray(source) ? (source as Partial<Record<DistrictId, unknown>>) : {};
+  return Object.fromEntries(
+    DISTRICT_IDS.map((district) => {
+      const candidate = table[district];
+      return [district, guard(candidate) ? candidate : fallback[district]];
+    })
+  ) as Record<DistrictId, T>;
+}
+
+const isNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+
+/**
+ * Nạp bản lưu và chuẩn hoá về hình dạng hiện hành. Bản v2 cũ được ân xá:
+ * mọi cấp đã đạt trước khi có cơ chế khảo thí đều được công nhận luôn.
+ */
+export function normalizeSave(raw: unknown, legacy: boolean): State | null {
+  if (!raw || typeof raw !== "object") return null;
+  const parsed = raw as Partial<State> & Record<string, unknown>;
+  if (!parsed.xp) return null;
+  const fresh = freshState();
+
+  const xp = pickRecord(parsed.xp, fresh.xp, isNumber);
+  const certified = legacy
+    ? (Object.fromEntries(DISTRICT_IDS.map((d) => [d, levelFor(xp[d])])) as Record<DistrictId, number>)
+    : pickRecord(parsed.certified, fresh.certified, isNumber);
+  for (const district of DISTRICT_IDS) {
+    certified[district] = Math.max(0, Math.min(levelFor(xp[district]), Math.round(certified[district])));
+  }
+
+  const legacyDecor = parsed.isleDecor as unknown;
+  const decorSource = legacyDecor && typeof legacyDecor === "object" && !Array.isArray(legacyDecor)
+    ? (legacyDecor as Partial<Record<DistrictId, unknown>>)
+    : {};
+  const isleDecor = Object.fromEntries(
+    DISTRICT_IDS.map((district) => {
+      const candidate = Array.isArray(legacyDecor) && district === "crypto" ? legacyDecor : decorSource[district];
+      return [district, Array.isArray(candidate) ? candidate.filter((id): id is string => typeof id === "string") : []];
+    })
+  ) as Record<DistrictId, string[]>;
+
+  const validThemes: IslandTheme[] = ["emerald", "sunset", "lagoon", "violet"];
+  const isleTheme = pickRecord(parsed.isleTheme, fresh.isleTheme, (value): value is IslandTheme =>
+    validThemes.includes(value as IslandTheme)
+  );
+
+  const today = dayKey(Date.now());
+  const savedQuests = parsed.quests as DailyQuestState | undefined;
+  const quests: DailyQuestState =
+    savedQuests && savedQuests.day === today && Array.isArray(savedQuests.ids)
+      ? {
+          day: today,
+          ids: savedQuests.ids.filter((id) => QUEST_BY_ID.has(id)),
+          progress: savedQuests.progress ?? {},
+          claimed: Array.isArray(savedQuests.claimed) ? savedQuests.claimed : [],
+        }
+      : emptyQuests(today);
+
+  const world: WorldPrefs = { ...fresh.world, ...(parsed.world as Partial<WorldPrefs> | undefined) };
+  const rawTier = Math.round(Number(parsed.yachtTier ?? 1));
+  const yachtTier = (Number.isFinite(rawTier) ? Math.max(1, Math.min(MAX_YACHT_TIER, rawTier)) : 1) as YachtTier;
+
+  return {
+    ...fresh,
+    ...parsed,
+    xp,
+    certified,
+    examAttempts: pickRecord(parsed.examAttempts, fresh.examAttempts, isNumber),
+    examsPassed: isNumber(parsed.examsPassed) ? parsed.examsPassed : 0,
+    checkinDay: isNumber(parsed.checkinDay) ? Math.max(0, Math.min(CHECKIN_CYCLE - 1, parsed.checkinDay)) : 0,
+    quests,
+    isleDecor,
+    isleTheme,
+    yachtTier,
+    world,
+    account: (parsed.account as AccountInfo | null | undefined) ?? null,
+    privacyAccepted: parsed.privacyAccepted === true,
+    toasts: [],
+  };
+}
 
 function loadInitial(): State {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return freshState();
-    const parsed = JSON.parse(raw) as Partial<State> & { isleDecor?: unknown; isleTheme?: unknown };
-    if (!parsed || typeof parsed !== "object" || !parsed.xp) return freshState();
-    const fresh = freshState();
-    const legacyDecor = parsed.isleDecor;
-    const decorSource = legacyDecor && typeof legacyDecor === "object" && !Array.isArray(legacyDecor)
-      ? (legacyDecor as Partial<Record<DistrictId, unknown>>)
-      : {};
-    const isleDecor = Object.fromEntries(
-      DISTRICT_IDS.map((district) => {
-        const candidate = Array.isArray(legacyDecor) && district === "crypto" ? legacyDecor : decorSource[district];
-        return [district, Array.isArray(candidate) ? candidate.filter((id): id is string => typeof id === "string") : []];
-      })
-    ) as Record<DistrictId, string[]>;
-    const themeSource = parsed.isleTheme && typeof parsed.isleTheme === "object"
-      ? (parsed.isleTheme as Partial<Record<DistrictId, unknown>>)
-      : {};
-    const validThemes: IslandTheme[] = ["emerald", "sunset", "lagoon", "violet"];
-    const isleTheme = Object.fromEntries(
-      DISTRICT_IDS.map((district) => {
-        const candidate = themeSource[district];
-        return [district, validThemes.includes(candidate as IslandTheme) ? candidate : fresh.isleTheme[district]];
-      })
-    ) as Record<DistrictId, IslandTheme>;
-    return { ...fresh, ...parsed, isleDecor, isleTheme, toasts: [] };
+    const current = localStorage.getItem(STORAGE_KEY);
+    if (current) {
+      const restored = normalizeSave(JSON.parse(current), false);
+      if (restored) return restored;
+    }
+    const legacy = localStorage.getItem(LEGACY_KEY);
+    if (legacy) {
+      const migrated = normalizeSave(JSON.parse(legacy), true);
+      if (migrated) return migrated;
+    }
   } catch {
-    return freshState();
+    /* Bản lưu hỏng thì bắt đầu lại chứ không để màn hình trắng. */
   }
+  return freshState();
+}
+
+/** Payload đồng bộ lên đám mây — bỏ toast vì đó là trạng thái tức thời. */
+export function serializeSave(state: State): Omit<State, "toasts"> {
+  const { toasts: _toasts, ...rest } = state;
+  return rest;
 }
 
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, undefined, loadInitial);
 
   useEffect(() => {
-    const { toasts: _t, ...persist } = state;
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(persist));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(serializeSave(state)));
     } catch {
-      /* ignore */
+      /* Hết dung lượng hoặc chế độ riêng tư: bỏ qua, phiên vẫn chạy bình thường. */
     }
   }, [state]);
 
   useEffect(() => {
-    const now = Date.now();
-    dispatch({ type: "INIT_STREAK", today: dayKey(now), yesterday: dayKey(now - 86400000) });
+    const roll = () => {
+      const now = Date.now();
+      dispatch({ type: "INIT_DAY", today: dayKey(now), yesterday: dayKey(now - 86400000) });
+    };
+    roll();
+    /* Kiểm tra mỗi phút để phiên mở qua nửa đêm vẫn nhận nhiệm vụ ngày mới. */
+    const timer = window.setInterval(roll, 60_000);
+    return () => window.clearInterval(timer);
   }, []);
 
   const api = useMemo<StoreApi>(
@@ -627,14 +1016,26 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setLang: (lang) => dispatch({ type: "SET_LANG", lang }),
       setCurrency: (currency) => dispatch({ type: "SET_CURRENCY", currency }),
       renameCity: (name) => dispatch({ type: "RENAME_CITY", name }),
-      claimDaily: () => dispatch({ type: "CLAIM_DAILY", today: dayKey(Date.now()) }),
+      claimDaily: () => {
+        const now = Date.now();
+        dispatch({ type: "CLAIM_DAILY", today: dayKey(now), yesterday: dayKey(now - 86400000) });
+      },
+      claimQuest: (id) => dispatch({ type: "CLAIM_QUEST", id }),
+      submitExam: (district, passed) => dispatch({ type: "EXAM_RESULT", district, passed }),
+      upgradeYacht: () => dispatch({ type: "UPGRADE_YACHT" }),
+      setWorld: (patch) => dispatch({ type: "SET_WORLD", patch }),
+      setAccount: (account) => dispatch({ type: "SET_ACCOUNT", account }),
+      acceptPrivacy: () => dispatch({ type: "ACCEPT_PRIVACY" }),
+      hydrate: (next) => dispatch({ type: "HYDRATE", state: next }),
       logEvent: (text) => dispatch({ type: "LOG_EVENT", text }),
       markTutorial: () => dispatch({ type: "MARK_TUTORIAL" }),
       visit: (view) => dispatch({ type: "VISIT", view }),
+      startVoyage: () => dispatch({ type: "START_VOYAGE" }),
       pushToast: (toast) => dispatch({ type: "PUSH_TOAST", toast: { ...toast, id: uid() } }),
       dismissToast: (id) => dispatch({ type: "DISMISS_TOAST", id }),
       resetAll: () => {
         localStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem(LEGACY_KEY);
         dispatch({ type: "RESET_ALL" });
       },
     }),
@@ -650,9 +1051,10 @@ export function useStore() {
   return ctx;
 }
 
+/** Cấp có hiệu lực của từng lĩnh vực — đã tính cả cơ chế khảo thí. */
 export function districtLevels(state: State): Record<DistrictId, number> {
   const out = {} as Record<DistrictId, number>;
-  for (const d of DISTRICT_IDS) out[d] = levelFor(state.xp[d]);
+  for (const d of DISTRICT_IDS) out[d] = state.certified[d];
   return out;
 }
 

@@ -282,7 +282,7 @@ export function OnboardingModal({ open, onClose }: { open: boolean; onClose: () 
 
 /* ============================ TUTORIAL ============================ */
 
-const STEPS = 6;
+const STEPS = 8;
 
 export function TutorialOverlay({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { state, api } = useStore();

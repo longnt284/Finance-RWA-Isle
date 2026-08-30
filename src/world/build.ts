@@ -1,4 +1,7 @@
 import * as THREE from "three";
+import { ISLAND_RADIUS } from "./ocean";
+import { DECOR_IDS } from "../lib/decor";
+import type { DecorId } from "../lib/decor";
 
 /* ------------------------------------------------------------------ */
 /* Layout constants                                                    */
@@ -14,7 +17,7 @@ export const DISTRICT_POS: Record<string, THREE.Vector3> = {
   center: new THREE.Vector3(0, 0, 0),
 };
 
-export const ISLAND_RADIUS = 26;
+export { ISLAND_RADIUS };
 
 /* ------------------------------------------------------------------ */
 /* Shared materials                                                    */
@@ -196,6 +199,53 @@ export function buildSpire(level: number, m: Mats, ticks: TickFn[]): THREE.Group
       g.add(spike);
     }
   }
+  if (level >= 6) {
+    /* bia rune lơ lửng quanh thân tháp */
+    const tablets = new THREE.Group();
+    for (let i = 0; i < 5; i++) {
+      const tablet = box(0.42, 0.66, 0.06, m.glowCyan);
+      const a = (i / 5) * Math.PI * 2;
+      tablet.position.set(Math.cos(a) * 3.0, y * 0.42 + Math.sin(a * 1.7) * 0.5, Math.sin(a) * 3.0);
+      tablet.rotation.y = -a;
+      tablets.add(tablet);
+    }
+    g.add(tablets);
+    ticks.push((t, dt) => {
+      tablets.rotation.y -= dt * 0.35;
+      tablets.position.y = Math.sin(t * 0.8) * 0.22;
+    });
+  }
+  if (level >= 7) {
+    /* cột sáng xuyên qua đỉnh tháp */
+    const shaftMat = new THREE.MeshBasicMaterial({ color: 0x5ce8c4, transparent: true, opacity: 0.07, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending });
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 1.9, 22, 14, 1, true), shaftMat);
+    shaft.position.y = y + 11;
+    g.add(shaft);
+    ticks.push((t) => {
+      shaftMat.opacity = 0.05 + Math.abs(Math.sin(t * 0.7)) * 0.05;
+      shaft.rotation.y = t * 0.12;
+    });
+  }
+  if (level >= 8) {
+    /* vương miện ánh sáng và vệ tinh quay quanh đỉnh */
+    const crown = new THREE.Mesh(new THREE.TorusGeometry(1.25, 0.07, 10, 44), m.goldBright);
+    crown.rotation.x = Math.PI / 2;
+    crown.position.y = y + 1.5;
+    g.add(crown);
+    const satellites = new THREE.Group();
+    satellites.position.y = y + 1.5;
+    for (let i = 0; i < 3; i++) {
+      const shard = new THREE.Mesh(new THREE.OctahedronGeometry(0.22), m.goldBright);
+      const a = (i / 3) * Math.PI * 2;
+      shard.position.set(Math.cos(a) * 1.7, 0, Math.sin(a) * 1.7);
+      satellites.add(shard);
+    }
+    g.add(satellites);
+    ticks.push((t, dt) => {
+      satellites.rotation.y += dt * 1.15;
+      crown.rotation.z = t * 0.5;
+    });
+  }
   castAll(g);
   return g;
 }
@@ -275,11 +325,73 @@ export function buildExchange(level: number, m: Mats, ticks: TickFn[]): THREE.Gr
       statue.rotation.y = t * 0.6;
     });
   }
+  if (level >= 6) {
+    /* bảng điện tử chạy chữ vòng quanh diềm mái */
+    const tapeMat = new THREE.MeshBasicMaterial({ color: 0x4cd99a, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false });
+    const segments: THREE.Mesh[] = [];
+    for (let i = 0; i < 16; i++) {
+      const cell = box(0.2, 0.16, 0.04, tapeMat);
+      cell.position.set(-2.15 + (4.3 / 15) * i, entabY + 0.02, 1.63);
+      segments.push(cell);
+      g.add(cell);
+    }
+    ticks.push((t) => {
+      segments.forEach((cell, i) => {
+        cell.scale.y = 0.5 + Math.abs(Math.sin(t * 2.4 + i * 0.6)) * 1.1;
+      });
+    });
+  }
+  if (level >= 7) {
+    /* hai cánh nhà phụ hai bên, sàn giao dịch mở rộng */
+    for (const side of [-1, 1]) {
+      const wing = box(1.5, colH * 0.72, 2.4, m.white);
+      wing.position.set(side * 3.05, 0.5 + (colH * 0.72) / 2, 0);
+      g.add(wing);
+      const wingRoof = box(1.7, 0.28, 2.6, m.roofTeal);
+      wingRoof.position.set(side * 3.05, 0.5 + colH * 0.72 + 0.14, 0);
+      g.add(wingRoof);
+      const wingWin = box(0.06, colH * 0.4, 1.5, m.glowWarm);
+      wingWin.position.set(side * 3.82, 1.5, 0);
+      g.add(wingWin);
+    }
+  }
+  if (level >= 8) {
+    /* tượng bò vàng — biểu tượng thị trường tăng giá */
+    const bull = new THREE.Group();
+    const bodyMesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.34, 0.68, 4, 10), m.goldBright);
+    bodyMesh.rotation.z = Math.PI / 2;
+    bodyMesh.position.y = 0.62;
+    bull.add(bodyMesh);
+    const headMesh = new THREE.Mesh(new THREE.SphereGeometry(0.27, 10, 8), m.goldBright);
+    headMesh.position.set(0.62, 0.76, 0);
+    bull.add(headMesh);
+    for (const side of [-1, 1]) {
+      const horn = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.34, 6), m.gold);
+      horn.position.set(0.7, 0.98, side * 0.16);
+      horn.rotation.z = -0.5;
+      bull.add(horn);
+      for (const front of [0.34, -0.34]) {
+        const leg = cyl(0.08, 0.09, 0.6, 6, m.goldBright);
+        leg.position.set(front, 0.3, side * 0.2);
+        bull.add(leg);
+      }
+    }
+    bull.position.set(0, 0.5, 3.4);
+    bull.rotation.y = -0.35;
+    bull.scale.setScalar(1.15);
+    g.add(bull);
+    const bullLight = new THREE.PointLight(0xffd88a, 0.8, 9);
+    bullLight.position.set(0, 2.0, 3.4);
+    g.add(bullLight);
+    ticks.push((t) => {
+      bullLight.intensity = 0.65 + Math.sin(t * 1.7) * 0.22;
+    });
+  }
   castAll(g);
   return g;
 }
 
-export function buildVault(level: number, m: Mats): THREE.Group {
+export function buildVault(level: number, m: Mats, ticks: TickFn[]): THREE.Group {
   const g = new THREE.Group();
   const base = box(4.2, 0.5, 3.5, m.stoneDark);
   base.position.y = 0.25;
@@ -353,6 +465,57 @@ export function buildVault(level: number, m: Mats): THREE.Group {
     crown.position.y = 0.5 + bodyH + 0.46;
     g.add(crown);
   }
+  if (level >= 6) {
+    /* bốn tháp canh ở góc, kho báu bắt đầu cần bảo vệ */
+    for (const [x, z] of [[-2.1, -1.7], [2.1, -1.7], [-2.1, 1.7], [2.1, 1.7]] as [number, number][]) {
+      const turret = cyl(0.32, 0.4, 1.5, 6, m.stone);
+      turret.position.set(x, 1.25, z);
+      g.add(turret);
+      const cap = new THREE.Mesh(new THREE.ConeGeometry(0.44, 0.55, 6), m.roofTeal);
+      cap.position.set(x, 2.28, z);
+      g.add(cap);
+      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.09, 6, 5), m.glowWarm);
+      eye.position.set(x, 1.95, z * 1.12);
+      g.add(eye);
+    }
+  }
+  if (level >= 7) {
+    /* lưới laser bảo vệ cửa kho */
+    const laserMat = new THREE.MeshBasicMaterial({ color: 0xff9a6b, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false });
+    const beams: THREE.Mesh[] = [];
+    for (let i = 0; i < 4; i++) {
+      const beam = box(3.6, 0.03, 0.03, laserMat);
+      beam.position.set(0, 0.7 + i * 0.55, 2.05);
+      beams.push(beam);
+      g.add(beam);
+    }
+    ticks.push((t) => {
+      laserMat.opacity = 0.28 + Math.abs(Math.sin(t * 1.9)) * 0.34;
+      beams.forEach((beam, i) => {
+        beam.position.y = 0.7 + i * 0.55 + Math.sin(t * 0.9 + i) * 0.05;
+      });
+    });
+  }
+  if (level >= 8) {
+    /* khối vàng lơ lửng trên nóc — biểu tượng dự trữ đã vượt ngưỡng */
+    const orb = new THREE.Mesh(new THREE.IcosahedronGeometry(0.62, 1), m.goldBright);
+    const orbY = 0.5 + bodyH + 1.7;
+    orb.position.y = orbY;
+    g.add(orb);
+    const halo = new THREE.Mesh(new THREE.TorusGeometry(1.0, 0.05, 8, 40), m.gold);
+    halo.position.y = orbY;
+    halo.rotation.x = Math.PI / 2.6;
+    g.add(halo);
+    const orbLight = new THREE.PointLight(0xffd88a, 1.2, 16);
+    orbLight.position.y = orbY;
+    g.add(orbLight);
+    ticks.push((t, dt) => {
+      orb.rotation.y += dt * 0.55;
+      orb.position.y = orbY + Math.sin(t * 1.3) * 0.18;
+      halo.rotation.z = t * 0.7;
+      orbLight.intensity = 1.0 + Math.sin(t * 2.1) * 0.3;
+    });
+  }
   castAll(g);
   return g;
 }
@@ -423,6 +586,66 @@ export function buildAcademy(level: number, m: Mats, ticks: TickFn[]): THREE.Gro
     ring.position.set(1.5, 0.5 + towerH + 0.35, -0.4);
     ring.rotation.x = Math.PI / 2;
     g.add(ring);
+  }
+  if (level >= 6) {
+    /* kính viễn vọng chĩa lên trời, có động tác quét chậm */
+    const scope = new THREE.Group();
+    const tube = cyl(0.16, 0.2, 1.5, 10, m.stone);
+    tube.rotation.z = -0.6;
+    scope.add(tube);
+    const lens = cyl(0.19, 0.19, 0.1, 12, m.glowBlue);
+    lens.position.set(0.42, 0.62, 0);
+    lens.rotation.z = -0.6;
+    scope.add(lens);
+    const yoke = cyl(0.07, 0.09, 0.6, 6, m.stoneDark);
+    yoke.position.y = -0.5;
+    scope.add(yoke);
+    scope.position.set(1.5, 0.5 + towerH + 0.95, -0.4);
+    g.add(scope);
+    ticks.push((t) => {
+      scope.rotation.y = Math.sin(t * 0.28) * 0.9;
+      scope.children[0].rotation.z = -0.6 + Math.sin(t * 0.4) * 0.18;
+    });
+  }
+  if (level >= 7) {
+    /* gian thư viện nối vào giảng đường */
+    const annex = box(2.0, 1.35, 1.6, m.white);
+    annex.position.set(-2.15, 0.5 + 0.68, 0.9);
+    g.add(annex);
+    const annexRoof = new THREE.Mesh(new THREE.ConeGeometry(1.6, 0.75, 4), m.roofTeal);
+    annexRoof.rotation.y = Math.PI / 4;
+    annexRoof.scale.z = 0.8;
+    annexRoof.position.set(-2.15, 0.5 + 1.35 + 0.37, 0.9);
+    g.add(annexRoof);
+    for (let i = 0; i < 3; i++) {
+      const shelfWin = box(0.06, 0.5, 0.34, m.glowWarm);
+      shelfWin.position.set(-3.16, 1.2, 0.35 + i * 0.55);
+      g.add(shelfWin);
+    }
+  }
+  if (level >= 8) {
+    /* vòng chòm sao trên nóc giảng đường */
+    const constellation = new THREE.Group();
+    constellation.position.set(-0.3, 0.5 + 1.5 + level * 0.1 + 1.9, 0);
+    const starMat = m.glowBlue;
+    const nodes: THREE.Mesh[] = [];
+    for (let i = 0; i < 7; i++) {
+      const node = new THREE.Mesh(new THREE.OctahedronGeometry(0.13), starMat);
+      const a = (i / 7) * Math.PI * 2;
+      node.position.set(Math.cos(a) * 1.5, Math.sin(a * 2.2) * 0.34, Math.sin(a) * 1.5);
+      nodes.push(node);
+      constellation.add(node);
+    }
+    g.add(constellation);
+    const halo = new THREE.PointLight(0x9fd0ff, 0.9, 14);
+    halo.position.copy(constellation.position);
+    g.add(halo);
+    ticks.push((t, dt) => {
+      constellation.rotation.y += dt * 0.3;
+      nodes.forEach((node, i) => {
+        node.scale.setScalar(0.8 + Math.abs(Math.sin(t * 1.6 + i)) * 0.5);
+      });
+    });
   }
   castAll(g);
   return g;
@@ -515,17 +738,37 @@ function segDist2(px: number, pz: number, ax: number, az: number, bx: number, bz
   return Math.sqrt(dx * dx + dz * dz);
 }
 
-export function buildTerrain(): THREE.Mesh {
-  const geo = new THREE.CylinderGeometry(ISLAND_RADIUS, ISLAND_RADIUS - 7, 6, 56, 3);
+export interface TerrainPalette {
+  /** sắc cỏ chính theo mùa */
+  foliage: number;
+  /** sắc cỏ phụ, dùng để tạo vân */
+  foliageAlt: number;
+  /** phủ tuyết 0..1 — chỉ mùa đông mới khác 0 */
+  snow?: number;
+}
+
+/**
+ * Đảo chính. Bãi cát được mở rộng hẳn ra (từ r≈17 thay vì r≈21,5) và bờ hạ
+ * thoải xuống mặt nước để rìa đảo là một đường cong mềm, không phải vách cắt.
+ */
+export function buildTerrain(palette: TerrainPalette): THREE.Mesh {
+  const geo = new THREE.CylinderGeometry(ISLAND_RADIUS, ISLAND_RADIUS - 7, 6, 84, 5);
   const pos = geo.attributes.position as THREE.BufferAttribute;
   const anchors = [DISTRICT_POS.crypto, DISTRICT_POS.stocks, DISTRICT_POS.vault, DISTRICT_POS.academy];
   const colors: number[] = [];
-  const grassA = new THREE.Color(0x2f6b52);
-  const grassB = new THREE.Color(0x4f9068);
-  const sand = new THREE.Color(0x9c8a5e);
+  const grassA = new THREE.Color(palette.foliage);
+  const grassB = new THREE.Color(palette.foliageAlt);
+  const sandDry = new THREE.Color(0xd8c391);
+  const sandWet = new THREE.Color(0xb8a677);
+  const snowCap = new THREE.Color(0xeaf2f5);
   const cliffTop = new THREE.Color(0x4d6063);
   const cliffBot = new THREE.Color(0x2c3f43);
+  const snowAmount = palette.snow ?? 0;
   const c = new THREE.Color();
+
+  /* Bãi cát bắt đầu sớm hơn và trải rộng gấp đôi so với bản trước. */
+  const BEACH_START = 17.0;
+  const SHORE_EDGE = ISLAND_RADIUS - 0.5;
 
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i);
@@ -545,10 +788,26 @@ export function buildTerrain(): THREE.Mesh {
         const pd = segDist2(x, z, 0, 0, a.x, a.z);
         flat *= THREE.MathUtils.smoothstep(pd, 1.1, 2.4);
       }
-      pos.setY(i, 3 + n * 0.4 * flat);
+      /* Vùng ngoài BEACH_START hạ dần xuống sát mực nước, tạo bãi thoải. */
+      const shoreFall = THREE.MathUtils.smoothstep(r, BEACH_START, SHORE_EDGE);
+      const height = 3 + n * 0.4 * flat - shoreFall * 2.35;
+      pos.setY(i, height);
+      /* Cát nở ra phía ngoài để mép đảo tròn đều, mềm mắt hơn. */
+      if (shoreFall > 0) {
+        const widen = 1 + shoreFall * 0.055;
+        pos.setX(i, x * widen);
+        pos.setZ(i, z * widen);
+      }
+
       const mix = n * 0.5 + 0.5;
       c.copy(grassA).lerp(grassB, mix);
-      if (r > 21.5) c.lerp(sand, THREE.MathUtils.smoothstep(r, 21.5, 25.5) * 0.85);
+      const beach = THREE.MathUtils.smoothstep(r, BEACH_START, BEACH_START + 5.2);
+      if (beach > 0) {
+        c.lerp(sandDry, beach * 0.94);
+        const wet = THREE.MathUtils.smoothstep(r, SHORE_EDGE - 2.6, SHORE_EDGE + 0.6);
+        c.lerp(sandWet, wet * 0.6);
+      }
+      if (snowAmount > 0) c.lerp(snowCap, snowAmount * (1 - beach) * (0.35 + mix * 0.4));
       colors.push(c.r, c.g, c.b);
     } else {
       const n = Math.sin(x * 0.5 + z * 0.3) * Math.cos(z * 0.42 - x * 0.2);
@@ -648,156 +907,6 @@ export function makeRock(m: Mats, s: number): THREE.Mesh {
   mesh.scale.y = 0.7;
   mesh.castShadow = true;
   return mesh;
-}
-
-export function makeCloud(): THREE.Group {
-  const g = new THREE.Group();
-  const mat = new THREE.MeshBasicMaterial({
-    color: 0x9fbdb8,
-    transparent: true,
-    opacity: 0.065,
-    depthWrite: false,
-  });
-  const parts: [number, number, number, number][] = [
-    [0, 0, 0, 1.8],
-    [1.6, 0.15, 0.3, 1.2],
-    [-1.5, 0.1, -0.2, 1.1],
-  ];
-  for (const [x, y, z, r] of parts) {
-    const s = new THREE.Mesh(new THREE.SphereGeometry(Math.max(0.3, r), 10, 8), mat);
-    s.position.set(x, y, z);
-    s.scale.y = 0.42;
-    g.add(s);
-  }
-  return g;
-}
-
-export function makeSky(): THREE.Mesh {
-  const geo = new THREE.SphereGeometry(330, 24, 16);
-  const mat = new THREE.ShaderMaterial({
-    uniforms: {
-      uDaylight: { value: 0.72 },
-      uDusk: { value: 0.35 },
-    },
-    side: THREE.BackSide,
-    depthWrite: false,
-    vertexShader: `
-      varying vec3 vDir;
-      void main() {
-        vDir = position;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-      }`,
-    fragmentShader: `
-      uniform float uDaylight;
-      uniform float uDusk;
-      varying vec3 vDir;
-      float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-      void main() {
-        vec3 d = normalize(vDir);
-        float h = d.y;
-        vec3 nightTop = vec3(0.004, 0.018, 0.045);
-        vec3 dayTop = vec3(0.025, 0.20, 0.34);
-        vec3 top = mix(nightTop, dayTop, uDaylight);
-        vec3 mid = mix(vec3(0.018, 0.07, 0.11), vec3(0.12, 0.39, 0.48), uDaylight);
-        vec3 hor = mix(vec3(0.07, 0.10, 0.14), vec3(0.39, 0.58, 0.58), uDaylight);
-        vec3 warm = vec3(0.76, 0.34, 0.12);
-        vec3 col = mix(hor, mid, smoothstep(0.02, 0.3, h));
-        col = mix(col, top, smoothstep(0.22, 0.72, h));
-        float band = exp(-abs(h - 0.02) * 20.0);
-        col += warm * band * uDusk * 0.72;
-        vec2 sp = d.xz / (abs(d.y) + 0.35);
-        float star = step(0.9975, hash(floor(sp * 230.0))) * smoothstep(0.2, 0.55, h);
-        col += vec3(0.85, 0.92, 1.0) * star * (1.0 - uDaylight) * 0.85;
-        gl_FragColor = vec4(col, 1.0);
-      }`,
-  });
-  return new THREE.Mesh(geo, mat);
-}
-
-export function makeSunSprite(): THREE.Sprite {
-  const cv = document.createElement("canvas");
-  cv.width = 128;
-  cv.height = 128;
-  const ctx = cv.getContext("2d");
-  if (ctx) {
-    const grd = ctx.createRadialGradient(64, 64, 4, 64, 64, 64);
-    grd.addColorStop(0, "rgba(255, 214, 150, 0.9)");
-    grd.addColorStop(0.25, "rgba(240, 170, 90, 0.42)");
-    grd.addColorStop(1, "rgba(240, 150, 70, 0)");
-    ctx.fillStyle = grd;
-    ctx.fillRect(0, 0, 128, 128);
-  }
-  const tex = new THREE.CanvasTexture(cv);
-  const mat = new THREE.SpriteMaterial({
-    map: tex,
-    transparent: true,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-    opacity: 0.9,
-  });
-  const sp = new THREE.Sprite(mat);
-  sp.position.set(-140, 30, -180);
-  sp.scale.set(24, 24, 1);
-  return sp;
-}
-
-export function makeWater(): { mesh: THREE.Mesh; tick: TickFn } {
-  const geo = new THREE.PlaneGeometry(640, 640, 72, 72);
-  const mat = new THREE.ShaderMaterial({
-    uniforms: {
-      uTime: { value: 0 },
-      uFog: { value: new THREE.Color(0x08222b) },
-      uDaylight: { value: 0.72 },
-    },
-    vertexShader: `
-      varying vec3 vWorld;
-      varying float vWave;
-      uniform float uTime;
-      void main() {
-        vec3 p = position;
-        float w1 = sin(p.x * 0.055 + uTime * 0.72) * 0.16;
-        float w2 = sin(p.y * 0.082 - uTime * 0.54 + p.x * 0.018) * 0.11;
-        float w3 = sin((p.x + p.y) * 0.035 + uTime * 0.31) * 0.07;
-        p.z += w1 + w2 + w3;
-        vWave = w1 + w2 + w3;
-        vec4 wp = modelMatrix * vec4(p, 1.0);
-        vWorld = wp.xyz;
-        gl_Position = projectionMatrix * viewMatrix * wp;
-      }`,
-    fragmentShader: `
-      uniform float uTime;
-      uniform vec3 uFog;
-      uniform float uDaylight;
-      varying vec3 vWorld;
-      varying float vWave;
-      void main() {
-        vec2 p = vWorld.xz;
-        float d = length(p);
-        float ring = sin(d * 0.34 - uTime * 1.15) * 0.5 + 0.5;
-        float drift = sin(p.x * 0.06 + uTime * 0.35) * sin(p.y * 0.05 - uTime * 0.28);
-        vec3 deep = mix(vec3(0.006, 0.025, 0.06), vec3(0.012, 0.09, 0.14), uDaylight);
-        vec3 base = mix(vec3(0.018, 0.07, 0.10), vec3(0.045, 0.25, 0.31), uDaylight);
-        vec3 col = mix(deep, base, ring * 0.28 + drift * 0.18 + 0.31 + vWave * 0.35);
-        float foam = 1.0 - smoothstep(25.5, 30.0, d);
-        col = mix(col, vec3(0.15, 0.33, 0.3), foam * 0.5);
-        vec3 viewDir = normalize(cameraPosition - vWorld);
-        vec3 hv = normalize(viewDir + normalize(vec3(-0.55, 0.3, -0.6)));
-        float spec = pow(clamp(hv.y + vWave * 0.18, 0.0, 1.0), 96.0);
-        float fresnel = pow(1.0 - max(viewDir.y, 0.0), 3.0);
-        col += vec3(0.92, 0.68, 0.42) * spec * (0.12 + 0.3 * ring) * uDaylight;
-        col = mix(col, vec3(0.15, 0.34, 0.40), fresnel * 0.24 * uDaylight);
-        float fogF = smoothstep(80.0, 340.0, distance(cameraPosition, vWorld));
-        col = mix(col, uFog, fogF);
-        gl_FragColor = vec4(col, 1.0);
-      }`,
-  });
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.rotation.x = -Math.PI / 2;
-  mesh.position.y = -1.45;
-  const tick: TickFn = (t) => {
-    mat.uniforms.uTime.value = t;
-  };
-  return { mesh, tick };
 }
 
 export function makeDust(): { points: THREE.Points; tick: TickFn } {
@@ -907,8 +1016,8 @@ export const ISLE_POSITIONS: Record<IslandKind, THREE.Vector3> = {
 /** Backwards-compatible alias for the original Genesis isle. */
 export const ISLE_POS = ISLE_POSITIONS.crypto;
 export const ISLE_RADIUS = 7.5;
-export const DECOR_IDS = ["palms", "neon", "flags", "dock", "torch"] as const;
-export type DecorId = (typeof DECOR_IDS)[number];
+export { DECOR_IDS };
+export type { DecorId };
 
 const ISLE_PALETTES: Record<IslandTheme, { rock: number; top: number; rim: number; pad: number; glow: number }> = {
   emerald: { rock: 0x244c47, top: 0x216b59, rim: 0xb28a54, pad: 0x314a4a, glow: 0x5ce8c4 },
@@ -959,7 +1068,11 @@ function miningRig(m: Mats, ticks: TickFn[]): THREE.Group {
   const body = box(1.7, 1.1, 1.1, m.stoneDark);
   body.position.y = 0.75;
   g.add(body);
-  const vent = box(1.72, 0.12, 1.12, m.glowCyan);
+  /* Vật liệu riêng cho khe thoát nhiệt: nhấp nháy trên bản sao, không đụng vào
+     `m.glowCyan` dùng chung — nếu không, mọi vật phát sáng lam trong cảnh sẽ
+     cùng nhịp thở với giàn đào. */
+  const ventMaterial = m.glowCyan.clone();
+  const vent = box(1.72, 0.12, 1.12, ventMaterial);
   vent.position.y = 1.15;
   g.add(vent);
   const fans: THREE.Mesh[] = [];
@@ -978,7 +1091,7 @@ function miningRig(m: Mats, ticks: TickFn[]): THREE.Group {
   g.add(stack);
   ticks.push((t, dt) => {
     for (const f of fans) f.rotation.z += dt * 9;
-    vent.material === m.glowCyan && ((m.glowCyan.emissiveIntensity = 1.6 + Math.sin(t * 3) * 0.5));
+    ventMaterial.emissiveIntensity = 1.6 + Math.sin(t * 3) * 0.5;
   });
   castAll(g);
   return g;
@@ -1434,54 +1547,6 @@ export function makeBoat(m: Mats): THREE.Group {
   g.traverse((o) => {
     if ((o as THREE.Mesh).isMesh) o.castShadow = true;
   });
-  return g;
-}
-
-/** Player-controlled motor yacht. Geometry is intentionally compact to keep draw calls low. */
-export function makeYacht(m: Mats): THREE.Group {
-  const g = new THREE.Group();
-  const hullMat = new THREE.MeshPhysicalMaterial({ color: 0xf1f5ef, roughness: 0.24, metalness: 0.12, clearcoat: 0.75, clearcoatRoughness: 0.18 });
-  const glass = new THREE.MeshPhysicalMaterial({ color: 0x143e4b, emissive: 0x0b3742, emissiveIntensity: 0.45, roughness: 0.08, metalness: 0.28, transparent: true, opacity: 0.86 });
-  const trim = new THREE.MeshStandardMaterial({ color: 0xd9a64f, roughness: 0.28, metalness: 0.82 });
-
-  const hull = new THREE.Mesh(new THREE.CapsuleGeometry(0.82, 3.2, 5, 12), hullMat);
-  hull.rotation.x = Math.PI / 2;
-  hull.scale.set(1, 0.48, 1);
-  hull.position.y = 0.06;
-  g.add(hull);
-  const keel = box(1.35, 0.32, 3.5, m.stoneDark);
-  keel.position.y = -0.28;
-  g.add(keel);
-  const deck = box(1.46, 0.13, 3.0, trim);
-  deck.position.y = 0.34;
-  g.add(deck);
-  const cabin = box(1.18, 0.62, 1.34, glass);
-  cabin.position.set(0, 0.74, -0.35);
-  g.add(cabin);
-  const roof = box(1.38, 0.09, 1.55, hullMat);
-  roof.position.set(0, 1.08, -0.37);
-  g.add(roof);
-
-  for (const x of [-0.72, 0.72]) {
-    const rail = cyl(0.025, 0.025, 2.7, 6, trim);
-    rail.rotation.x = Math.PI / 2;
-    rail.position.set(x, 0.65, 0.35);
-    g.add(rail);
-  }
-  const mast = cyl(0.035, 0.035, 1.05, 8, trim);
-  mast.position.set(0, 1.58, -0.48);
-  g.add(mast);
-  const radar = new THREE.Mesh(new THREE.TorusGeometry(0.22, 0.035, 8, 24), trim);
-  radar.position.set(0, 2.06, -0.48);
-  radar.rotation.x = Math.PI / 2;
-  g.add(radar);
-  const navLight = new THREE.PointLight(0x7fe8bb, 0.85, 9);
-  navLight.position.set(0, 1.35, 1.45);
-  g.add(navLight);
-  const sternLight = new THREE.PointLight(0xffd88a, 0.65, 7);
-  sternLight.position.set(0, 0.62, -1.7);
-  g.add(sternLight);
-  castAll(g);
   return g;
 }
 
