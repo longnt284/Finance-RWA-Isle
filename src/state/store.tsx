@@ -6,11 +6,15 @@ import { makeT } from "../lib/i18n";
 import type { Lang, TFn } from "../lib/i18n";
 import { DEFAULT_WATCH } from "../lib/market";
 import type { Season, WeatherId } from "../lib/season";
+import { FISH_BY_ID, FISH_COUNT, RARITY_META } from "../lib/fishing";
+import { SHOP_BY_ID, FREE_ITEMS } from "../lib/shop";
 
 /* ============================== Types ============================== */
 
 export type DistrictId = "crypto" | "stocks" | "vault" | "academy";
 export type ViewId = DistrictId | "center" | "overview" | "isle";
+/** Nơi có thể đặt đồ trang trí: đảo chính cộng bốn đảo riêng. */
+export type IsleSlot = DistrictId | "main";
 
 export interface Goal {
   id: string;
@@ -119,6 +123,32 @@ export interface DailyQuestState {
   claimed: string[];
 }
 
+/** Một dòng trong bộ sưu tập cá — giữ mãi kể cả khi con cá đã bán. */
+export interface FishRecord {
+  /** tổng số con đã bắt được của loài này */
+  n: number;
+  /** kỷ lục cân nặng (kg) */
+  best: number;
+  /** lần đầu bắt được */
+  first: number;
+}
+
+/** Cá đang nằm trong giỏ, chưa bán. Giữ nguyên cân nặng để bán đúng giá. */
+export interface CatchEntry {
+  id: string;
+  /** cân nặng (kg) */
+  w: number;
+  /** giá bán (xu) */
+  v: number;
+  ts: number;
+}
+
+/** Đồ trang trí đã mua và đang đặt ở đâu. */
+export interface ShopState {
+  owned: string[];
+  placed: Record<IsleSlot, string[]>;
+}
+
 export interface State {
   city: string;
   focus: DistrictId;
@@ -150,6 +180,16 @@ export interface State {
   watchlist: string[];
   isleDecor: Record<DistrictId, string[]>;
   isleTheme: Record<DistrictId, IslandTheme>;
+  /** Xu — kiếm bằng bán cá, tiêu ở Chợ Trang Trí. */
+  coins: number;
+  /** Bộ sưu tập cá: mọi loài từng bắt được. */
+  fish: Record<string, FishRecord>;
+  /** Giỏ cá chưa bán. */
+  basket: CatchEntry[];
+  fishCaught: number;
+  /** Tổng xu đã kiếm từ bán cá — dùng cho thống kê và thành tựu. */
+  fishEarned: number;
+  shop: ShopState;
   yachtTier: YachtTier;
   world: WorldPrefs;
   account: AccountInfo | null;
@@ -162,6 +202,9 @@ export interface State {
 /* ============================== Meta ============================== */
 
 export const DISTRICT_IDS: DistrictId[] = ["crypto", "stocks", "vault", "academy"];
+export const ISLE_SLOTS: IsleSlot[] = ["main", "crypto", "stocks", "vault", "academy"];
+/** Số món tối đa đặt trên một đảo — quá tay thì đảo thành bãi phế liệu. */
+export const PLACE_LIMIT = 14;
 
 export const DISTRICTS: Record<DistrictId, { accent: string }> = {
   crypto: { accent: "#5ce8c4" },
@@ -278,7 +321,9 @@ export function checkinIndex(state: State, now: number = Date.now()): number {
 
 /* ============================== Nhiệm vụ ngày ============================== */
 
-export type QuestMetric = "task" | "quick" | "goal" | "networth" | "watch" | "note" | "visit" | "exam" | "voyage" | "decor";
+export type QuestMetric =
+  | "task" | "quick" | "goal" | "networth" | "watch" | "note" | "visit" | "exam" | "voyage" | "decor"
+  | "fish" | "news" | "shop";
 
 export interface QuestDef {
   id: string;
@@ -299,6 +344,10 @@ export const QUEST_DEFS: QuestDef[] = [
   { id: "q_voyage", metric: "voyage", target: 1, xp: 35 },
   { id: "q_exam", metric: "exam", target: 1, xp: 90 },
   { id: "q_decor", metric: "decor", target: 1, xp: 25 },
+  { id: "q_fish3", metric: "fish", target: 3, xp: 40 },
+  { id: "q_fish8", metric: "fish", target: 8, xp: 80 },
+  { id: "q_news", metric: "news", target: 1, xp: 20 },
+  { id: "q_shop", metric: "shop", target: 1, xp: 35 },
 ];
 
 export const QUEST_BY_ID = new Map(QUEST_DEFS.map((quest) => [quest.id, quest]));
@@ -387,6 +436,18 @@ export const ACH_DEFS: AchDef[] = [
   { id: "a18", tier: "hard", reward: 320, done: (s) => s.yachtTier >= MAX_YACHT_TIER },
   { id: "a19", tier: "hard", reward: 400, done: (s) => DISTRICT_IDS.some((d) => s.certified[d] >= MAX_LEVEL) },
   { id: "a20", tier: "mid", reward: 70, done: (s) => s.claims >= CHECKIN_CYCLE },
+  { id: "a21", tier: "easy", reward: 25, done: (s) => s.fishCaught >= 1 },
+  { id: "a22", tier: "mid", reward: 80, done: (s) => Object.keys(s.fish).length >= 12 },
+  { id: "a23", tier: "hard", reward: 260, done: (s) => Object.keys(s.fish).length >= FISH_COUNT },
+  {
+    id: "a24",
+    tier: "hard",
+    reward: 200,
+    done: (s) => Object.keys(s.fish).some((id) => FISH_BY_ID.get(id)?.rarity === "legend"),
+  },
+  { id: "a25", tier: "mid", reward: 70, done: (s) => s.shop.owned.filter((id) => !FREE_ITEMS.includes(id)).length >= 10 },
+  { id: "a26", tier: "hard", reward: 240, done: (s) => s.shop.owned.filter((id) => !FREE_ITEMS.includes(id)).length >= 40 },
+  { id: "a27", tier: "mid", reward: 60, done: (s) => s.fishEarned >= 2000 },
 ];
 
 /* ============================== Actions ============================== */
@@ -409,6 +470,12 @@ type Action =
   | { type: "REMOVE_WATCH"; id: string }
   | { type: "TOGGLE_DECOR"; district: DistrictId; id: string }
   | { type: "SET_ISLE_THEME"; district: DistrictId; theme: IslandTheme }
+  | { type: "CATCH_FISH"; fishId: string; weight: number; value: number }
+  | { type: "SELL_FISH"; fishId: string }
+  | { type: "SELL_ALL" }
+  | { type: "BUY_ITEM"; itemId: string }
+  | { type: "TOGGLE_PLACE"; slot: IsleSlot; itemId: string }
+  | { type: "READ_NEWS" }
   | { type: "SET_LANG"; lang: Lang }
   | { type: "SET_CURRENCY"; currency: Currency }
   | { type: "RENAME_CITY"; name: string }
@@ -478,6 +545,28 @@ function emptyIsleDecor(): Record<DistrictId, string[]> {
   return { crypto: [], stocks: [], vault: [], academy: [] };
 }
 
+function emptyShop(): ShopState {
+  return { owned: [...FREE_ITEMS], placed: { main: [], crypto: [], stocks: [], vault: [], academy: [] } };
+}
+
+/** Số lượng còn trong giỏ của một loài. */
+export function basketCount(state: State, fishId: string): number {
+  return state.basket.reduce((sum, entry) => (entry.id === fishId ? sum + 1 : sum), 0);
+}
+
+/** Tổng giá trị giỏ cá — con số hiện trên nút "Bán tất cả". */
+export function basketValue(state: State): number {
+  return state.basket.reduce((sum, entry) => sum + entry.v, 0);
+}
+
+export function ownsItem(state: State, itemId: string): boolean {
+  return state.shop.owned.includes(itemId);
+}
+
+export function isPlaced(state: State, slot: IsleSlot, itemId: string): boolean {
+  return state.shop.placed[slot].includes(itemId);
+}
+
 function defaultIsleThemes(): Record<DistrictId, IslandTheme> {
   return { crypto: "emerald", stocks: "sunset", vault: "lagoon", academy: "violet" };
 }
@@ -516,6 +605,12 @@ export function freshState(): State {
     watchlist: [...DEFAULT_WATCH],
     isleDecor: emptyIsleDecor(),
     isleTheme: defaultIsleThemes(),
+    coins: 0,
+    fish: {},
+    basket: [],
+    fishCaught: 0,
+    fishEarned: 0,
+    shop: emptyShop(),
     yachtTier: 1,
     world: defaultWorld(),
     account: null,
@@ -572,6 +667,33 @@ function demoState(lang: Lang): State {
     certified: { crypto: levelFor(xp.crypto), stocks: levelFor(xp.stocks), vault: levelFor(xp.vault), academy: levelFor(xp.academy) },
     examsPassed: 12,
     yachtTier: 3,
+    coins: 1850,
+    fishCaught: 27,
+    fishEarned: 3120,
+    fish: {
+      sardine: { n: 8, best: 0.33, first: now - 9 * D },
+      mullet: { n: 5, best: 1.42, first: now - 8 * D },
+      seabass: { n: 4, best: 4.1, first: now - 6 * D },
+      squid: { n: 3, best: 1.6, first: now - 5 * D },
+      mackerel: { n: 4, best: 2.4, first: now - 4 * D },
+      barracuda: { n: 2, best: 9.8, first: now - 2 * D },
+      swordfish: { n: 1, best: 63.5, first: now - D },
+    },
+    basket: [
+      { id: "seabass", w: 3.2, v: 46, ts: now - 5400e3 },
+      { id: "mackerel", w: 1.9, v: 24, ts: now - 3600e3 },
+      { id: "barracuda", w: 8.4, v: 132, ts: now - 1800e3 },
+    ],
+    shop: {
+      owned: [...FREE_ITEMS, "pl_palm6", "li_lanternjade", "bd_cottage", "st_fountain", "se_pier", "gr_jade"],
+      placed: {
+        main: ["pl_palm6", "li_lanternjade", "bd_cottage", "st_fountain"],
+        crypto: ["gr_jade", "se_pier"],
+        stocks: [],
+        vault: [],
+        academy: [],
+      },
+    },
     isleDecor: {
       crypto: ["palms", "neon", "dock"],
       stocks: ["flags", "torch", "dock"],
@@ -752,6 +874,98 @@ function reducer(state: State, action: Action): State {
       };
     case "SET_ISLE_THEME":
       return { ...state, isleTheme: { ...state.isleTheme, [action.district]: action.theme } };
+    case "CATCH_FISH": {
+      const def = FISH_BY_ID.get(action.fishId);
+      if (!def) return state;
+      const previous = state.fish[action.fishId];
+      const record: FishRecord = previous
+        ? { n: previous.n + 1, best: Math.max(previous.best, action.weight), first: previous.first }
+        : { n: 1, best: action.weight, first: Date.now() };
+      /* Giỏ có giới hạn: đầy thì con cũ nhất bị đẩy ra, nhưng bộ sưu tập vẫn giữ. */
+      const basket = [...state.basket, { id: action.fishId, w: action.weight, v: action.value, ts: Date.now() }].slice(-120);
+      let s: State = {
+        ...state,
+        fish: { ...state.fish, [action.fishId]: record },
+        basket,
+        fishCaught: state.fishCaught + 1,
+        quests: bumpQuests(state.quests, "fish"),
+      };
+      const xp = RARITY_META[def.rarity].xp;
+      s = gainXp(s, s.focus, xp);
+      s = {
+        ...s,
+        log: pushLog(s.log, {
+          k: previous ? "log.fish" : "log.fishNew",
+          p: { f: state.lang === "vi" ? def.vi : def.en, w: action.weight, x: xp },
+          kind: "quest",
+          xp,
+        }),
+      };
+      return s;
+    }
+    case "SELL_FISH": {
+      const sold = state.basket.filter((entry) => entry.id === action.fishId);
+      if (!sold.length) return state;
+      const coins = sold.reduce((sum, entry) => sum + entry.v, 0);
+      const def = FISH_BY_ID.get(action.fishId);
+      let s: State = {
+        ...state,
+        basket: state.basket.filter((entry) => entry.id !== action.fishId),
+        coins: state.coins + coins,
+        fishEarned: state.fishEarned + coins,
+      };
+      s = {
+        ...s,
+        log: pushLog(s.log, {
+          k: "log.sell",
+          p: { n: sold.length, f: def ? (state.lang === "vi" ? def.vi : def.en) : action.fishId, c: coins },
+          kind: "milestone",
+        }),
+      };
+      return s;
+    }
+    case "SELL_ALL": {
+      if (!state.basket.length) return state;
+      const coins = state.basket.reduce((sum, entry) => sum + entry.v, 0);
+      let s: State = { ...state, basket: [], coins: state.coins + coins, fishEarned: state.fishEarned + coins };
+      s = { ...s, log: pushLog(s.log, { k: "log.sellAll", p: { n: state.basket.length, c: coins }, kind: "milestone" }) };
+      s = { ...s, toasts: withToast(s.toasts, { title: t("fs.sold"), sub: t("fs.soldSub", { c: coins }), kind: "gold" }) };
+      return s;
+    }
+    case "BUY_ITEM": {
+      const item = SHOP_BY_ID.get(action.itemId);
+      if (!item || state.shop.owned.includes(action.itemId) || state.coins < item.price) return state;
+      let s: State = {
+        ...state,
+        coins: state.coins - item.price,
+        shop: { ...state.shop, owned: [...state.shop.owned, action.itemId] },
+        quests: bumpQuests(state.quests, "shop"),
+      };
+      s = { ...s, log: pushLog(s.log, { k: "log.buy", p: { n: state.lang === "vi" ? item.vi : item.en, c: item.price }, kind: "milestone" }) };
+      s = { ...s, toasts: withToast(s.toasts, { title: t("sp.bought"), sub: state.lang === "vi" ? item.vi : item.en, kind: "jade" }) };
+      return s;
+    }
+    case "TOGGLE_PLACE": {
+      const item = SHOP_BY_ID.get(action.itemId);
+      if (!item || !state.shop.owned.includes(action.itemId)) return state;
+      const current = state.shop.placed[action.slot];
+      let next: string[];
+      if (current.includes(action.itemId)) {
+        next = current.filter((id) => id !== action.itemId);
+      } else {
+        /* Nền đảo là loại "một chọn một": đặt nền mới thì nền cũ tự nhường chỗ. */
+        const cleaned = item.cat === "ground" ? current.filter((id) => SHOP_BY_ID.get(id)?.cat !== "ground") : current;
+        if (cleaned.length >= PLACE_LIMIT) return state;
+        next = [...cleaned, action.itemId];
+      }
+      return {
+        ...state,
+        quests: bumpQuests(state.quests, "decor"),
+        shop: { ...state.shop, placed: { ...state.shop.placed, [action.slot]: next } },
+      };
+    }
+    case "READ_NEWS":
+      return { ...state, quests: bumpQuests(state.quests, "news") };
     case "SET_LANG":
       return { ...state, lang: action.lang };
     case "SET_CURRENCY":
@@ -874,6 +1088,12 @@ export interface StoreApi {
   removeWatch(id: string): void;
   toggleDecor(district: DistrictId, id: string): void;
   setIsleTheme(district: DistrictId, theme: IslandTheme): void;
+  catchFish(fishId: string, weight: number, value: number): void;
+  sellFish(fishId: string): void;
+  sellAll(): void;
+  buyItem(itemId: string): void;
+  togglePlace(slot: IsleSlot, itemId: string): void;
+  readNews(): void;
   setLang(lang: Lang): void;
   setCurrency(c: Currency): void;
   renameCity(name: string): void;
@@ -957,6 +1177,41 @@ export function normalizeSave(raw: unknown, legacy: boolean): State | null {
         }
       : emptyQuests(today);
 
+  /* --- câu cá: bản lưu cũ không có ba trường này, và loài đã bị gỡ khỏi danh
+     mục thì bỏ luôn thay vì để bộ sưu tập hiện ô trống không tên. --- */
+  const savedFish = parsed.fish && typeof parsed.fish === "object" ? (parsed.fish as Record<string, unknown>) : {};
+  const fish: Record<string, FishRecord> = {};
+  for (const [id, value] of Object.entries(savedFish)) {
+    if (!FISH_BY_ID.has(id) || !value || typeof value !== "object") continue;
+    const row = value as Partial<FishRecord>;
+    fish[id] = {
+      n: isNumber(row.n) ? Math.max(0, Math.round(row.n)) : 0,
+      best: isNumber(row.best) ? Math.max(0, row.best) : 0,
+      first: isNumber(row.first) ? row.first : Date.now(),
+    };
+  }
+  const basket = Array.isArray(parsed.basket)
+    ? (parsed.basket as CatchEntry[])
+        .filter((entry) => entry && FISH_BY_ID.has(entry.id) && isNumber(entry.w) && isNumber(entry.v))
+        .slice(-120)
+    : [];
+
+  const savedShop = parsed.shop && typeof parsed.shop === "object" ? (parsed.shop as Partial<ShopState>) : {};
+  const owned = Array.isArray(savedShop.owned)
+    ? savedShop.owned.filter((id): id is string => typeof id === "string" && SHOP_BY_ID.has(id))
+    : [];
+  const placedSource = savedShop.placed && typeof savedShop.placed === "object" ? savedShop.placed : {};
+  const placed = Object.fromEntries(
+    ISLE_SLOTS.map((slot) => {
+      const list = (placedSource as Partial<Record<IsleSlot, unknown>>)[slot];
+      const clean = Array.isArray(list)
+        ? list.filter((id): id is string => typeof id === "string" && SHOP_BY_ID.has(id) && owned.includes(id))
+        : [];
+      return [slot, clean.slice(0, PLACE_LIMIT)];
+    })
+  ) as Record<IsleSlot, string[]>;
+  const shop: ShopState = { owned: [...new Set([...FREE_ITEMS, ...owned])], placed };
+
   const world: WorldPrefs = { ...fresh.world, ...(parsed.world as Partial<WorldPrefs> | undefined) };
   const rawTier = Math.round(Number(parsed.yachtTier ?? 1));
   const yachtTier = (Number.isFinite(rawTier) ? Math.max(1, Math.min(MAX_YACHT_TIER, rawTier)) : 1) as YachtTier;
@@ -972,6 +1227,12 @@ export function normalizeSave(raw: unknown, legacy: boolean): State | null {
     quests,
     isleDecor,
     isleTheme,
+    coins: isNumber(parsed.coins) ? Math.max(0, Math.round(parsed.coins)) : 0,
+    fish,
+    basket,
+    fishCaught: isNumber(parsed.fishCaught) ? Math.max(0, Math.round(parsed.fishCaught)) : 0,
+    fishEarned: isNumber(parsed.fishEarned) ? Math.max(0, Math.round(parsed.fishEarned)) : 0,
+    shop,
     yachtTier,
     world,
     account: (parsed.account as AccountInfo | null | undefined) ?? null,
@@ -1049,6 +1310,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       removeWatch: (id) => dispatch({ type: "REMOVE_WATCH", id }),
       toggleDecor: (district, id) => dispatch({ type: "TOGGLE_DECOR", district, id }),
       setIsleTheme: (district, theme) => dispatch({ type: "SET_ISLE_THEME", district, theme }),
+      catchFish: (fishId, weight, value) => dispatch({ type: "CATCH_FISH", fishId, weight, value }),
+      sellFish: (fishId) => dispatch({ type: "SELL_FISH", fishId }),
+      sellAll: () => dispatch({ type: "SELL_ALL" }),
+      buyItem: (itemId) => dispatch({ type: "BUY_ITEM", itemId }),
+      togglePlace: (slot, itemId) => dispatch({ type: "TOGGLE_PLACE", slot, itemId }),
+      readNews: () => dispatch({ type: "READ_NEWS" }),
       setLang: (lang) => dispatch({ type: "SET_LANG", lang }),
       setCurrency: (currency) => dispatch({ type: "SET_CURRENCY", currency }),
       renameCity: (name) => dispatch({ type: "RENAME_CITY", name }),

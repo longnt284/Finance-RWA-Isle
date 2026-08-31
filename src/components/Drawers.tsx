@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useStore } from "../state/store";
 import { makeT } from "../lib/i18n";
 import { fmtPrice, fmtMoney, fmt, USD_RATE, timeAgo } from "../lib/format";
+import type { Currency } from "../lib/format";
 import { useMarket, market, ASSETS, ASSET_BY_ID } from "../lib/market";
 import type { Asset, MarketVenue, StockSector } from "../lib/market";
 import { sound } from "../lib/audio";
@@ -234,17 +235,24 @@ export function ToolsDrawer({ onClose }: { onClose: () => void }) {
   useMarket();
   const [vnd, setVnd] = useState("10000000");
   const [usd, setUsd] = useState(String(Math.round(10000000 / USD_RATE)));
-  const [initM, setInitM] = useState(100); // triệu ₫
-  const [monthM, setMonthM] = useState(5);
+  /* Máy tính DCA nhập liệu bằng "triệu ₫" hoặc "nghìn $" — hai thị trường mà
+     người chơi thật sự DCA vào. Đơn vị nhập tách khỏi đơn vị hiển thị kết quả:
+     rất nhiều người nạp tiền bằng đô nhưng vẫn muốn đọc con số cuối bằng đồng. */
+  const [calcUnit, setCalcUnit] = useState<Currency>("VND");
+  const [initAmt, setInitAmt] = useState(100);
+  const [monthAmt, setMonthAmt] = useState(5);
   const [years, setYears] = useState(10);
   const [apr, setApr] = useState(12);
 
+  /* Một đơn vị nhập bằng bao nhiêu ₫: 1 triệu ₫, hoặc 1 nghìn $ quy ra ₫. */
+  const unitVnd = calcUnit === "USD" ? 1000 * USD_RATE : 1e6;
   const r = apr / 100 / 12;
   const n = years * 12;
-  const fvInit = initM * 1e6 * Math.pow(1 + r, n);
-  const fvDca = r > 0 ? monthM * 1e6 * ((Math.pow(1 + r, n) - 1) / r) : monthM * 1e6 * n;
+  const fvInit = initAmt * unitVnd * Math.pow(1 + r, n);
+  const fvDca = r > 0 ? monthAmt * unitVnd * ((Math.pow(1 + r, n) - 1) / r) : monthAmt * unitVnd * n;
   const fv = fvInit + fvDca;
-  const totalIn = (initM + monthM * n) * 1e6;
+  const totalIn = (initAmt + monthAmt * n) * unitVnd;
+  const unitLabel = t(calcUnit === "USD" ? "tl.unitUsdShort" : "tl.unitVndShort");
 
   return (
     <DrawerShell title={t("tl.title")} icon={<IconCalc className="h-[18px] w-[18px]" />} onClose={onClose}>
@@ -318,17 +326,44 @@ export function ToolsDrawer({ onClose }: { onClose: () => void }) {
 
         {/* calculator */}
         <section className="rounded-xl border border-gold-500/18 bg-ink-850/60 p-4">
-          <h3 className="mb-3 font-display text-[9px] tracking-[0.24em] text-mist-400">{t("tl.calc")}</h3>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h3 className="font-display text-[9px] tracking-[0.24em] text-mist-400">{t("tl.calc")}</h3>
+            <div className="chip flex items-center rounded-lg p-0.5">
+              {(["VND", "USD"] as const).map((unit) => (
+                <button
+                  key={unit}
+                  onClick={() => {
+                    if (unit === calcUnit) return;
+                    /* Giữ nguyên giá trị thật khi đổi đơn vị: 100 triệu ₫ không
+                       được biến thành 100 nghìn $ chỉ vì người dùng bấm nút. */
+                    const from = calcUnit === "USD" ? 1000 * USD_RATE : 1e6;
+                    const to = unit === "USD" ? 1000 * USD_RATE : 1e6;
+                    const rescale = (value: number) => Math.max(0, Math.round((value * from) / to));
+                    setInitAmt(rescale(initAmt));
+                    setMonthAmt(rescale(monthAmt));
+                    setCalcUnit(unit);
+                    sound.tick();
+                  }}
+                  className={`rounded-md px-2.5 py-1 font-mono text-[10px] font-semibold transition-all ${
+                    calcUnit === unit ? "bg-gold-500/90 text-ink-950" : "text-mist-400 hover:text-mist-100"
+                  }`}
+                  title={t("tl.calcUnit")}
+                >
+                  {unit === "VND" ? t("tl.unitVnd") : t("tl.unitUsd")}
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <label className="block">
-              <span className="mb-1 block text-[10px] text-mist-500">{t("tl.initial")} (tr ₫)</span>
-              <input className="field w-full rounded-lg px-3 py-2 font-mono text-[13px] text-mist-100" value={initM} inputMode="numeric"
-                onChange={(e) => setInitM(Math.max(0, parseInt(e.target.value.replace(/[^\d]/g, "") || "0", 10)))} />
+              <span className="mb-1 block text-[10px] text-mist-500">{t("tl.initial")} ({unitLabel})</span>
+              <input className="field w-full rounded-lg px-3 py-2 font-mono text-[13px] text-mist-100" value={initAmt} inputMode="numeric"
+                onChange={(e) => setInitAmt(Math.max(0, parseInt(e.target.value.replace(/[^\d]/g, "") || "0", 10)))} />
             </label>
             <label className="block">
-              <span className="mb-1 block text-[10px] text-mist-500">{t("tl.monthly")} (tr ₫)</span>
-              <input className="field w-full rounded-lg px-3 py-2 font-mono text-[13px] text-mist-100" value={monthM} inputMode="numeric"
-                onChange={(e) => setMonthM(Math.max(0, parseInt(e.target.value.replace(/[^\d]/g, "") || "0", 10)))} />
+              <span className="mb-1 block text-[10px] text-mist-500">{t("tl.monthly")} ({unitLabel})</span>
+              <input className="field w-full rounded-lg px-3 py-2 font-mono text-[13px] text-mist-100" value={monthAmt} inputMode="numeric"
+                onChange={(e) => setMonthAmt(Math.max(0, parseInt(e.target.value.replace(/[^\d]/g, "") || "0", 10)))} />
             </label>
           </div>
           <label className="mt-3 block">
@@ -346,11 +381,18 @@ export function ToolsDrawer({ onClose }: { onClose: () => void }) {
           <div className="mt-4 rounded-lg border border-jade-500/25 bg-jade-500/6 p-3.5">
             <div className="font-mono text-[9px] uppercase tracking-[0.2em] text-mist-500">{t("tl.result")}</div>
             <div className="mt-1 font-mono text-2xl font-semibold text-jade-300">{fmtMoney(fv, state.currency)}</div>
+            {/* Con số đối chiếu bằng đơn vị còn lại — không phải ai cũng nhẩm
+                được 25.400 ₫ ăn một đô trong đầu. */}
+            <div className="font-mono text-[10.5px] text-mist-500">{fmtMoney(fv, state.currency === "USD" ? "VND" : "USD")}</div>
             <div className="mt-2 flex justify-between font-mono text-[10px] text-mist-400">
               <span>{t("tl.totalIn")}: {fmtMoney(totalIn, state.currency)}</span>
               <span className="text-jade-400">+{fmtMoney(fv - totalIn, state.currency)}</span>
             </div>
           </div>
+          <p className="mt-2 text-[10px] leading-relaxed text-mist-500">
+            {t("tl.calcNote")}
+            {calcUnit === "USD" ? ` ${t("tl.rateUsed", { r: fmt(USD_RATE) })}` : ""}
+          </p>
         </section>
       </div>
     </DrawerShell>
