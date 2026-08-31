@@ -764,8 +764,8 @@ export default function WorldScene({
       staticTicks.push(pool.tick);
       return { pool, cooldown: 0 };
     });
-    /** Bán kính bắt: du thuyền chạm vào là mở bảng câu cá. */
-    const VORTEX_CATCH = 4.6;
+    /** Bán kính bắt: rộng hơn vòng xoáy nhìn thấy để lái vào không phải ngắm. */
+    const VORTEX_CATCH = 6.5;
 
     /* ---------------------------- player yacht ---------------------------- */
     const yachtHolder = new THREE.Group();
@@ -846,13 +846,18 @@ export default function WorldScene({
     composer.addPass(bloomPass);
     composer.addPass(new OutputPass());
 
-    /** Bloom là hiệu ứng đắt nhất trong khung hình; máy yếu thì tắt hẳn. */
+    /**
+     * Bloom là hiệu ứng đắt nhất trong khung hình. Ở chế độ tự động, nó tự tắt
+     * khi thời gian dựng khung vượt 26ms — máy yếu giữ được nhịp mượt thay vì
+     * đẹp mà giật. Người chơi chọn "cao" thì tôn trọng lựa chọn đó.
+     */
+    let averageFrameMs = 16;
     function bloomEnabled(): boolean {
       const prefs = propsRef.current.world;
       if (!prefs.effects) return false;
       if (prefs.quality === "balanced") return false;
       if (prefs.quality === "high") return true;
-      return !compactGpu && renderPixelRatio >= 1;
+      return !compactGpu && renderPixelRatio >= 1 && averageFrameMs < 26;
     }
 
     /* ------------------------------ camera tween ------------------------------ */
@@ -1120,8 +1125,11 @@ export default function WorldScene({
 
       perfFrames++;
       perfTime += rawDt * 1000;
-      if (perfFrames >= 120) {
+      /* 60 khung một lần thay vì 120: ở 30fps là hai giây, đủ nhanh để máy yếu
+         hạ chất lượng trước khi người chơi kịp bực. */
+      if (perfFrames >= 60) {
         const averageFrame = perfTime / perfFrames;
+        averageFrameMs = averageFrame;
         let nextRatio = renderPixelRatio;
         if (averageFrame > 22 && renderPixelRatio > 0.85) nextRatio = Math.max(0.85, renderPixelRatio - 0.15);
         else if (averageFrame < 15 && renderPixelRatio < maxPixelRatio) nextRatio = Math.min(maxPixelRatio, renderPixelRatio + 0.1);

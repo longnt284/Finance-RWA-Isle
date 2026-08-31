@@ -549,22 +549,9 @@ function emptyShop(): ShopState {
   return { owned: [...FREE_ITEMS], placed: { main: [], crypto: [], stocks: [], vault: [], academy: [] } };
 }
 
-/** Số lượng còn trong giỏ của một loài. */
-export function basketCount(state: State, fishId: string): number {
-  return state.basket.reduce((sum, entry) => (entry.id === fishId ? sum + 1 : sum), 0);
-}
-
 /** Tổng giá trị giỏ cá — con số hiện trên nút "Bán tất cả". */
 export function basketValue(state: State): number {
   return state.basket.reduce((sum, entry) => sum + entry.v, 0);
-}
-
-export function ownsItem(state: State, itemId: string): boolean {
-  return state.shop.owned.includes(itemId);
-}
-
-export function isPlaced(state: State, slot: IsleSlot, itemId: string): boolean {
-  return state.shop.placed[slot].includes(itemId);
 }
 
 function defaultIsleThemes(): Record<DistrictId, IslandTheme> {
