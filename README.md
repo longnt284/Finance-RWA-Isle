@@ -52,7 +52,13 @@ npm run test:features   # ngày/đêm, bốn mùa, chín kiểu thời tiết
 npm run test:panels     # các bảng bên phải, luồng khảo thí, bầu trời đêm
 npm run test:exam       # tự trả lời đúng cả 5 câu rồi kiểm tra màn hình "Đạt"
 npm run test:feed       # bảng Hoạt động đổi ngôn ngữ đúng ở cả hai chiều
+npm run test:fish       # tự chơi minigame câu cá tới khi bắt được một con
 ```
+
+`test:fish` đọc vị trí khung và vị trí cá từ DOM rồi giữ hoặc thả chuột đúng như
+một người chơi, nên nó phủ trọn đường đi từ vòng lặp `requestAnimationFrame`, qua
+reducer, tới `localStorage`. Chính bài này phát hiện lực nâng khung ban đầu quá
+nhẹ khiến không ván nào thắng được — thứ mà đọc code không thấy ra.
 
 `test:exam` biên dịch `src/lib/quiz.ts` tại chỗ để lấy đúng đáp án theo cùng
 seed mà ứng dụng dùng, nên nó bấm trúng chứ không đoán.

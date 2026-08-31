@@ -162,6 +162,31 @@ test("khung giữ cá không bao giờ âm hay nuốt trọn cần câu", () => 
   }
 });
 
+test("khung giữ cá luôn đuổi kịp con cá nhanh nhất", () => {
+  /* Hằng số đọc thẳng từ component để bài kiểm tra không giữ một bản chép tay
+     dễ lệch. Đây là bất biến sống còn của cả trò chơi: bản đầu tiên đặt lực nâng
+     2,35 — khung leo 0,33 đơn vị/giây trong khi cá bơi tới 1,5 — nên không ván
+     nào thắng được, và không ai phát hiện ra cho tới khi có bài tự chơi. */
+  const component = fs.readFileSync(path.join(__dirname, "..", "src", "components", "Fishing.tsx"), "utf8");
+  const constant = (name) => {
+    const match = new RegExp(`const ${name} = ([0-9.]+);`).exec(component);
+    assert.ok(match, `không đọc được hằng số ${name} trong Fishing.tsx`);
+    return Number(match[1]);
+  };
+  const lift = constant("LIFT");
+  const gravity = constant("GRAVITY");
+  const damping = constant("DAMPING");
+  assert.ok(lift > gravity, "lực nâng phải thắng trọng lực, nếu không khung không bao giờ đi lên");
+  const riseSpeed = (lift - gravity) / damping;
+  const fallSpeed = gravity / damping;
+  const fastestFish = Math.max(...FISH.map((fish) => fishing.fishingConfig(fish, 1).fishSpeed));
+  assert.ok(
+    riseSpeed > fastestFish,
+    `khung leo ${riseSpeed.toFixed(2)}/s mà con cá nhanh nhất bơi ${fastestFish.toFixed(2)}/s — không ván nào thắng được`
+  );
+  assert.ok(fallSpeed > fastestFish, `khung rơi ${fallSpeed.toFixed(2)}/s, chậm hơn cá lặn ${fastestFish.toFixed(2)}/s`);
+});
+
 test("cần câu lên cấp thì khung rộng ra và nạp nhanh hơn", () => {
   const fish = FISH_BY_ID.get("seabass");
   const low = fishing.fishingConfig(fish, 1);

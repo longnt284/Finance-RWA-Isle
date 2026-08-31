@@ -18,10 +18,19 @@ type Tab = "game" | "basket" | "book";
 /** Xoáy nước ngoài khơi mới là nơi cá hiếm sống — đó là lý do phải ra khơi. */
 const ZONE_LUCK: Record<FishingZone, number> = { shore: 0.12, vortex: 0.8 };
 
-/* Vật lý của khung giữ cá: nhấn để nâng, thả ra thì rơi. */
-const LIFT = 2.35;
-const GRAVITY = 1.5;
-const DAMPING = 2.6;
+/**
+ * Vật lý của khung giữ cá: nhấn để nâng, thả ra thì rơi.
+ *
+ * Vận tốc tới hạn mới là con số quyết định trò này có chơi được không, chứ
+ * không phải ba hằng số rời rạc: lên `(LIFT - GRAVITY) / DAMPING` = 1,3 đơn vị
+ * mỗi giây, xuống `GRAVITY / DAMPING` = 1,4. Cả hai đều nhanh hơn con cá nhanh
+ * nhất (1,09), nên người chơi luôn đuổi kịp nếu bấm đúng nhịp. Bản đầu tiên đặt
+ * lực nâng quá nhẹ — khung leo 0,33/s trong khi cá bơi 0,35–1,5/s, tức là không
+ * ván nào thắng được.
+ */
+const LIFT = 8.1;
+const GRAVITY = 4.2;
+const DAMPING = 3.0;
 
 function rarityChip(rarity: FishDef["rarity"], label: string) {
   const color = RARITY_META[rarity].color;
@@ -53,8 +62,6 @@ function Rod({ zone, onLanded }: { zone: FishingZone; onLanded: (fish: FishDef, 
   const holding = useRef(false);
 
   const rod = rodProgress(state.fishCaught);
-  const caughtRef = useRef(state.fishCaught);
-  caughtRef.current = state.fishCaught;
 
   /* Một ván chỉ đọc state lúc bắt đầu; sau đó chạy hoàn toàn bằng ref để vòng
      lặp 60fps không kéo theo một lần render React nào. */
@@ -235,14 +242,18 @@ function Rod({ zone, onLanded }: { zone: FishingZone; onLanded: (fish: FishDef, 
           {[0.25, 0.5, 0.75].map((y) => (
             <span key={y} className="absolute left-0 right-0 h-px bg-mist-500/12" style={{ bottom: `${y * 100}%` }} />
           ))}
+          {/* `data-rod-*` là móc cho bài kiểm tra tự chơi minigame: vị trí khung
+              và cá chỉ tồn tại trong ref, không có cách nào đọc từ ngoài. */}
           <div
             ref={barRef}
+            data-rod-bar=""
             className="absolute inset-x-1 rounded-md border border-jade-400/60 bg-jade-500/25"
             style={{ height: "24%", bottom: "36%", boxShadow: "0 0 14px rgba(76,217,154,0.25) inset" }}
           />
           {/* Cá tô đúng màu độ hiếm: nhìn một cái là biết đang vật lộn với con gì. */}
           <div
             ref={fishRef}
+            data-rod-fish=""
             className="absolute left-1/2 -translate-x-1/2"
             style={{ bottom: "50%", color: hooked ? RARITY_META[hooked.rarity].color : "#8ba4a7" }}
           >

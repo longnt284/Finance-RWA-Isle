@@ -174,7 +174,9 @@ export function fishingConfig(fish: FishDef, rodLevel: number): FishingConfig {
     barHeight: 0.17 + rod * 0.021 - fish.difficulty * 0.075,
     fillRate: 0.42 + rod * 0.035 - fish.difficulty * 0.12,
     drainRate: 0.20 + fish.difficulty * 0.30,
-    fishSpeed: 0.35 + fish.difficulty * 1.15,
+    /* Trần 1,09 đơn vị/giây, thấp hơn vận tốc tới hạn của khung (1,3 lên và 1,4
+       xuống): con cá nhanh nhất vẫn phải trong tầm với của người chơi. */
+    fishSpeed: 0.3 + fish.difficulty * 0.9,
   };
 }
 

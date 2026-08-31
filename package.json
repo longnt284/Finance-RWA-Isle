@@ -21,7 +21,8 @@
     "test:ui": "node tests/ui_audit.cjs --out .artifacts/ui-audit",
     "test:features": "node tests/feature_shots.cjs --out .artifacts/features",
     "test:panels": "node tests/panel_shots.cjs --out .artifacts/panels",
-    "test:exam": "node tests/exam_pass.cjs --out .artifacts/panels"
+    "test:exam": "node tests/exam_pass.cjs --out .artifacts/panels",
+    "test:fish": "node tests/fishing_play.cjs"
   },
   "dependencies": {
     "react": "^18.2.0",
