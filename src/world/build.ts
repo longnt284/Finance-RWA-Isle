@@ -1,5 +1,8 @@
 import * as THREE from "three";
+import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { ISLAND_RADIUS } from "./ocean";
+import { surface } from "./textures";
 import { DECOR_IDS } from "../lib/decor";
 import type { DecorId } from "../lib/decor";
 
@@ -48,32 +51,125 @@ export function makeMats(): Mats {
     material.userData.shared = true;
     return material;
   };
+  /**
+   * Vân bề mặt gắn kèm ngay lúc dựng vật liệu. `normalScale` cố ý nhỏ: mục
+   * tiêu là ánh sáng gợn theo mặt chứ không phải mặt bị rỗ.
+   *
+   * Về số lần lặp: vật liệu ở đây dùng chung cho cả khối lớn lẫn khối bé, mà
+   * UV của mọi hình dựng sẵn đều chạy 0..1 bất kể vật thể to hay nhỏ. Nghĩa là
+   * một con số lặp duy nhất sẽ ra vân mịn trên khối bé và vân khổng lồ trên
+   * khối lớn. Khi buộc phải chọn một phía, luôn chọn phía **lặp dày**: vân quá
+   * mịn thì cùng lắm là không nhìn thấy, còn vân quá to thì biến sân đá thành
+   * mặt sóng bê tông — đúng lỗi mà bản thử đầu tiên mắc phải.
+   */
+  const dressed = (
+    p: THREE.MeshStandardMaterialParameters,
+    kind: Parameters<typeof surface>[0],
+    repeat: number,
+    normalScale: number
+  ) => {
+    const maps = surface(kind, repeat);
+    const material = std({ ...p, normalMap: maps.normalMap, roughnessMap: maps.roughnessMap });
+    material.normalScale.set(normalScale, normalScale);
+    return material;
+  };
   return {
     /* `envMapIntensity` là thứ biến khối vàng phẳng thành kim loại thật: nó lấy
        bản đồ môi trường mà WorldScene nướng từ bầu trời để phản chiếu. */
-    stone: std({ color: 0xa9b9b3, roughness: 0.72, metalness: 0.06, envMapIntensity: 0.5 }),
-    stoneDark: std({ color: 0x64787a, roughness: 0.9, envMapIntensity: 0.35 }),
-    white: std({ color: 0xe4efe9, roughness: 0.6, metalness: 0.04, envMapIntensity: 0.7 }),
-    wood: std({ color: 0x6e4b33 }),
-    roofTeal: std({ color: 0x1e5f58, roughness: 0.55, metalness: 0.12, envMapIntensity: 0.8 }),
-    gold: std({ color: 0xe0aa50, metalness: 0.95, roughness: 0.22, envMapIntensity: 1.5 }),
-    goldBright: std({ color: 0xffd88a, metalness: 1.0, roughness: 0.14, envMapIntensity: 1.9 }),
+    stone: dressed({ color: 0xa9b9b3, roughness: 0.72, metalness: 0.06, envMapIntensity: 0.5 }, "stone", 12, 0.32),
+    stoneDark: dressed({ color: 0x64787a, roughness: 0.9, envMapIntensity: 0.35 }, "stone", 12, 0.36),
+    white: dressed({ color: 0xe4efe9, roughness: 0.6, metalness: 0.04, envMapIntensity: 0.7 }, "plaster", 10, 0.28),
+    wood: dressed({ color: 0x6e4b33, roughness: 0.82 }, "wood", 6, 0.45),
+    roofTeal: dressed({ color: 0x1e5f58, roughness: 0.55, metalness: 0.12, envMapIntensity: 0.8 }, "metal", 8, 0.26),
+    gold: dressed({ color: 0xe0aa50, metalness: 0.95, roughness: 0.22, envMapIntensity: 1.5 }, "metal", 6, 0.18),
+    goldBright: dressed({ color: 0xffd88a, metalness: 1.0, roughness: 0.14, envMapIntensity: 1.9 }, "metal", 6, 0.14),
     glowWarm: std({ color: 0x2a1c0a, emissive: 0xffc069, emissiveIntensity: 1.7, roughness: 0.4 }),
     glowCyan: std({ color: 0x06231f, emissive: 0x5ce8c4, emissiveIntensity: 1.9, roughness: 0.35 }),
     glowBlue: std({ color: 0x0a1a2a, emissive: 0x9fd0ff, emissiveIntensity: 1.6, roughness: 0.35 }),
-    leaves1: std({ color: 0x2e7d5f }),
-    leaves2: std({ color: 0x3f9c70 }),
-    rock: std({ color: 0x47595d, roughness: 1 }),
-    scaffold: std({ color: 0x8a6a44, roughness: 1 }),
+    leaves1: dressed({ color: 0x2e7d5f, roughness: 0.86 }, "foliage", 3, 0.35),
+    leaves2: dressed({ color: 0x3f9c70, roughness: 0.86 }, "foliage", 3, 0.35),
+    rock: dressed({ color: 0x47595d, roughness: 1 }, "stone", 4, 0.7),
+    scaffold: dressed({ color: 0x8a6a44, roughness: 1 }, "wood", 6, 0.45),
     barUp: std({ color: 0x0f3d2e, emissive: 0x4cd99a, emissiveIntensity: 1.1 }),
     barDown: std({ color: 0x3d150f, emissive: 0xff7f6e, emissiveIntensity: 1.0 }),
   };
 }
 
-const box = (w: number, h: number, d: number, m: THREE.Material) =>
-  new THREE.Mesh(new THREE.BoxGeometry(Math.max(0.01, w), Math.max(0.01, h), Math.max(0.01, d)), m);
+/**
+ * Cạnh vát.
+ *
+ * Trong đời thật không có vật thể nào có cạnh sắc tuyệt đối: luôn có một dải
+ * vài phần milimét bo lại, và chính dải đó bắt lấy ánh sáng thành một đường
+ * highlight mảnh chạy dọc mép. Khối hộp toán học không có đường đó nên mắt đọc
+ * ra ngay là hình dựng bằng máy. Bo cạnh là thay đổi rẻ nhất mà đổi được cảm
+ * giác "khối đồ hoạ" sang "vật thể có người làm ra".
+ *
+ * Khối quá mỏng (ván, dây, thanh giằng) thì bỏ qua: bán kính bo sẽ lớn hơn
+ * chính bề dày của nó, và cũng chẳng ai nhìn thấy.
+ */
+const BEVEL_MIN_EDGE = 0.22;
+
+const box = (w: number, h: number, d: number, m: THREE.Material) => {
+  const bw = Math.max(0.01, w);
+  const bh = Math.max(0.01, h);
+  const bd = Math.max(0.01, d);
+  const shortest = Math.min(bw, bh, bd);
+  if (shortest < BEVEL_MIN_EDGE) return new THREE.Mesh(new THREE.BoxGeometry(bw, bh, bd), m);
+  const radius = Math.min(0.05, shortest * 0.16);
+  return new THREE.Mesh(new RoundedBoxGeometry(bw, bh, bd, 1, radius), m);
+};
 const cyl = (rt: number, rb: number, h: number, seg: number, m: THREE.Material) =>
   new THREE.Mesh(new THREE.CylinderGeometry(Math.max(0.01, rt), Math.max(0.01, rb), Math.max(0.01, h), Math.max(3, seg)), m);
+
+/**
+ * Gộp mọi mesh trong một nhóm lại thành một mesh cho mỗi vật liệu.
+ *
+ * Cây cối bây giờ có nhiều bộ phận hơn hẳn bản trước — thân dừa là bảy đốt
+ * cong, tán là chín tàu lá — nên nếu để nguyên thì mỗi cây tốn gần hai chục
+ * lệnh vẽ. Gộp lại giữ y nguyên hình dạng nhưng đưa con số đó về đúng bằng số
+ * vật liệu, tức là hai hoặc ba. Nhờ vậy mới có ngân sách để trồng dày hơn.
+ *
+ * Chỉ dùng cho những thứ dựng xong là đứng yên: gộp rồi thì không còn xoay
+ * riêng từng bộ phận được nữa.
+ */
+function mergeByMaterial(source: THREE.Group): THREE.Group {
+  const buckets = new Map<THREE.Material, THREE.BufferGeometry[]>();
+  const sources: THREE.Mesh[] = [];
+  source.updateMatrixWorld(true);
+  source.traverse((object) => {
+    const mesh = object as THREE.Mesh;
+    if (mesh.isMesh && !Array.isArray(mesh.material)) sources.push(mesh);
+  });
+
+  for (const mesh of sources) {
+    const geometry = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry.clone();
+    geometry.applyMatrix4(mesh.matrixWorld);
+    /* Chỉ giữ ba thuộc tính này: gộp đòi hỏi mọi mảnh có cùng bộ thuộc tính. */
+    for (const name of Object.keys(geometry.attributes)) {
+      if (name !== "position" && name !== "normal" && name !== "uv") geometry.deleteAttribute(name);
+    }
+    if (!geometry.attributes.uv) {
+      geometry.setAttribute("uv", new THREE.Float32BufferAttribute(new Float32Array(geometry.attributes.position.count * 2), 2));
+    }
+    const material = mesh.material as THREE.Material;
+    const bucket = buckets.get(material);
+    if (bucket) bucket.push(geometry);
+    else buckets.set(material, [geometry]);
+    mesh.geometry.dispose();
+  }
+
+  const merged = new THREE.Group();
+  for (const [material, geometries] of buckets) {
+    const combined = mergeGeometries(geometries, false);
+    for (const geometry of geometries) geometry.dispose();
+    if (!combined) continue;
+    const mesh = new THREE.Mesh(combined, material);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    merged.add(mesh);
+  }
+  return merged;
+}
 
 function castAll(g: THREE.Group) {
   g.traverse((o) => {
@@ -895,10 +991,23 @@ export function buildTerrain(palette: TerrainPalette): THREE.Mesh {
   }
   geo.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
   geo.computeVertexNormals();
-  const mesh = new THREE.Mesh(
-    geo,
-    new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.95, metalness: 0 })
-  );
+  /* Bỏ `flatShading`: mặt cắt phẳng lì của mỗi tam giác chính là thứ khiến hòn
+     đảo trông như gấp bằng giấy. Chi tiết bề mặt chuyển sang cho bản đồ pháp
+     tuyến lo — cùng số tam giác nhưng ánh sáng có hạt, có gợn. */
+  /* Số lần lặp phải tính theo kích thước thật: mặt trên của hòn đảo trải 52 đơn
+     vị mà UV chỉ chạy 0..1, nên lặp 26 lần cho ra gợn cát rộng gần một mét —
+     nhìn thành sóng bê tông trên quảng trường chứ không thành hạt cát. Lặp 64
+     lần đưa mỗi gợn về khoảng hai gang tay, đúng tầm mắt đọc ra là mặt đất. */
+  const grain = surface("sand", 64);
+  const material = new THREE.MeshStandardMaterial({
+    vertexColors: true,
+    roughness: 0.95,
+    metalness: 0,
+    normalMap: grain.normalMap,
+    roughnessMap: grain.roughnessMap,
+  });
+  material.normalScale.set(0.4, 0.4);
+  const mesh = new THREE.Mesh(geo, material);
   mesh.position.y = -3;
   mesh.receiveShadow = true;
   return mesh;
@@ -961,25 +1070,75 @@ export function buildGate(m: Mats): THREE.Group {
   return g;
 }
 
-export function makeTree(m: Mats, s: number, leaves: THREE.Material): THREE.Group {
+/**
+ * Cây thông.
+ *
+ * Bản trước là một thân trụ và đúng hai hình nón chồng lên nhau, nên mười lăm
+ * cây trên đảo là mười lăm bản sao khít nhau tới từng độ — mắt bắt được sự lặp
+ * đó ngay và đọc cả rừng thành hoạ tiết dán. Bản này rút ngẫu nhiên từ chính
+ * toạ độ của cây (nên vẫn tất định giữa các lần dựng): số tầng tán, độ nghiêng
+ * thân, độ xoay và độ co của từng tầng đều lệch nhau một chút.
+ */
+export function makeTree(m: Mats, s: number, leaves: THREE.Material, seed = Math.random()): THREE.Group {
   const g = new THREE.Group();
-  const trunk = cyl(0.1 * s, 0.16 * s, 0.7 * s, 5, m.wood);
-  trunk.position.y = 0.35 * s;
+  const rnd = (n: number) => {
+    const v = Math.sin(seed * 127.1 + n * 311.7) * 43758.5453;
+    return v - Math.floor(v);
+  };
+
+  /* Gốc loe ra: thân cây thật không cắm xuống đất như cái cọc. */
+  const flare = cyl(0.13 * s, 0.22 * s, 0.18 * s, 8, m.wood);
+  flare.position.y = 0.09 * s;
+  g.add(flare);
+  const trunk = cyl(0.075 * s, 0.14 * s, 0.85 * s, 8, m.wood);
+  trunk.position.y = 0.5 * s;
+  trunk.rotation.z = (rnd(1) - 0.5) * 0.07;
   g.add(trunk);
-  const c1 = new THREE.Mesh(new THREE.ConeGeometry(0.75 * s, 1.3 * s, 6), leaves);
-  c1.position.y = 1.15 * s;
-  g.add(c1);
-  const c2 = new THREE.Mesh(new THREE.ConeGeometry(0.52 * s, 1.0 * s, 6), leaves);
-  c2.position.y = 1.9 * s;
-  g.add(c2);
-  castAll(g);
-  return g;
+
+  const tiers = 3 + Math.floor(rnd(2) * 2);
+  let y = 0.86 * s;
+  let radius = (0.7 + rnd(3) * 0.14) * s;
+  let height = (1.05 + rnd(4) * 0.2) * s;
+  for (let i = 0; i < tiers; i++) {
+    const cone = new THREE.Mesh(new THREE.ConeGeometry(radius, height, 8, 1), leaves);
+    cone.position.set((rnd(i * 3 + 5) - 0.5) * 0.06 * s, y + height * 0.42, (rnd(i * 3 + 6) - 0.5) * 0.06 * s);
+    cone.rotation.y = rnd(i * 3 + 7) * Math.PI;
+    /* Tán hơi bẹt dần lên đỉnh — dáng thông thật, không phải chồng nón đều. */
+    cone.scale.y = 0.94 + rnd(i * 3 + 8) * 0.16;
+    g.add(cone);
+    y += height * 0.55;
+    radius *= 0.72;
+    height *= 0.82;
+  }
+  const tree = mergeByMaterial(g);
+  castAll(tree);
+  return tree;
 }
 
-export function makeRock(m: Mats, s: number): THREE.Mesh {
-  const mesh = new THREE.Mesh(new THREE.DodecahedronGeometry(Math.max(0.2, 0.55 * s)), m.rock);
-  mesh.scale.y = 0.7;
+/**
+ * Tảng đá.
+ *
+ * Khối mười hai mặt đều là hình học sách giáo khoa: mọi mặt bằng nhau, mọi
+ * cạnh bằng nhau, không tảng đá nào trong tự nhiên như thế. Đẩy từng đỉnh ra
+ * vào theo nhiễu rồi nén trục đứng sẽ ra khối sứt sẹo có mặt phẳng, có góc
+ * nhọn, có chỗ lõm — cùng số tam giác.
+ */
+export function makeRock(m: Mats, s: number, seed = Math.random()): THREE.Mesh {
+  const geometry = new THREE.DodecahedronGeometry(Math.max(0.2, 0.55 * s), 1);
+  const position = geometry.attributes.position as THREE.BufferAttribute;
+  const v = new THREE.Vector3();
+  for (let i = 0; i < position.count; i++) {
+    v.fromBufferAttribute(position, i);
+    const n =
+      Math.sin(v.x * 5.1 + seed * 12.3) * Math.cos(v.z * 4.4 - seed * 7.1) * 0.5 +
+      Math.sin(v.y * 7.7 - seed * 3.3) * 0.5;
+    v.multiplyScalar(1 + n * 0.22);
+    position.setXYZ(i, v.x, v.y * 0.72, v.z);
+  }
+  geometry.computeVertexNormals();
+  const mesh = new THREE.Mesh(geometry, m.rock);
   mesh.castShadow = true;
+  mesh.receiveShadow = true;
   return mesh;
 }
 
@@ -1418,26 +1577,117 @@ export function buildIsleGhost(theme: IslandTheme = "emerald"): { group: THREE.G
 
 /* --------------------------- isle decor ---------------------------- */
 
-export function makePalm(m: Mats): THREE.Group {
-  const g = new THREE.Group();
-  const trunk = cyl(0.09, 0.15, 1.7, 5, m.wood);
-  trunk.position.y = 0.85;
-  trunk.rotation.z = 0.16;
-  g.add(trunk);
-  const frondMat = new THREE.MeshStandardMaterial({ color: 0x3f9c70, flatShading: true, roughness: 0.9, side: THREE.DoubleSide });
-  for (let i = 0; i < 6; i++) {
-    const frond = new THREE.Mesh(new THREE.ConeGeometry(0.16, 1.15, 4), frondMat);
-    const a = (i / 6) * Math.PI * 2;
-    frond.position.set(0.28 + Math.cos(a) * 0.45, 1.75, Math.sin(a) * 0.45);
-    frond.rotation.z = Math.cos(a) * 1.15;
-    frond.rotation.x = -Math.sin(a) * 1.15;
-    g.add(frond);
+/**
+ * Tàu lá dừa.
+ *
+ * Bản trước dùng hình nón bốn cạnh, tức là một cái gai nhọn chĩa ra — nhìn xa
+ * thì tạm, nhìn gần thì đó chính là chỗ lộ ra rằng cảnh vật được ghép từ hình
+ * hộp và hình nón. Tàu lá thật thì bản rộng ở gần cuống, thon dần ra ngọn, và
+ * quan trọng nhất là **rủ xuống** theo trọng lực chứ không thẳng đơ.
+ *
+ * Dựng bằng một dải lưới cong theo hàm bậc hai: rẻ (mười mấy tam giác), nhưng
+ * bóng đổ và đường viền của nó đọc ra ngay là lá cây.
+ */
+function frondGeometry(length: number, width: number, droop: number): THREE.BufferGeometry {
+  const SEGMENTS = 7;
+  const geometry = new THREE.PlaneGeometry(width, length, 1, SEGMENTS);
+  const position = geometry.attributes.position as THREE.BufferAttribute;
+  for (let i = 0; i < position.count; i++) {
+    const x = position.getX(i);
+    const y = position.getY(i);
+    /* k = 0 ở cuống, 1 ở chóp lá. Phải kẹp lại: hàng đỉnh dưới cùng thỉnh
+       thoảng ra -1e-9 vì sai số dấu phẩy động, mà Math.pow(âm, số lẻ) trả NaN
+       — chỉ một đỉnh hỏng là cả tàu lá biến mất khỏi khung hình. */
+    const k = THREE.MathUtils.clamp((y + length / 2) / length, 0, 1);
+    /* Bản lá phình ở khoảng một phần ba đầu rồi thon lại thành mũi nhọn. */
+    const taper = Math.sin(Math.pow(k, 0.55) * Math.PI) * (1 - k * 0.25) + 0.08;
+    position.setX(i, x * taper);
+    /* Rủ xuống nhanh dần: gần cuống còn cứng, ra ngọn thì oằn hẳn. */
+    position.setZ(i, -Math.pow(k, 2.1) * droop);
+    /* Sống lá gấp thành chữ V nông nên tàu lá không phẳng như tờ giấy. */
+    position.setY(i, y + Math.abs(x) * taper * 0.18);
   }
-  const nut = new THREE.Mesh(new THREE.SphereGeometry(0.1, 6, 5), m.wood);
-  nut.position.set(0.28, 1.68, 0.1);
-  g.add(nut);
-  castAll(g);
-  return g;
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+/* Vật liệu của cây dừa dùng chung cho mọi cây: có hai chục cây trên bờ, mỗi
+   cây một bản vật liệu riêng là hai chục lần nạp uniform vô ích. Cờ `shared`
+   để `disposeGroup` không xoá mất vật liệu mà những cây khác đang dùng. */
+let palmMaterials: { frond: THREE.MeshStandardMaterial; nut: THREE.MeshStandardMaterial } | null = null;
+function palmMats() {
+  if (palmMaterials) return palmMaterials;
+  const frond = new THREE.MeshStandardMaterial({
+    color: 0x3f9c70,
+    roughness: 0.86,
+    side: THREE.DoubleSide,
+    ...surface("foliage", 1),
+  });
+  frond.normalScale.set(0.5, 0.5);
+  frond.userData.shared = true;
+  const nut = new THREE.MeshStandardMaterial({ color: 0x6f5a2e, roughness: 0.8 });
+  nut.userData.shared = true;
+  palmMaterials = { frond, nut };
+  return palmMaterials;
+}
+
+export function makePalm(m: Mats, seed = Math.random()): THREE.Group {
+  const g = new THREE.Group();
+  const rnd = (n: number) => {
+    const v = Math.sin(seed * 91.7 + n * 217.3) * 43758.5453;
+    return v - Math.floor(v);
+  };
+
+  /* Thân cong: xếp chồng các đốt ngắn theo một cung tròn, mỗi đốt thon dần.
+     Cây dừa thật không bao giờ mọc thẳng đứng — nó nghiêng ra phía biển. */
+  const SEGMENTS = 7;
+  const lean = 0.14 + rnd(1) * 0.12;
+  const totalHeight = 1.85 + rnd(2) * 0.45;
+  const sway = rnd(3) * Math.PI * 2;
+  const top = new THREE.Vector3();
+  for (let i = 0; i < SEGMENTS; i++) {
+    const k = i / SEGMENTS;
+    const segmentHeight = totalHeight / SEGMENTS;
+    const radius = 0.145 - k * 0.075;
+    const joint = cyl(radius * 0.92, radius, segmentHeight * 1.12, 8, m.wood);
+    /* Độ lệch ngang tăng theo bình phương nên thân cong đều chứ không gãy khúc. */
+    const offset = Math.pow(k, 1.7) * lean * totalHeight;
+    joint.position.set(Math.cos(sway) * offset, segmentHeight * (i + 0.5), Math.sin(sway) * offset);
+    joint.rotation.z = -Math.cos(sway) * k * lean * 1.6;
+    joint.rotation.x = Math.sin(sway) * k * lean * 1.6;
+    g.add(joint);
+    if (i === SEGMENTS - 1) top.set(joint.position.x, segmentHeight * (i + 1), joint.position.z);
+  }
+
+  const { frond: frondMat, nut: nutMat } = palmMats();
+  const crown = new THREE.Group();
+  crown.position.copy(top);
+  const FRONDS = 9;
+  for (let i = 0; i < FRONDS; i++) {
+    const a = (i / FRONDS) * Math.PI * 2 + rnd(i + 10) * 0.22;
+    const length = 1.15 + rnd(i + 30) * 0.3;
+    const frond = new THREE.Mesh(frondGeometry(length, 0.38, 0.62 + rnd(i + 40) * 0.3), frondMat);
+    /* Dựng tàu lá nằm ngang rồi hất lên một góc: vành lá xoè như cái ô. */
+    frond.rotation.set(-Math.PI / 2 + (0.34 + rnd(i + 50) * 0.3), 0, 0);
+    const arm = new THREE.Group();
+    arm.rotation.y = a;
+    arm.add(frond);
+    frond.position.set(0, length * 0.42, 0.06);
+    crown.add(arm);
+  }
+  g.add(crown);
+
+  /* Buồng dừa nép dưới tán, lệch về một phía cho tự nhiên. */
+  for (let i = 0; i < 3; i++) {
+    const nut = new THREE.Mesh(new THREE.SphereGeometry(0.085, 10, 8), nutMat);
+    const a = sway + Math.PI + i * 0.8;
+    nut.position.set(top.x + Math.cos(a) * 0.11, top.y - 0.11 - (i % 2) * 0.06, top.z + Math.sin(a) * 0.11);
+    nut.scale.y = 1.18;
+    g.add(nut);
+  }
+  const palm = mergeByMaterial(g);
+  castAll(palm);
+  return palm;
 }
 
 export function makeDecor(id: DecorId, m: Mats, ticks: TickFn[]): THREE.Group {

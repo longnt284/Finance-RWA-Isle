@@ -7,6 +7,8 @@ import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { GTAOPass } from "three/examples/jsm/postprocessing/GTAOPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
+import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
+import { GradeShader } from "./grade";
 import {
   DISTRICT_POS,
   ISLE_POSITIONS,
@@ -21,6 +23,7 @@ import {
   buildGate,
   buildIsle,
   buildIsleGhost,
+  makeTree,
   makeRock,
   makeDust,
   makeBurstPool,
@@ -30,18 +33,20 @@ import {
   makeBird,
   makeLamp,
   makeDecor,
+  makePalm,
+  terrainHeightAt,
   DECOR_IDS,
 } from "./build";
 import type { TickFn, Mats, DecorId } from "./build";
-import { makeFoliage } from "./foliage";
-import type { Foliage } from "./foliage";
+import { makeGrass } from "./grass";
+import type { Grass } from "./grass";
 import { makeCameraRig, polarBetween, CAMERA_SHOTS, SHOT_BY_ID } from "./camera";
 import type { ShotId } from "./camera";
 import {
   makeProp, placeProp, buildVillage, buildFishingPier, makeWhirlpool,
   propFlowerbed as makeFlowerPatch, PIER_POSITION, PIER_ROTATION,
 } from "./props";
-import { makeSky, makeSun, makeMoon, makeShootingStars, makeCloudLayer, skyStateFor } from "./atmosphere";
+import { makeSky, makeSun, makeMoon, makeShootingStars, makeCloudLayer, skyStateFor, skyGradient } from "./atmosphere";
 import { makeOcean, makeSandShelf, makeBoundary, ISLAND_RADIUS, TERRITORY_RADIUS, WATER_LEVEL } from "./ocean";
 import { makeWeather } from "./weather";
 import { makeYacht, YACHT_LENGTH } from "./yacht";
@@ -270,13 +275,24 @@ export default function WorldScene({
     scene.add(hemi);
     const sunLight = new THREE.DirectionalLight(0xffd9a8, 2.0);
     sunLight.castShadow = true;
-    sunLight.shadow.mapSize.set(compactGpu ? 1024 : 2048, compactGpu ? 1024 : 2048);
+    /* Khung bóng đổ rộng 104 đơn vị. Ở 2048 điểm ảnh thì mỗi texel phủ 5cm —
+       đủ để mép bóng của lan can, cột đèn hay tàu lá dừa vỡ thành răng cưa.
+       Gấp đôi lên 4096 đưa con số đó xuống 2,5cm, và đó là khác biệt giữa
+       "bóng đổ có hình" với "vệt tối". Nhưng tấm bóng đổ cũng là thứ tốn bộ
+       nhớ và băng thông bậc nhất, nên nó phải nghe theo mức chất lượng người
+       chơi chọn chứ không được cố định. */
+    sunLight.shadow.mapSize.set(2048, 2048);
     sunLight.shadow.camera.left = -52;
     sunLight.shadow.camera.right = 52;
     sunLight.shadow.camera.top = 52;
     sunLight.shadow.camera.bottom = -52;
     sunLight.shadow.camera.far = 200;
-    sunLight.shadow.bias = -0.0004;
+    sunLight.shadow.bias = -0.0002;
+    /* `normalBias` đẩy điểm lấy mẫu ra theo pháp tuyến. Nó xử lý được vệt sọc
+       tự đổ bóng trên mặt cong mà `bias` thuần tuý không xử lý nổi, lại không
+       làm bóng "bay" khỏi chân vật thể như khi tăng `bias` lên. */
+    sunLight.shadow.normalBias = 0.035;
+    sunLight.shadow.radius = 2.2;
     scene.add(sunLight);
     /* Ánh trăng là nguồn sáng riêng nên ban đêm vẫn đọc được hình khối. */
     const moonLight = new THREE.DirectionalLight(0x9fc4ff, 0);
@@ -300,24 +316,43 @@ export default function WorldScene({
     const envHorizon = new THREE.Color();
     const envGround = new THREE.Color();
 
-    function refreshEnvMap(daylight: number, fogHex: number, shallowHex: number) {
-      /* Chỉ nướng lại khi ánh sáng đổi đủ nhiều — mỗi phút một lần là quá thừa. */
-      const key = `${Math.round(daylight * 12)}|${fogHex}|${shallowHex}`;
-      if (key === envKey) return;
-      envKey = key;
-      const W = 32;
-      const H = 16;
-      const data = new Uint8Array(W * H * 4);
+    function refreshEnvMap(daylight: number, fogHex: number, shallowHex: number, sunDir: THREE.Vector3) {
+      /* Sắc trời được tính lại mỗi lần vì mặt nước cũng đọc chúng để phản chiếu;
+         chỉ riêng việc *nướng* cubemap mới cần dè sẻn. */
       envTop.setHex(0x0b2b45).lerp(new THREE.Color(0x8fc7e8), daylight);
       envHorizon.setHex(fogHex).lerp(new THREE.Color(0xffd9b0), daylight * 0.5);
       envGround.setHex(shallowHex).multiplyScalar(0.35 + daylight * 0.6);
+
+      /* Chỉ nướng lại khi ánh sáng đổi đủ nhiều — mỗi phút một lần là quá thừa. */
+      const sunSlot = `${Math.round(Math.atan2(sunDir.z, sunDir.x) * 4)}|${Math.round(sunDir.y * 8)}`;
+      const key = `${Math.round(daylight * 12)}|${fogHex}|${shallowHex}|${sunSlot}`;
+      if (key === envKey) return;
+      envKey = key;
+      /* Tấm 32×16 của bản trước quá thô để mang được đĩa mặt trời: sau khi PMREM
+         làm mờ, vàng và kính chỉ nhận về một mảng sáng đều. Ở 96×48 thì mặt trời
+         còn lại thành một điểm chói thật, và đó chính là highlight khiến kim loại
+         ra kim loại. */
+      const W = 96;
+      const H = 48;
+      const data = new Uint8Array(W * H * 4);
       const mix = new THREE.Color();
+      const sunTint = new THREE.Color(0xfff0d0).lerp(new THREE.Color(0xff9a55), 1 - THREE.MathUtils.clamp(sunDir.y * 2.2, 0, 1));
+      const dir = new THREE.Vector3();
       for (let y = 0; y < H; y++) {
         /* v = 0 ở đỉnh trời, 1 ở đáy biển; chân trời nằm giữa. */
         const v = y / (H - 1);
-        if (v < 0.5) mix.copy(envTop).lerp(envHorizon, Math.pow(v * 2, 0.7));
-        else mix.copy(envHorizon).lerp(envGround, Math.pow((v - 0.5) * 2, 0.6));
+        const theta = v * Math.PI;
         for (let x = 0; x < W; x++) {
+          if (v < 0.5) mix.copy(envTop).lerp(envHorizon, Math.pow(v * 2, 0.7));
+          else mix.copy(envHorizon).lerp(envGround, Math.pow((v - 0.5) * 2, 0.6));
+          /* Đĩa mặt trời nướng thẳng vào bản đồ môi trường. */
+          const phi = (x / W) * Math.PI * 2 - Math.PI;
+          dir.set(Math.sin(theta) * Math.cos(phi), Math.cos(theta), Math.sin(theta) * Math.sin(phi));
+          const align = dir.dot(sunDir);
+          if (align > 0.986 && sunDir.y > -0.05) {
+            const strength = THREE.MathUtils.smoothstep(align, 0.986, 0.9995) * (0.35 + daylight * 0.9);
+            mix.lerp(sunTint, strength);
+          }
           const i = (y * W + x) * 4;
           data[i] = Math.round(THREE.MathUtils.clamp(mix.r, 0, 1) * 255);
           data[i + 1] = Math.round(THREE.MathUtils.clamp(mix.g, 0, 1) * 255);
@@ -386,9 +421,9 @@ export default function WorldScene({
     let terrain: THREE.Mesh | null = null;
     let terrainKey: string | null = null;
     let activeSeason: Season = seasonForDate(new Date());
-    /* Lớp cây cỏ instancing được dựng sau, nhưng `rebuildTerrain` là nơi duy
-       nhất biết bảng màu của mùa nên nó vẫn phải là chỗ tô lại lá và cỏ. */
-    let foliageLayer: Foliage | null = null;
+    /* Thảm cỏ được dựng sau, nhưng `rebuildTerrain` là nơi duy nhất biết bảng
+       màu của mùa nên nó vẫn phải là chỗ tô lại cỏ. */
+    let grassLayer: Grass | null = null;
 
     function rebuildTerrain(season: Season) {
       const ground = groundPaletteOf("main");
@@ -401,7 +436,7 @@ export default function WorldScene({
       /* Cây và thảm cỏ dùng vật liệu dùng chung nên chỉ cần đổi màu, không dựng lại. */
       m.leaves1.color.setHex(palette.foliage);
       m.leaves2.color.setHex(palette.foliageAlt);
-      foliageLayer?.setPalette(foliage, foliageAlt, palette.snow);
+      grassLayer?.setPalette(foliage, foliageAlt, palette.snow);
       if (terrainKey === key) return;
       terrainKey = key;
       const previousTerrain = terrain;
@@ -436,9 +471,26 @@ export default function WorldScene({
     const sunPale = new THREE.Color(0xffe2bd);
     const seasonTint = new THREE.Color();
     const cloudTint = new THREE.Color();
+    const waterSkyTop = new THREE.Color();
+    const waterSkyHorizon = new THREE.Color();
     let lastEnvKey = "";
     let currentWeather: WeatherId = "clear";
     let currentDaylight = 0.7;
+
+    /**
+     * Kích thước tấm bóng đổ theo mức chất lượng. Đổi lúc đang chạy được, miễn
+     * là huỷ tấm cũ đi để three cấp phát lại ở kích thước mới.
+     */
+    let shadowSize = 0;
+    function applyShadowQuality() {
+      const prefs = propsRef.current.world;
+      const wanted = compactGpu ? 1024 : prefs.quality === "high" ? 4096 : prefs.quality === "balanced" ? 1536 : 2560;
+      if (wanted === shadowSize) return;
+      shadowSize = wanted;
+      sunLight.shadow.mapSize.set(wanted, wanted);
+      sunLight.shadow.map?.dispose();
+      sunLight.shadow.map = null;
+    }
 
     /**
      * Đồng hồ của thế giới. Chế độ ảnh ấn định một giờ cụ thể để người chơi
@@ -481,7 +533,8 @@ export default function WorldScene({
       currentDaylight = state.daylight;
       activeSeason = season;
       rebuildTerrain(season);
-      refreshEnvMap(state.daylight, palette.fog, palette.shallow);
+      applyShadowQuality();
+      refreshEnvMap(state.daylight, palette.fog, palette.shallow, state.sunDir);
 
       /* ---- ánh sáng ---- */
       const lit = state.daylight * profile.lightScale;
@@ -507,7 +560,19 @@ export default function WorldScene({
       (scene.fog as THREE.FogExp2).color.copy(fogColor);
       (scene.fog as THREE.FogExp2).density = 0.0036 * profile.fogScale;
       shallowColor.setHex(palette.shallow);
-      ocean.apply({ daylight: state.daylight, sunDir: state.sunDir, moonDir: state.moonDir, fog: fogColor, shallow: shallowColor, rain: profile.rain });
+      skyGradient(state, profile.overcast, waterSkyTop, waterSkyHorizon);
+      ocean.apply({
+        daylight: state.daylight,
+        sunDir: state.sunDir,
+        moonDir: state.moonDir,
+        fog: fogColor,
+        shallow: shallowColor,
+        rain: profile.rain,
+        /* Đúng bộ màu mà shader vòm trời đang vẽ, nên trời in xuống nước khớp
+           với trời treo trên đầu — kể cả khi mây kéo đến. */
+        skyTop: waterSkyTop,
+        skyHorizon: waterSkyHorizon,
+      });
       boundary.setTint(shallowColor);
 
       /* ---- bầu trời ---- */
@@ -526,7 +591,7 @@ export default function WorldScene({
       /* Gió là thứ duy nhất trong khung hình cho biết trời đang lặng hay đang
          giông trước cả khi hạt mưa rơi xuống. Nó chạy trong vertex shader nên
          không tốn gì, và vẫn thổi kể cả khi người chơi tắt hạt hiệu ứng. */
-      foliageLayer?.setWind(reduceMotion ? 0 : 0.24 + profile.rain * 0.7 + profile.overcast * 0.35);
+      grassLayer?.setWind(reduceMotion ? 0 : 0.24 + profile.rain * 0.7 + profile.overcast * 0.35);
 
       checkGolden(now, chosen);
     }
@@ -575,7 +640,7 @@ export default function WorldScene({
     }
     for (const d of DISTRICT_IDS) rebuildDistrict(d);
 
-    /* scenery: rocks, lamps — cây cối đã chuyển sang lớp instancing bên dưới. */
+    /* scenery: trees, rocks, lamps */
     const scenery = new THREE.Group();
     const treeSpots: [number, number, number][] = [
       [15.5, 3, 1.2], [-15, 4, 1.05], [14, -12, 0.9], [-14, -12.5, 1.15], [5.5, 14, 1.0],
@@ -587,6 +652,14 @@ export default function WorldScene({
       [3.4, -17.4, 0.94], [-3.6, -17.2, 1.06], [19.6, 2.4, 0.8], [-19.8, 2.6, 0.86],
       [6.8, 17.6, 0.78], [-6.6, 17.4, 0.84], [13.4, -15.2, 0.82], [-13.2, -15.4, 0.9],
     ];
+    for (const [x, z, s] of treeSpots) {
+      const tree = makeTree(m, s, Math.random() > 0.5 ? m.leaves1 : m.leaves2);
+      /* Đặt theo cao độ mặt đất thật chứ không phải y = 0: những cây nằm ngoài
+         bán kính 17 đứng trên bãi thoải, để y = 0 là chúng lơ lửng trên cát. */
+      tree.position.set(x, terrainHeightAt(x, z), z);
+      tree.rotation.y = x * z;
+      scenery.add(tree);
+    }
     /* Đá rải trên bãi cát mới mở rộng, làm mép đảo có nhịp chứ không trống trơn. */
     const rockSpots: [number, number, number][] = [
       [21.5, -6, 1.3], [-22, -5, 1.1], [19, 14, 0.9], [-19, 14.5, 1.2], [3, 20.5, 1.0],
@@ -612,25 +685,31 @@ export default function WorldScene({
     /* Dừa và luống hoa men theo bãi cát. Ảnh tham chiếu của hòn đảo dày đặc cây
        cối; bản cũ chỉ có 15 cây thông nên mép đảo trông trơ trọi. */
     const palmSpots: [number, number, number][] = [
-      /* fmt: giữ nguyên bố cục vòng ngoài, chỉ chuyển cách dựng. */
       [20.5, 4.5, 1.0], [21.8, -1.5, 0.9], [19.6, 9.4, 1.05], [16.8, 15.2, 0.95], [11.5, 19.4, 1.0],
       [5.4, 21.6, 0.88], [-1.5, 22.2, 1.0], [-8.2, 21.0, 0.92], [-14.4, 18.2, 1.0], [-19.2, 12.6, 0.95],
       [-21.6, 6.2, 1.05], [-22.2, -0.8, 0.9], [-20.8, -7.4, 1.0], [-17.4, -13.6, 0.95], [-12.2, -17.8, 1.0],
       [-5.6, -20.6, 0.88], [1.8, -21.4, 1.02], [8.6, -20.2, 0.94], [14.8, -16.8, 1.0], [19.2, -11.4, 0.92],
       [9.2, 8.6, 0.8], [-9.4, 8.2, 0.85], [9.0, -6.8, 0.8], [-8.8, -6.4, 0.85],
     ];
-    /* ---------------------- cây cỏ dựng bằng instancing ----------------------
-       Cả rừng thông, rừng dừa và thảm cỏ gói vào tám lệnh vẽ. Nhờ tiết kiệm
-       được ngần ấy lệnh vẽ mới đủ ngân sách cho bốn nghìn ngọn cỏ — thứ mà bản
-       trước hoàn toàn không có, khiến mặt đảo chỉ là một mảng xanh phẳng. */
-    foliageLayer = makeFoliage(m, {
-      trees: treeSpots.map(([x, z, scale], index) => ({ x, z, scale, tint: index % 2 })),
-      palms: palmSpots.map(([x, z, scale]) => ({ x, z, scale: scale * 1.25 })),
-      grass: reduceMotion ? 0 : compactGpu ? 1600 : 4200,
-    });
-    scene.add(foliageLayer.group);
-    staticTicks.push(foliageLayer.tick);
-    /* Dựng xong mới có gì để tô: gọi lại để lớp cây cỏ nhận bảng màu của mùa. */
+    for (const [x, z, s] of palmSpots) {
+      const palm = makePalm(m);
+      palm.position.set(x, terrainHeightAt(x, z), z);
+      palm.scale.setScalar(s * 1.25);
+      palm.rotation.y = x * z;
+      scenery.add(palm);
+    }
+
+    /* ---------------------- thảm cỏ dựng bằng instancing ----------------------
+       Bốn nghìn ngọn cỏ trong đúng một lệnh vẽ. Không có nó, khoảng giữa những
+       công trình chỉ là một mảng màu xanh phẳng. Cây thông và cây dừa vẫn dựng
+       từng cây một: mỗi cây có số tầng tán, độ cong thân và độ rủ tàu lá riêng,
+       gộp chúng thành một hình dùng chung sẽ đánh mất đúng cái làm chúng đẹp. */
+    grassLayer = makeGrass(reduceMotion ? 0 : compactGpu ? 1600 : 4200);
+    if (grassLayer.mesh) {
+      scene.add(grassLayer.mesh);
+      staticTicks.push(grassLayer.tick);
+    }
+    /* Dựng xong mới có gì để tô: gọi lại để thảm cỏ nhận bảng màu của mùa. */
     rebuildTerrain(activeSeason);
     const flowerSpots: [number, number, number][] = [
       [6.4, 6.2, 0xb79cff], [-6.6, 6.0, 0xff9ac1], [6.2, -4.4, 0xf0c268], [-6.4, -4.2, 0x5ce8c4],
@@ -947,7 +1026,16 @@ export default function WorldScene({
        tuyến tính (tone mapping bị hoãn lại), `OutputPass` mới tone-map và mã hoá
        sRGB một lần duy nhất ở cuối, nên nước và bầu trời — vốn tự gọi
        `<tonemapping_fragment>` — không bị nướng hai lần. */
-    const composer = new EffectComposer(renderer);
+    /* Bộ đệm của composer phải tự khử răng cưa: cờ `antialias` của renderer chỉ
+       áp cho khung hình vẽ thẳng ra màn hình, nên trước đây hễ bật bloom là mọi
+       đường mái, cột buồm và mép lá lại lởm chởm. Đây chính là chỗ chữ "sắc
+       nét" bị đánh mất. */
+    const composerTarget = new THREE.WebGLRenderTarget(
+      Math.max(1, container.clientWidth),
+      Math.max(1, container.clientHeight),
+      { type: THREE.HalfFloatType, samples: compactGpu ? 0 : 4 }
+    );
+    const composer = new EffectComposer(renderer, composerTarget);
     composer.setPixelRatio(renderPixelRatio);
     composer.setSize(container.clientWidth, container.clientHeight);
     composer.addPass(new RenderPass(scene, camera));
@@ -978,6 +1066,11 @@ export default function WorldScene({
     );
     composer.addPass(bloomPass);
     composer.addPass(new OutputPass());
+    /* Chỉnh màu và "khuyết tật ống kính" đi sau cùng, tức là trên dữ liệu đã
+       tone-map — đúng thứ tự của một chuỗi hậu kỳ thật. */
+    const gradePass = new ShaderPass(GradeShader);
+    gradePass.material.uniforms.uResolution.value.set(container.clientWidth, container.clientHeight);
+    composer.addPass(gradePass);
 
     /**
      * Bloom là hiệu ứng đắt nhất trong khung hình. Ở chế độ tự động, nó tự tắt
@@ -991,6 +1084,19 @@ export default function WorldScene({
       if (prefs.quality === "balanced") return false;
       if (prefs.quality === "high") return true;
       return !compactGpu && renderPixelRatio >= 1 && averageFrameMs < 26;
+    }
+
+    /**
+     * Chuỗi hậu kỳ tính cả lớp chỉnh màu, nên nó bật ở cả mức "cân bằng" —
+     * lớp đó chỉ tốn đúng một lượt vẽ toàn màn hình nhưng lại là thứ mang lại
+     * phần lớn cảm giác "ảnh chụp". Chỉ khi người chơi tắt hẳn hiệu ứng, hoặc
+     * máy yếu đang tụt khung hình, mới vẽ thẳng ra màn hình.
+     */
+    function postEnabled(): boolean {
+      const prefs = propsRef.current.world;
+      if (!prefs.effects) return false;
+      if (prefs.quality === "high") return true;
+      return !compactGpu || averageFrameMs < 30;
     }
 
     /**
@@ -1270,6 +1376,7 @@ export default function WorldScene({
       renderer.setSize(w, h);
       composer.setSize(w, h);
       bloomPass.setSize(w, h);
+      gradePass.material.uniforms.uResolution.value.set(w, h);
     }
     window.addEventListener("resize", onResize);
 
@@ -1284,28 +1391,25 @@ export default function WorldScene({
       /* Gấp đôi mật độ điểm ảnh so với lúc chơi: ảnh xuất ra để chia sẻ và
          phóng to, không phải để hiển thị vừa khít khung hiện tại. */
       const shotRatio = Math.min(2.6, Math.max(2, window.devicePixelRatio || 1));
-      const wasBloom = bloomPass.enabled;
-      const wasGtao = gtaoPass.enabled;
+      const resolution = gradePass.material.uniforms.uResolution.value as THREE.Vector2;
+      const wasResolution = resolution.clone();
       try {
         renderer.setPixelRatio(shotRatio);
         renderer.setSize(w, h, false);
         composer.setPixelRatio(shotRatio);
         composer.setSize(w, h);
-        /* Ảnh tĩnh không có ngân sách khung hình để lo: bật hết hiệu ứng, kể cả
-           khi lúc chơi chúng đang bị tự động hạ xuống cho mượt. */
-        bloomPass.enabled = propsRef.current.world.effects;
-        gtaoPass.enabled = propsRef.current.world.effects && !compactGpu;
-        bloomPass.strength = 0.34 + (1 - currentDaylight) * 0.62;
-        if (bloomPass.enabled || gtaoPass.enabled) composer.render();
-        else renderer.render(scene, camera);
+        /* Quang sai của ống kính tính theo `uResolution`. Bộ đệm lúc chụp lớn
+           gấp đôi, nên không cập nhật con số này thì viền màu trong ảnh xuất ra
+           đậm gấp đôi những gì người chơi vừa ngắm. */
+        resolution.set(w * shotRatio, h * shotRatio);
+        renderFrame(clock.elapsedTime, true);
         return renderer.domElement.toDataURL("image/png");
       } catch {
         /* Trình duyệt có thể từ chối `toDataURL` nếu canvas bị "vấy bẩn"; lúc
            đó thà không có ảnh còn hơn làm sập cả thế giới 3D. */
         return null;
       } finally {
-        bloomPass.enabled = wasBloom;
-        gtaoPass.enabled = wasGtao;
+        resolution.copy(wasResolution);
         renderer.setPixelRatio(renderPixelRatio);
         renderer.setSize(w, h, false);
         composer.setPixelRatio(renderPixelRatio);
@@ -1349,7 +1453,6 @@ export default function WorldScene({
         burst.fire(origin, kind);
       },
     };
-    (window as unknown as Record<string, unknown>).__probe = { camera, controls, scene, foliageLayer };
     handleRef.current = {
       fireBurst: (view, kind) => sceneApi.current?.burst(view, kind),
       flyToShot: (id) => sceneApi.current?.flyToShot(id),
@@ -1527,28 +1630,37 @@ export default function WorldScene({
         updateLabels();
         updateTooltipContent();
       }
-      renderFrame();
+      renderFrame(t);
     }
 
     /**
-     * Một khung hình. Tách khỏi `frame()` vì chế độ ảnh cần vẽ lại đúng cảnh
-     * này ở độ phân giải cao rồi đọc canvas ngay trong cùng một nhịp đồng bộ —
-     * `preserveDrawingBuffer` bị tắt để tiết kiệm bộ nhớ, nên chỉ có cách đó
-     * mới lấy được pixel.
+     * Vẽ một khung hình.
+     *
+     * Tách khỏi `frame()` vì chế độ ảnh cần vẽ lại đúng cảnh này ở độ phân giải
+     * cao rồi đọc canvas ngay trong cùng một nhịp đồng bộ — `preserveDrawingBuffer`
+     * bị tắt để tiết kiệm bộ nhớ, nên chỉ có cách đó mới lấy được pixel.
+     *
+     * `hero` là khung dành cho ảnh tĩnh: nó không có ngân sách khung hình để lo,
+     * nên bật hết hiệu ứng kể cả khi lúc chơi chúng đang bị tự động hạ xuống.
      */
-    function renderFrame() {
-      const useBloom = bloomEnabled();
-      const useGtao = gtaoEnabled();
-      bloomPass.enabled = useBloom;
-      gtaoPass.enabled = useGtao;
-      if (useBloom || useGtao) {
-        /* Bloom mạnh hơn về đêm: ban ngày ánh mặt trời đã đủ chói, thêm quầng
-           sáng chỉ làm cảnh bệt màu. */
-        bloomPass.strength = 0.34 + (1 - currentDaylight) * 0.62;
-        composer.render();
-      } else {
+    function renderFrame(t: number, hero = false) {
+      const effects = propsRef.current.world.effects;
+      if (!(hero ? effects : postEnabled())) {
         renderer.render(scene, camera);
+        return;
       }
+      bloomPass.enabled = hero ? effects : bloomEnabled();
+      gtaoPass.enabled = hero ? effects && !compactGpu : gtaoEnabled();
+      /* Bloom mạnh hơn về đêm: ban ngày ánh mặt trời đã đủ chói, thêm quầng sáng
+         chỉ làm cảnh bệt màu. */
+      bloomPass.strength = 0.34 + (1 - currentDaylight) * 0.62;
+      const grade = gradePass.material.uniforms;
+      grade.uTime.value = t;
+      /* Ban đêm hạt phim và tối góc mạnh tay hơn: đó là lúc một cảm biến thật
+         phải đẩy ISO lên, nên ảnh đêm sạch bong mới là cái phi thực. */
+      grade.uGrain.value = 0.022 + (1 - currentDaylight) * 0.03;
+      grade.uVignette.value = 0.28 + (1 - currentDaylight) * 0.14;
+      composer.render();
     }
     frame();
 
@@ -1567,7 +1679,7 @@ export default function WorldScene({
       renderer.domElement.removeEventListener("pointerleave", onPointerLeave);
       flightTween?.kill();
       gtaoPass.dispose();
-      foliageLayer?.dispose();
+      grassLayer?.dispose();
       controls.dispose();
       scene.traverse((o) => {
         const mesh = o as THREE.Mesh;

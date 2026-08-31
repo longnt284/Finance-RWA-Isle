@@ -75,31 +75,50 @@ seed mà ứng dụng dùng, nên nó bấm trúng chứ không đoán.
 - **Chín kiểu thời tiết**: quang đãng, nhiều mây, mưa, giông bão (có chớp), tuyết
   rơi, mưa hoa, lá rơi, sương mù và đom đóm ban đêm. Thời tiết tự đổi vài lần mỗi
   ngày theo mùa, hoặc bạn tự chọn trong bảng *Khí hậu & thời gian*.
+- **Hậu kỳ** chạy qua `EffectComposer` với bộ đệm đa mẫu (MSAA ×4 trên máy đủ
+  khoẻ) — cờ `antialias` của renderer chỉ áp cho khung vẽ thẳng ra màn hình, nên
+  thiếu bộ đệm này thì hễ bật bloom là mọi mép mái và cột buồm lại răng cưa.
+  Thứ tự: `RenderPass` vẽ vào bộ đệm tuyến tính → bloom → `OutputPass` tone-map
+  và mã hoá sRGB một lần duy nhất → `GradeShader`. Nước và bầu trời tự gọi
+  `<tonemapping_fragment>` nên không bị nướng hai lần. Bloom tự tắt ở mức "cân
+  bằng", trên máy yếu, và khi khung hình vượt 26ms.
+- **Lớp chỉnh màu** (`src/world/grade.ts`) mô phỏng đúng những khuyết tật khiến
+  mắt đọc một khung hình là "ảnh chụp" chứ không phải "ảnh máy vẽ": tối bốn góc,
+  tán sắc rất nhẹ ở rìa, đường cong tương phản chữ S, bóng đổ ngả lam còn vùng
+  sáng ngả ấm, và hạt cảm biến đậm dần về đêm.
+- **Vân bề mặt sinh tại chỗ** (`src/world/textures.ts`): nhiễu nhiều tầng lặp
+  liền mạch dựng thành bản đồ pháp tuyến và bản đồ độ nhám cho đá, vữa, gỗ, kim
+  loại, cát, vải và lá. Vẽ bằng `DataTexture` ngay khi trang mở nên không thêm
+  một request nào. Đây là thứ tách "khối nhựa tô màu" khỏi "vật liệu": chỉ cần
+  độ nhám lệch vài phần trăm theo vị trí là cùng hình khối ấy đã ra chất đá.
+- **Cạnh vát**: mọi khối hộp đủ dày dùng `RoundedBoxGeometry` với bán kính bo
+  rất nhỏ. Vật thể thật không có cạnh sắc tuyệt đối, và chính dải bo đó bắt lấy
+  một đường highlight mảnh chạy dọc mép.
 - **GTAO** (che khuất môi trường theo phương pháp ground-truth) chạy trong cùng
-  `EffectComposer`, ngay trước bloom. Chân tường, kẽ mái, gốc cây và mép bậc thềm
-  tối lại đúng như ngoài đời — đó là thứ khiến hòn đảo hết trông như đồ chơi nhựa
-  xếp trên mặt phẳng. Bán kính 0,75 đơn vị, cỡ của một bóng tiếp xúc thật ở tỉ lệ
-  công trình cao 5–10 đơn vị. Vì nó phải vẽ lại toàn cảnh một lượt nữa để lấy pháp
-  tuyến và chiều sâu, ngưỡng tự tắt chặt hơn bloom (20ms thay vì 26ms) và máy yếu
-  bị loại thẳng. Cận cảnh camera nâng từ 0,1 lên 0,6 và viễn cảnh hạ từ 1400 xuống
-  950: tỉ lệ xa/gần 14.000 lần của bản trước làm depth texture vỡ vụn, bóng tiếp
-  xúc biến thành những vệt sọc.
-- **Cây cỏ dựng bằng instancing**. Bản trước dựng mỗi cây thông thành một `Group`
-  ba mesh và mỗi cây dừa thành tám mesh — 237 lệnh vẽ chỉ để có mấy bụi cây, và
-  thảm cỏ thì đơn giản là không có. Nay mỗi bộ phận là một `InstancedMesh` duy
-  nhất: 27 thông, 24 dừa và **4.200 ngọn cỏ** gói lại còn tám lệnh vẽ. Ngọn cỏ ngả
-  theo gió trong vertex shader (uốn theo `y` mũ 1,7 nên gốc đứng yên còn ngọn ngả
-  hẳn, pha lấy từ toạ độ thế giới của chính nó nên cả thảm gợn thành sóng); gió
-  mạnh dần theo mưa và mây. Sắc lá và sắc cỏ đổi theo mùa qua `instanceColor` nên
-  sang mùa chỉ là ghi lại một mảng nhỏ, không dựng lại hình. Máy yếu hạ xuống
-  1.600 ngọn, `prefers-reduced-motion` tắt hẳn thảm cỏ.
-- **Bloom** chạy qua `EffectComposer`: `RenderPass` vẽ vào bộ đệm tuyến tính,
-  `OutputPass` mới tone-map và mã hoá sRGB một lần ở cuối — nên nước và bầu
-  trời, vốn tự gọi `<tonemapping_fragment>`, không bị nướng hai lần. Bloom tự
-  tắt ở mức chất lượng "cân bằng", trên máy yếu, và khi khung hình vượt 26ms.
+  chuỗi hậu kỳ, ngay sau `RenderPass` và trước bloom. Chân tường, kẽ mái, gốc cây
+  và mép bậc thềm tối lại đúng như ngoài đời. Bán kính 0,75 đơn vị, cỡ của một
+  bóng tiếp xúc thật ở tỉ lệ công trình cao 5–10 đơn vị. Vì nó phải vẽ lại toàn
+  cảnh một lượt nữa để lấy pháp tuyến và chiều sâu, ngưỡng tự tắt chặt hơn bloom
+  (20ms thay vì 26ms) và máy yếu bị loại thẳng. Cận cảnh camera nâng từ 0,1 lên
+  0,6 và viễn cảnh hạ từ 1400 xuống 950: tỉ lệ xa/gần 14.000 lần của bản trước
+  làm depth texture vỡ vụn, bóng tiếp xúc biến thành những vệt sọc.
+- **Thảm cỏ dựng bằng instancing**: **4.200 ngọn cỏ** trong đúng một lệnh vẽ.
+  Không có nó, khoảng giữa những công trình chỉ là một mảng màu xanh phẳng. Ngọn
+  cỏ ngả theo gió trong vertex shader (uốn theo `y` mũ 1,7 nên gốc đứng yên còn
+  ngọn ngả hẳn, pha lấy từ toạ độ thế giới của chính nó nên cả thảm gợn thành
+  sóng); gió mạnh dần theo mưa và mây. Sắc cỏ đổi theo mùa qua `instanceColor`
+  nên sang mùa chỉ là ghi lại một mảng nhỏ, không dựng lại hình. Máy yếu hạ xuống
+  1.600 ngọn, `prefers-reduced-motion` tắt hẳn thảm cỏ. Cây thông và cây dừa vẫn
+  dựng từng cây một: mỗi cây có số tầng tán, độ cong thân và độ rủ tàu lá riêng
+  theo hạt giống, gộp chúng thành một hình dùng chung sẽ đánh mất đúng cái làm
+  chúng đẹp. Cây được đặt theo cao độ mặt đất thật, nên những cây ngoài bán kính
+  17 đứng trên bãi thoải chứ không lơ lửng trên cát.
 - **Bản đồ môi trường** nướng bằng PMREM từ một dải gradient trời–chân trời–biển
-  (32×16 pixel, không thêm request nào): vàng, mái kính và đá bóng có phản chiếu
-  thật thay vì màu bệt.
+  96×48 pixel có nướng sẵn cả đĩa mặt trời (không thêm request nào): vàng, mái
+  kính và đá bóng nhận về một điểm chói thật thay vì một mảng sáng đều.
+- **Bóng đổ** dùng `normalBias` để khử vệt sọc tự đổ bóng trên mặt cong mà không
+  làm bóng bay khỏi chân vật thể; tấm bóng đổ đổi kích thước theo mức chất lượng
+  (1024 trên máy yếu → 4096 ở mức "cao").
 - **Xóm làng** 21 công trình — nhà gỗ, quầy chợ, lều trại, vọng lâu, cối xay
   gió, tháp canh, nhà kính — cùng 24 cây dừa và 10 luống hoa ven bãi cát. Quảng
   trường hải đăng là sân tròn nhiều bậc có lan can, chậu lửa và nan hoa lát đá.
@@ -107,6 +126,19 @@ seed mà ứng dụng dùng, nên nó bấm trúng chứ không đoán.
   ngoài xa là vành san hô phát sáng đánh dấu ranh giới. Mặt nước là một đĩa tròn
   nên đường chân trời không bao giờ lộ góc vuông. Lái du thuyền tới gần rìa, một
   vách sáng hiện dần để bạn biết đã tới giới hạn.
+- **Mặt nước** dựng trên pháp tuyến ba lớp: sóng lừng lấy đạo hàm giải tích của
+  chính ba hàm sin dịch chuyển đỉnh (lưới thưa hơn bước sóng nên
+  `computeVertexNormals` sẽ ra pháp tuyến sai), cộng hai lớp gợn cuộn ngược
+  chiều nhau. Trên nền pháp tuyến đó, dải nắng tính bằng phân bố vi mặt GGX nên
+  vỡ vụn thành hàng nghìn đốm chạy dài về phía mặt trời thay vì một vệt tròn
+  liền. Phản chiếu trời theo Fresnel Schlick, dùng đúng bộ màu mà shader vòm
+  trời đang vẽ. Sát bờ, mặt nước trong dần để lộ thềm cát bên dưới — bãi biển
+  chạy tiếp xuống nước rồi mới mờ đi, chứ không dừng lại ở một vòng màu.
+- **Cây cối** rút ngẫu nhiên từ chính toạ độ của cây nên vẫn tất định qua các
+  lần dựng, nhưng không cây nào trùng cây nào: số tầng tán, độ nghiêng thân, độ
+  xoay và độ co đều lệch nhau. Tàu lá dừa là dải lưới thon dần và rủ xuống theo
+  trọng lực. Mỗi cây được gộp lại còn đúng một mesh cho mỗi vật liệu, nên hình
+  phức tạp hơn hẳn mà số lệnh vẽ vẫn giảm.
 
 ## Camera
 
@@ -343,12 +375,16 @@ ghi đè ngầm là cách nhanh nhất để người dùng mất tiến độ.
 
 ## Hiệu năng
 
-- Toàn bộ cây cối và thảm cỏ nằm trong tám `InstancedMesh` (xem *Thế giới 3D*),
-  nên 4.200 ngọn cỏ rẻ hơn 39 cái cây của bản trước.
+- Thảm cỏ 4.200 ngọn nằm gọn trong một `InstancedMesh` (xem *Thế giới 3D*), nên
+  nó tốn đúng một lệnh vẽ.
 - Renderer tự hạ/tăng pixel ratio theo frame time, giảm shadow map và mật độ hạt
   trên thiết bị yếu, và tôn trọng `prefers-reduced-motion`.
 - Ba mức chất lượng (tự động / cao / cân bằng) cùng công tắc tắt hẳn hiệu ứng hạt
-  trong bảng *Khí hậu & thời gian*.
+  trong bảng *Khí hậu & thời gian*. Mức chất lượng quyết định cả kích thước tấm
+  bóng đổ lẫn việc có bật bloom hay không; lớp chỉnh màu chỉ tốn một lượt vẽ toàn
+  màn hình nên nó chạy ở cả mức "cân bằng", chỉ tắt khi người chơi tắt hẳn hiệu ứng.
+- Vân bề mặt chia sẻ chung một ảnh gốc trong GPU; đổi số lần lặp chỉ tạo một bản
+  sao trỏ về đúng ảnh đó nên gần như không tốn thêm bộ nhớ.
 - Raycast picking giới hạn 60ms một lần; nhãn thế giới cập nhật 30 lần/giây.
 - Bundle tách riêng `three` và `react` để trình duyệt giữ cache qua các lần deploy;
   bảng điều khiển không kéo theo Three.js.
@@ -357,14 +393,18 @@ ghi đè ngầm là cách nhanh nhất để người dùng mất tiến độ.
 
 - `src/world/WorldScene.tsx` — vòng lặp render, camera, picking, chất lượng thích
   ứng, điều phối môi trường và bộ điều khiển du thuyền.
-- `src/world/atmosphere.ts` — vòm trời, mặt trời, mặt trăng có pha, sao băng, mây.
+- `src/world/atmosphere.ts` — vòm trời, mặt trời, mặt trăng có pha, sao băng, mây,
+  và bộ màu trời dùng chung để mặt nước phản chiếu đúng bầu trời đang treo trên nó.
+- `src/world/textures.ts` — bộ sinh vân bề mặt (pháp tuyến + độ nhám) bằng nhiễu
+  lặp liền mạch, không tải file.
+- `src/world/grade.ts` — lớp chỉnh màu hậu kỳ: tối góc, tán sắc, tương phản, hạt phim.
 - `src/world/ocean.ts` — đại dương tròn, thềm cát nông, vành san hô ranh giới.
 - `src/world/weather.ts` — hệ hạt mưa, tuyết, cánh hoa, lá, sương, đom đóm.
 - `src/world/yacht.ts` — du thuyền 5 hạng.
 - `src/world/build.ts` — địa hình, công trình bốn lĩnh vực, đảo riêng, trang trí.
 - `src/world/props.ts` — 40 kiểu vật phẩm của Chợ, xóm làng, bến câu, xoáy nước.
 - `src/world/camera.ts` — giá máy: giới hạn góc theo ngữ cảnh, va chạm, sáu góc máy đẹp.
-- `src/world/foliage.ts` — rừng thông, rừng dừa và thảm cỏ dựng bằng instancing.
+- `src/world/grass.ts` — thảm cỏ dựng bằng instancing, ngả theo gió trong shader.
 - `src/components/Photo.tsx` — chế độ ảnh: giờ, mùa, thời tiết, khung hình, xuất PNG.
 - `src/components/FishArt.tsx` — bộ dựng hình SVG cho 35 loài cá.
 - `src/lib/fishArt.ts` — dáng thân và bảng màu của từng loài.

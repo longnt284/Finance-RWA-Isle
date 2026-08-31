@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import type { TickFn } from "./atmosphere";
+import { surface, waterNormalMap } from "./textures";
 
 /* ------------------------------------------------------------------ */
 /*  Đại dương tròn, thềm cát nông và vành san hô đánh dấu lãnh thổ      */
@@ -48,6 +49,9 @@ export interface Ocean {
     fog: THREE.Color;
     shallow: THREE.Color;
     rain: number;
+    /** Sắc đỉnh trời và sắc chân trời — mặt nước phản chiếu đúng bầu trời hôm đó. */
+    skyTop: THREE.Color;
+    skyHorizon: THREE.Color;
   }): void;
 }
 
@@ -58,17 +62,23 @@ export function makeOcean(): Ocean {
       uDaylight: { value: 0.72 },
       uFog: { value: new THREE.Color(0x08222b) },
       uShallow: { value: new THREE.Color(0x30bcc0) },
+      uSkyTop: { value: new THREE.Color(0x6fb2da) },
+      uSkyHorizon: { value: new THREE.Color(0xbcd8de) },
       uSunDir: { value: new THREE.Vector3(0.4, 0.6, -0.5) },
       uMoonDir: { value: new THREE.Vector3(-0.4, 0.5, 0.6) },
       uRain: { value: 0 },
       uIsland: { value: ISLAND_RADIUS },
       uShelf: { value: SHELF_RADIUS },
       uTerritory: { value: TERRITORY_RADIUS },
+      uRipple: { value: waterNormalMap() },
     },
     fog: false,
+    transparent: true,
+    depthWrite: false,
     vertexShader: `
       varying vec3 vWorld;
       varying float vWave;
+      varying vec3 vSwell;
       uniform float uTime;
       uniform float uRain;
       void main() {
@@ -79,6 +89,20 @@ export function makeOcean(): Ocean {
         float chop = sin(p.x * 0.32 + uTime * 3.1) * sin(p.y * 0.29 - uTime * 2.6) * 0.05 * uRain;
         p.z += w1 + w2 + w3 + chop;
         vWave = w1 + w2 + w3 + chop;
+
+        /* Pháp tuyến của sóng lừng tính bằng đạo hàm của chính ba hàm sin ở trên.
+           Lưới nước thưa hơn bước sóng rất nhiều nên computeVertexNormals sẽ ra
+           pháp tuyến sai; lấy đạo hàm giải tích thì đúng ở mọi mật độ lưới.
+           Lưu ý mặt nước xoay -90° quanh trục X: toạ độ z cục bộ là chiều cao,
+           còn y cục bộ ứng với -z thế giới. */
+        float d1 = cos(p.x * 0.055 + uTime * 0.72) * 0.055 * 0.16;
+        float d2x = cos(p.y * 0.082 - uTime * 0.54 + p.x * 0.018) * 0.018 * 0.11;
+        float d2y = cos(p.y * 0.082 - uTime * 0.54 + p.x * 0.018) * 0.082 * 0.11;
+        float d3 = cos((p.x + p.y) * 0.035 + uTime * 0.31) * 0.035 * 0.07;
+        float dhdx = d1 + d2x + d3;
+        float dhdz = -(d2y + d3);
+        vSwell = normalize(vec3(-dhdx, 1.0, -dhdz));
+
         vec4 wp = modelMatrix * vec4(p, 1.0);
         vWorld = wp.xyz;
         gl_Position = projectionMatrix * viewMatrix * wp;
@@ -87,6 +111,8 @@ export function makeOcean(): Ocean {
       uniform float uTime;
       uniform vec3 uFog;
       uniform vec3 uShallow;
+      uniform vec3 uSkyTop;
+      uniform vec3 uSkyHorizon;
       uniform vec3 uSunDir;
       uniform vec3 uMoonDir;
       uniform float uDaylight;
@@ -94,16 +120,51 @@ export function makeOcean(): Ocean {
       uniform float uIsland;
       uniform float uShelf;
       uniform float uTerritory;
+      uniform sampler2D uRipple;
       varying vec3 vWorld;
       varying float vWave;
+      varying vec3 vSwell;
 
       float hash21(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+
+      /* Lấy pháp tuyến gợn từ tấm vân, đổi sang hệ toạ độ thế giới (Y là chiều
+         lên). Tấm vân lưu kênh Z là trục "lên" của không gian tiếp tuyến. */
+      vec3 rippleNormal(vec2 uv) {
+        vec3 n = texture2D(uRipple, uv).xyz * 2.0 - 1.0;
+        return vec3(n.x, n.z, n.y);
+      }
+
+      /* Phân bố vi mặt GGX. Đây là thứ thay cho pow(halfVector.y, 92) của bản
+         trước: pow(...) cho một vệt sáng liền, tròn và giả; GGX trên pháp tuyến đã
+         gợn cho ra dải nắng **vỡ vụn thành hàng nghìn đốm** chạy dài về phía mặt
+         trời — dấu hiệu mà mắt người nhận ra là nước thật trước cả khi kịp nghĩ. */
+      float ggx(vec3 n, vec3 v, vec3 l, float rough) {
+        vec3 h = normalize(v + l);
+        float a = rough * rough;
+        float a2 = a * a;
+        float nh = max(dot(n, h), 0.0);
+        float den = nh * nh * (a2 - 1.0) + 1.0;
+        return a2 / max(3.14159265 * den * den, 1e-4);
+      }
 
       void main() {
         vec2 p = vWorld.xz;
         float d = length(p);
+        float viewDist = distance(cameraPosition, vWorld);
         float ring = sin(d * 0.34 - uTime * 1.15) * 0.5 + 0.5;
         float drift = sin(p.x * 0.06 + uTime * 0.35) * sin(p.y * 0.05 - uTime * 0.28);
+
+        /* --- pháp tuyến: sóng lừng + hai lớp gợn cuộn ngược chiều ---
+           Biên độ gợn tắt dần theo khoảng cách. Không tắt thì ở chân trời mỗi
+           điểm ảnh phủ hàng chục bước sóng, sinh ra nhiễu hạt lấp lánh liên tục
+           — đúng kiểu "đồ hoạ rẻ tiền" mà ta đang muốn tránh. */
+        float detail = 1.0 - smoothstep(70.0, 300.0, viewDist);
+        vec3 n1 = rippleNormal(p * 0.055 + vec2(uTime * 0.010, uTime * 0.0072));
+        vec3 n2 = rippleNormal(p * 0.155 - vec2(uTime * 0.019, uTime * 0.0135));
+        vec3 gentle = normalize(n1 + n2 * 0.62);
+        float rippleAmp = mix(0.10, 0.50 + uRain * 0.35, detail);
+        vec3 N = normalize(vSwell + vec3(gentle.x, 0.0, gentle.z) * rippleAmp);
+        vec3 V = normalize(cameraPosition - vWorld);
 
         /* --- ba tầng độ sâu: thềm cát, sườn dốc, biển sâu ---
            Biển xa ngả lam đậm chứ không phải lục xám: dưới ACES tone mapping, sắc
@@ -114,13 +175,24 @@ export function makeOcean(): Ocean {
         float shelfMix = 1.0 - smoothstep(uIsland - 1.5, uShelf, d);
         float depthMix = 1.0 - smoothstep(uShelf, uShelf + 46.0, d);
         vec3 col = mix(deep, openSea, depthMix);
-        col = mix(col, lagoon, shelfMix * 0.88);
+        col = mix(col, lagoon, shelfMix * 0.72);
         col = mix(col, col * 1.12, ring * 0.18 + drift * 0.12 + vWave * 0.30);
+
+        /* --- tán xạ dưới mặt sóng ---
+           Đỉnh sóng mỏng nên ánh sáng xuyên qua được, khiến nó sáng và ngả lục
+           hơn thân sóng. Thiếu chi tiết này thì nước nào cũng là tấm gương phẳng. */
+        float crest = clamp(vWave * 3.0 + 0.35, 0.0, 1.0);
+        float backlit = pow(max(dot(V, -normalize(vec3(uSunDir.x, -0.2, uSunDir.z))), 0.0), 3.0);
+        col += vec3(0.06, 0.30, 0.24) * crest * backlit * uDaylight * 0.45;
 
         /* --- bọt sóng vỗ bờ đảo chính --- */
         float surf = (1.0 - smoothstep(uIsland - 2.2, uIsland + 3.4, d)) * smoothstep(uIsland - 6.5, uIsland - 2.0, d);
         float surfPulse = 0.55 + 0.45 * sin(d * 1.5 - uTime * 2.1);
-        col = mix(col, vec3(0.90, 0.97, 0.96), surf * surfPulse * 0.55);
+        /* Vân bọt lấy từ chính tấm nhiễu nên mép bọt lởm chởm, không phải một
+           vòng tròn trơn tru chạy quanh đảo. */
+        float foamGrain = 0.55 + 0.75 * texture2D(uRipple, p * 0.09 + vec2(uTime * 0.02, 0.0)).x;
+        float foam = clamp(surf * surfPulse * foamGrain, 0.0, 1.0);
+        col = mix(col, vec3(0.90, 0.97, 0.96), foam * 0.62);
 
         /* --- vành san hô: ranh giới lãnh thổ, sáng lên bằng bọt trắng --- */
         float reef = exp(-pow((d - uTerritory) * 0.42, 2.0));
@@ -129,17 +201,26 @@ export function makeOcean(): Ocean {
         /* nước bên trong vành sáng hơn hẳn bên ngoài — thấy ngay đâu là lãnh hải */
         col *= mix(0.72, 1.0, smoothstep(uTerritory + 12.0, uTerritory - 8.0, d));
 
-        /* --- phản chiếu mặt trời và mặt trăng --- */
-        vec3 viewDir = normalize(cameraPosition - vWorld);
-        vec3 sunHalf = normalize(viewDir + normalize(uSunDir));
-        float sunSpec = pow(clamp(sunHalf.y + vWave * 0.2, 0.0, 1.0), 92.0);
-        col += vec3(0.96, 0.74, 0.46) * sunSpec * (0.14 + 0.34 * ring) * uDaylight;
-        vec3 moonHalf = normalize(viewDir + normalize(uMoonDir));
-        float moonSpec = pow(clamp(moonHalf.y + vWave * 0.26, 0.0, 1.0), 60.0);
-        col += vec3(0.62, 0.74, 0.96) * moonSpec * (0.10 + 0.28 * ring) * (1.0 - uDaylight);
+        /* --- phản chiếu bầu trời theo Fresnel ---
+           Nhìn thẳng xuống thì thấy màu nước; nhìn lướt thì gần như chỉ thấy trời.
+           Bản trước trộn một hằng số nên góc nào nước cũng đục như nhau. */
+        vec3 R = reflect(-V, N);
+        float up = clamp(R.y, 0.0, 1.0);
+        vec3 skyCol = mix(uSkyHorizon, uSkyTop, pow(up, 0.7));
+        float fresnel = 0.02 + 0.98 * pow(1.0 - max(dot(N, V), 0.0), 5.0);
+        /* Trần 0,72 chứ không phải 1: mặt nước ở đây chưa phản chiếu được đảo,
+           thuyền hay hải đăng, nên nếu để nó thành gương hoàn hảo thì ở góc
+           nhìn lướt cả mặt biển hoá thành một mảng trời phẳng — mất luôn cả
+           chiều sâu lẫn màu ngọc lam vốn là bản sắc của vùng nước này. */
+        col = mix(col, skyCol, clamp(fresnel, 0.0, 1.0) * 0.72);
 
-        float fresnel = pow(1.0 - max(viewDir.y, 0.0), 3.0);
-        col = mix(col, mix(vec3(0.10, 0.20, 0.28), vec3(0.18, 0.38, 0.44), uDaylight), fresnel * 0.26);
+        /* --- dải nắng và dải trăng trên sóng --- */
+        vec3 sunL = normalize(uSunDir);
+        float sunGlitter = ggx(N, V, sunL, 0.07 + uRain * 0.06) * max(sunL.y, 0.0);
+        col += vec3(1.0, 0.86, 0.62) * min(sunGlitter, 14.0) * 0.10 * uDaylight;
+        vec3 moonL = normalize(uMoonDir);
+        float moonGlitter = ggx(N, V, moonL, 0.10) * max(moonL.y, 0.0);
+        col += vec3(0.66, 0.78, 1.0) * min(moonGlitter, 10.0) * 0.055 * (1.0 - uDaylight);
 
         /* --- vòng sóng do mưa rơi --- */
         if (uRain > 0.01) {
@@ -151,11 +232,22 @@ export function makeOcean(): Ocean {
           col = mix(col, col * 0.82, uRain * 0.25);
         }
 
+        /* --- độ trong của nước nông ---
+           Ngay sát bờ, mặt nước để lộ thềm cát bên dưới thay vì tô đè một mảng
+           ngọc lam. Đây là chi tiết mà mắt dùng để phân biệt "biển" với "sàn
+           màu xanh": bãi cát phải chạy tiếp xuống dưới nước rồi mới mờ dần đi. */
+        float clarity = 1.0 - smoothstep(uIsland - 6.0, uShelf - 4.0, d);
+        float alpha = mix(1.0, 0.42, clarity * 0.9);
+        /* Bọt thì đục hẳn, và nhìn càng lướt thì nước càng kín. */
+        alpha = clamp(max(alpha + fresnel * 0.5, foam * 0.85), 0.0, 1.0);
+
         /* Sương chỉ ăn vào mặt nước từ khoảng 190 đơn vị trở ra; gần hơn thế thì
            vùng biển quanh đảo phải giữ nguyên sắc ngọc lam của nó. */
-        float fogFactor = smoothstep(190.0, 520.0, distance(cameraPosition, vWorld));
+        float fogFactor = smoothstep(190.0, 520.0, viewDist);
         col = mix(col, uFog, fogFactor);
-        gl_FragColor = vec4(col, 1.0);
+        alpha = mix(alpha, 1.0, fogFactor);
+
+        gl_FragColor = vec4(col, alpha);
         /* Cùng lý do với vòm trời: cần tone mapping và mã hoá sRGB tường minh. */
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
@@ -165,18 +257,23 @@ export function makeOcean(): Ocean {
   const mesh = new THREE.Mesh(oceanGeometry(), material);
   mesh.rotation.x = -Math.PI / 2;
   mesh.position.y = WATER_LEVEL;
-  mesh.renderOrder = -50;
+  /* Mặt nước giờ trong mờ nên nó thuộc lượt vẽ trong suốt. Đặt thứ tự âm để nó
+     luôn đi trước bọt ranh giới, vệt nước sau du thuyền, xoáy nước và hạt thời
+     tiết — những thứ phải nằm *trên* mặt nước. */
+  mesh.renderOrder = -10;
   mesh.frustumCulled = false;
 
   return {
     mesh,
-    apply({ daylight, sunDir, moonDir, fog, shallow, rain }) {
+    apply({ daylight, sunDir, moonDir, fog, shallow, rain, skyTop, skyHorizon }) {
       const u = material.uniforms;
       u.uDaylight.value = daylight;
       (u.uSunDir.value as THREE.Vector3).copy(sunDir);
       (u.uMoonDir.value as THREE.Vector3).copy(moonDir);
       (u.uFog.value as THREE.Color).copy(fog);
       (u.uShallow.value as THREE.Color).copy(shallow);
+      (u.uSkyTop.value as THREE.Color).copy(skyTop);
+      (u.uSkyHorizon.value as THREE.Color).copy(skyHorizon);
       u.uRain.value = rain;
     },
     tick: (t) => {
@@ -209,10 +306,18 @@ export function makeSandShelf(): THREE.Mesh {
   }
   geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
   geometry.computeVertexNormals();
-  const mesh = new THREE.Mesh(
-    geometry,
-    new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.96, metalness: 0, flatShading: true })
-  );
+  /* Thềm cát giờ nhìn xuyên qua mặt nước thấy được, nên nó phải ra chất cát:
+     gợn sóng đáy chứ không phải một mặt nghiêng phẳng lì. */
+  const grain = surface("sand", 30);
+  const shelfMaterial = new THREE.MeshStandardMaterial({
+    vertexColors: true,
+    roughness: 0.96,
+    metalness: 0,
+    normalMap: grain.normalMap,
+    roughnessMap: grain.roughnessMap,
+  });
+  shelfMaterial.normalScale.set(0.8, 0.8);
+  const mesh = new THREE.Mesh(geometry, shelfMaterial);
   mesh.rotation.x = -Math.PI / 2;
   mesh.position.y = WATER_LEVEL + 0.05;
   mesh.receiveShadow = true;
@@ -235,7 +340,16 @@ export function makeBoundary(): Boundary {
   const group = new THREE.Group();
 
   /* rạn san hô nhô lên khỏi mặt nước */
-  const reefMaterial = new THREE.MeshStandardMaterial({ color: 0x2f6f74, roughness: 0.92, metalness: 0.04, flatShading: true });
+  const reefRock = surface("stone", 12);
+  const reefMaterial = new THREE.MeshStandardMaterial({
+    color: 0x2f6f74,
+    roughness: 0.92,
+    metalness: 0.04,
+    flatShading: true,
+    normalMap: reefRock.normalMap,
+    roughnessMap: reefRock.roughnessMap,
+  });
+  reefMaterial.normalScale.set(1.1, 1.1);
   const reefGeometry = new THREE.TorusGeometry(TERRITORY_RADIUS, 1.5, 6, 220);
   const reefPosition = reefGeometry.attributes.position as THREE.BufferAttribute;
   for (let i = 0; i < reefPosition.count; i++) {
