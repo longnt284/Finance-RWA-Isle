@@ -105,10 +105,12 @@ export function makeOcean(): Ocean {
         float ring = sin(d * 0.34 - uTime * 1.15) * 0.5 + 0.5;
         float drift = sin(p.x * 0.06 + uTime * 0.35) * sin(p.y * 0.05 - uTime * 0.28);
 
-        /* --- ba tầng độ sâu: thềm cát, sườn dốc, biển sâu --- */
-        vec3 deep = mix(vec3(0.004, 0.020, 0.052), vec3(0.010, 0.078, 0.132), uDaylight);
-        vec3 openSea = mix(vec3(0.014, 0.058, 0.092), vec3(0.038, 0.216, 0.284), uDaylight);
-        vec3 lagoon = uShallow * (0.24 + uDaylight * 0.86);
+        /* --- ba tầng độ sâu: thềm cát, sườn dốc, biển sâu ---
+           Biển xa ngả lam đậm chứ không phải lục xám: dưới ACES tone mapping, sắc
+           lục nhạt của bản trước ra màu bùn ngay khi phơi sáng nhích lên. */
+        vec3 deep = mix(vec3(0.004, 0.018, 0.058), vec3(0.008, 0.062, 0.150), uDaylight);
+        vec3 openSea = mix(vec3(0.012, 0.052, 0.104), vec3(0.028, 0.196, 0.330), uDaylight);
+        vec3 lagoon = uShallow * (0.28 + uDaylight * 0.98);
         float shelfMix = 1.0 - smoothstep(uIsland - 1.5, uShelf, d);
         float depthMix = 1.0 - smoothstep(uShelf, uShelf + 46.0, d);
         vec3 col = mix(deep, openSea, depthMix);
@@ -149,7 +151,9 @@ export function makeOcean(): Ocean {
           col = mix(col, col * 0.82, uRain * 0.25);
         }
 
-        float fogFactor = smoothstep(110.0, 420.0, distance(cameraPosition, vWorld));
+        /* Sương chỉ ăn vào mặt nước từ khoảng 190 đơn vị trở ra; gần hơn thế thì
+           vùng biển quanh đảo phải giữ nguyên sắc ngọc lam của nó. */
+        float fogFactor = smoothstep(190.0, 520.0, distance(cameraPosition, vWorld));
         col = mix(col, uFog, fogFactor);
         gl_FragColor = vec4(col, 1.0);
         /* Cùng lý do với vòm trời: cần tone mapping và mã hoá sRGB tường minh. */

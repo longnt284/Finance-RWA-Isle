@@ -11,6 +11,7 @@ import { Hero, OnboardingModal, TutorialOverlay } from "./components/Modals";
 import { makeT } from "./lib/i18n";
 import { sound } from "./lib/audio";
 import { useMarketEvents } from "./lib/events";
+import type { FishingZone } from "./components/Fishing";
 
 const Workspace = lazy(() => import("./components/Workspace"));
 const WorldScene = lazy(() => import("./world/WorldScene"));
@@ -21,6 +22,9 @@ const ToolsDrawer = lazy(() => import("./components/Drawers").then((module) => (
 const NotesDrawer = lazy(() => import("./components/Drawers").then((module) => ({ default: module.NotesDrawer })));
 const QuestsPanel = lazy(() => import("./components/Panels").then((module) => ({ default: module.QuestsPanel })));
 const WorldPanel = lazy(() => import("./components/Panels").then((module) => ({ default: module.WorldPanel })));
+const NewsPanel = lazy(() => import("./components/News"));
+const ShopPanel = lazy(() => import("./components/Shop"));
+const FishingPanel = lazy(() => import("./components/Fishing"));
 
 function Shell() {
   const { state, api } = useStore();
@@ -34,6 +38,8 @@ function Shell() {
   const [voyage, setVoyage] = useState(false);
   const [examDistrict, setExamDistrict] = useState<DistrictId | null>(null);
   const [helmInput, setHelmInput] = useState({ throttle: 0, turn: 0 });
+  /* `null` = không câu; ngược lại là vùng nước đang thả cần. */
+  const [fishingZone, setFishingZone] = useState<FishingZone | null>(null);
   const worldRef = useRef<WorldHandle | null>(null);
 
   const levels = useMemo(() => districtLevels(state), [state.certified]);
@@ -110,6 +116,21 @@ function Shell() {
     worldRef.current?.fireBurst(district, district === "crypto" ? "jade" : "gold");
   }, []);
 
+  /* Mở bảng câu cá: đóng mọi bảng khác để khung minigame không bị che. */
+  const openFishing = useCallback((zone: FishingZone) => {
+    setDrawer(null);
+    setExamDistrict(null);
+    setFishingZone(zone);
+  }, []);
+
+  /* Du thuyền chạm xoáy nước — thế giới 3D gọi ngược lên đây. */
+  const onVortex = useCallback(() => {
+    setFishingZone((current) => current ?? "vortex");
+    api.pushToast({ title: t("fs.vortexHit"), sub: t("fs.vortexSub"), kind: "jade" });
+    sound.chime();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.lang]);
+
   function handleSelect(view: ViewId, island?: DistrictId) {
     const requestedIsle = island ?? activeIsle;
     if (view === "isle" && !islands[requestedIsle].unlocked) {
@@ -124,6 +145,7 @@ function Shell() {
     }
     if (view === "isle") setActiveIsle(requestedIsle);
     if (voyage) setVoyage(false);
+    if (view !== "overview") setFishingZone(null);
     setSelected(view);
     if (view !== "overview") api.visit(view);
   }
@@ -143,6 +165,9 @@ function Shell() {
           helmInput={helmInput}
           yachtTier={state.yachtTier}
           world={state.world}
+          decor={state.shop.placed}
+          onFish={openFishing}
+          onVortex={onVortex}
         />
       </Suspense>
 
@@ -152,7 +177,11 @@ function Shell() {
             selected={selected}
             onSelect={handleSelect}
             drawer={drawer}
-            onDrawer={setDrawer}
+            onDrawer={(next) => {
+              /* Bảng bên phải chỉ có một chỗ: mở bảng khác thì cần câu thu lại. */
+              if (next) setFishingZone(null);
+              setDrawer(next);
+            }}
             muted={muted}
             onToggleMute={() => setMuted(sound.toggleMute())}
             voyage={voyage}
@@ -169,6 +198,7 @@ function Shell() {
             }}
             onHelmInput={setHelmInput}
             onExam={openExam}
+            onFish={() => openFishing(voyage ? "vortex" : "shore")}
           />
           <Suspense fallback={<div className="panel absolute right-4 top-24 z-40 h-24 w-72 animate-pulse rounded-xl" />}>
             {selected !== "overview" && (
@@ -187,6 +217,11 @@ function Shell() {
             {drawer === "quests" && <QuestsPanel onClose={() => setDrawer(null)} />}
             {drawer === "world" && <WorldPanel onClose={() => setDrawer(null)} />}
             {drawer === "account" && <AccountPanel onClose={() => setDrawer(null)} />}
+            {drawer === "news" && <NewsPanel onClose={() => setDrawer(null)} />}
+            {drawer === "shop" && (
+              <ShopPanel onClose={() => setDrawer(null)} activeIsle={selected === "isle" ? activeIsle : "main"} />
+            )}
+            {fishingZone && <FishingPanel zone={fishingZone} onClose={() => setFishingZone(null)} />}
             {examDistrict && (
               <ExamModal district={examDistrict} onClose={() => setExamDistrict(null)} onPassed={onExamPassed} />
             )}

@@ -347,3 +347,35 @@ export const IconSliders = ({ className }: P) => (
     <circle cx="9.5" cy="16.5" r="2.2" />
   </svg>
 );
+
+export const IconNews = ({ className }: P) => (
+  <svg {...base(className)}>
+    <path d="M4 5.5h13v13H5.6A1.6 1.6 0 0 1 4 16.9V5.5Z" />
+    <path d="M17 8.5h2.4a1.6 1.6 0 0 1 1.6 1.6v6.8a1.6 1.6 0 0 1-3.2 0" />
+    <path d="M7 8.8h6M7 12h6M7 15.2h4" />
+  </svg>
+);
+
+export const IconFish = ({ className }: P) => (
+  <svg {...base(className)}>
+    <path d="M3.2 12c2.6-3.6 5.7-5.4 9.3-5.4 3 0 5.6 1.8 7.7 5.4-2.1 3.6-4.7 5.4-7.7 5.4-3.6 0-6.7-1.8-9.3-5.4Z" />
+    <path d="M3.2 12 6.4 9v6L3.2 12Z" />
+    <circle cx="15.4" cy="10.9" r="0.9" />
+  </svg>
+);
+
+export const IconStore = ({ className }: P) => (
+  <svg {...base(className)}>
+    <path d="M4 9.6h16v8.6a1.4 1.4 0 0 1-1.4 1.4H5.4A1.4 1.4 0 0 1 4 18.2V9.6Z" />
+    <path d="M3.2 9.6 5 4.6h14l1.8 5" />
+    <path d="M9.4 19.6v-5h5.2v5" />
+  </svg>
+);
+
+export const IconCoinPurse = ({ className }: P) => (
+  <svg {...base(className)}>
+    <path d="M7.6 8.2 9 4.4h6l1.4 3.8" />
+    <path d="M4.6 12.4a7.6 7.6 0 0 1 7.4-4.2 7.6 7.6 0 0 1 7.4 4.2c.8 3.4-2.4 7.2-7.4 7.2s-8.2-3.8-7.4-7.2Z" />
+    <path d="M12 11v5m-1.7-3.8h2.6a1.3 1.3 0 0 1 0 2.6h-1.8a1.3 1.3 0 0 0 0 2.6h2.6" />
+  </svg>
+);

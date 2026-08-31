@@ -5,16 +5,17 @@ import {
 } from "../state/store";
 import type { DistrictId, ViewId } from "../state/store";
 import { makeT } from "../lib/i18n";
-import { fmtMoney, dayKey, timeAgo, fmtPrice, compactVND } from "../lib/format";
+import { fmtMoney, dayKey, timeAgo, fmtPrice, compactVND, fmt } from "../lib/format";
 import { useMarket, market, ASSET_BY_ID } from "../lib/market";
+import { useNews, unreadCount } from "../lib/news";
 import {
   IconBitcoin, IconChart, IconVault, IconBook, IconHome, IconCompass, IconIsland,
   IconBolt, IconGift, IconSound, IconSoundOff, IconCoins, IconCalc, IconNote, IconHelp,
   IconClose, IconTrendUp, IconTrendDown, IconChevD, IconCalendar, IconSliders, IconUser,
-  IconBrain,
+  IconBrain, IconNews, IconStore, IconFish, IconCoinPurse,
 } from "./icons";
 
-export type DrawerId = "market" | "tools" | "notes" | "tutorial" | "quests" | "world" | "account" | null;
+export type DrawerId = "market" | "tools" | "notes" | "tutorial" | "quests" | "world" | "account" | "news" | "shop" | null;
 
 interface Props {
   selected: ViewId;
@@ -28,6 +29,7 @@ interface Props {
   onVoyage: () => void;
   onHelmInput: (input: { throttle: number; turn: number }) => void;
   onExam: (district: DistrictId) => void;
+  onFish: () => void;
 }
 
 const NAV_ICONS: Record<string, (p: { className?: string }) => React.ReactElement> = {
@@ -183,9 +185,10 @@ function VoyageControls({ onInput, onExit }: { onInput: (input: { throttle: numb
   );
 }
 
-export default function HUD({ selected, onSelect, drawer, onDrawer, muted, onToggleMute, voyage, canVoyage, onVoyage, onHelmInput, onExam }: Props) {
+export default function HUD({ selected, onSelect, drawer, onDrawer, muted, onToggleMute, voyage, canVoyage, onVoyage, onHelmInput, onExam, onFish }: Props) {
   const { state, api } = useStore();
   const t = makeT(state.lang);
+  const feed = useNews();
   const [feedOpen, setFeedOpen] = useState(() => typeof window === "undefined" || window.innerWidth >= 640);
   useEffect(() => {
     const compact = window.matchMedia("(max-width: 639px)");
@@ -210,6 +213,8 @@ export default function HUD({ selected, onSelect, drawer, onDrawer, muted, onTog
   const claimAmount = Math.round(checkinReward(checkinIndex(state)) * xpMult(state.streak));
   const claimableQuests = state.quests.ids.filter((id) => questClaimable(state, id)).length;
   const pendingExams = DISTRICT_IDS.filter((district) => pendingExamLevel(state, district) !== null).length;
+  /* Huy hiệu tin mới chỉ có nghĩa khi bảng tin đã tải được thứ gì đó. */
+  const unread = feed.status === "ready" ? Math.min(9, unreadCount()) : 0;
   const navIds: string[] = ["overview", "center", ...DISTRICT_IDS, "isle"];
   /* Mọi bảng bên phải rộng 420px; thanh trên cùng và cột phải lùi vào để không bị che. */
   const panelOpen = (drawer !== null && drawer !== "tutorial") || selected !== "overview";
@@ -277,8 +282,19 @@ export default function HUD({ selected, onSelect, drawer, onDrawer, muted, onTog
               </button>
             ))}
           </div>
+          <button
+            onClick={onFish}
+            title={t("hud.fishing")}
+            aria-label={t("hud.fishing")}
+            className="chip flex items-center gap-1.5 rounded-lg px-3 py-2 text-[11px] text-mist-400 transition-all hover:border-jade-500/40 hover:text-jade-300"
+          >
+            <IconFish className="h-4 w-4" />
+            <span className="hidden 2xl:inline">{t("hud.fishing")}</span>
+          </button>
           {([
             ["quests", IconCalendar, t("ci.title"), claimableQuests + (canClaim ? 1 : 0)],
+            ["news", IconNews, t("hud.news"), unread],
+            ["shop", IconStore, t("hud.shop"), 0],
             ["market", IconCoins, t("hud.market"), 0],
             ["tools", IconCalc, t("hud.tools"), 0],
             ["notes", IconNote, t("hud.notes"), 0],
@@ -346,6 +362,18 @@ export default function HUD({ selected, onSelect, drawer, onDrawer, muted, onTog
           {nw !== null && state.currency === "USD" && (
             <div className="font-mono text-[10px] text-mist-500">{compactVND(nw)}</div>
           )}
+          {/* Ví xu đứng ngay dưới tài sản ròng: hai con số duy nhất người chơi
+              tiêu được, một cái thật một cái trong game. */}
+          <button
+            onClick={() => onDrawer(drawer === "shop" ? null : "shop")}
+            className="mt-2 flex w-full items-center justify-between rounded-lg border border-mist-500/12 bg-ink-850/50 px-2.5 py-1.5 transition-colors hover:border-gold-500/35"
+          >
+            <span className="flex items-center gap-1.5 font-mono text-[9px] uppercase tracking-[0.18em] text-mist-500">
+              <IconCoinPurse className="h-3.5 w-3.5 text-gold-400" />
+              {t("hud.coins")}
+            </span>
+            <span className="font-mono text-[12px] font-semibold text-gold-300">{fmt(state.coins)}</span>
+          </button>
         </div>
 
         <div className={`panel pointer-events-auto flex min-h-0 w-full flex-col overflow-hidden rounded-xl ${feedOpen ? "flex-1" : "shrink-0"}`}>

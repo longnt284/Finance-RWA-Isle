@@ -1,6 +1,10 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import {
   DISTRICT_POS,
   ISLE_POSITIONS,
@@ -25,17 +29,24 @@ import {
   makeBird,
   makeLamp,
   makeDecor,
+  makePalm,
   DECOR_IDS,
 } from "./build";
 import type { TickFn, Mats, DecorId } from "./build";
+import {
+  makeProp, placeProp, buildVillage, buildFishingPier, makeWhirlpool,
+  propFlowerbed as makeFlowerPatch, PIER_POSITION, PIER_ROTATION,
+} from "./props";
 import { makeSky, makeSun, makeMoon, makeShootingStars, makeCloudLayer, skyStateFor } from "./atmosphere";
 import { makeOcean, makeSandShelf, makeBoundary, TERRITORY_RADIUS, WATER_LEVEL } from "./ocean";
 import { makeWeather } from "./weather";
 import { makeYacht, YACHT_LENGTH } from "./yacht";
 import { SEASON_PALETTES, WEATHER_PROFILES, seasonForDate, autoWeather } from "../lib/season";
 import type { Season, WeatherId } from "../lib/season";
-import { DISTRICTS, ISLE_UNLOCK_LEVELS, VISUAL_MAX } from "../state/store";
-import type { DistrictId, ViewId, IslandTheme, WorldPrefs, YachtTier } from "../state/store";
+import { SHOP_BY_ID } from "../lib/shop";
+import type { GroundPalette } from "../lib/shop";
+import { DISTRICTS, ISLE_UNLOCK_LEVELS, ISLE_SLOTS, VISUAL_MAX } from "../state/store";
+import type { DistrictId, ViewId, IslandTheme, IsleSlot, WorldPrefs, YachtTier } from "../state/store";
 import { makeT } from "../lib/i18n";
 import type { Lang } from "../lib/i18n";
 import { sound } from "../lib/audio";
@@ -68,6 +79,12 @@ interface Props {
   helmInput: HelmInput;
   yachtTier: YachtTier;
   world: WorldPrefs;
+  /** Vật phẩm Chợ Trang Trí đang đặt trên từng đảo. */
+  decor: Record<IsleSlot, string[]>;
+  /** Người chơi bấm vào bến câu trên đảo. */
+  onFish: (zone: "shore" | "vortex") => void;
+  /** Du thuyền lọt vào một xoáy nước ngoài khơi. */
+  onVortex: () => void;
 }
 
 const DISTRICT_IDS: DistrictId[] = ["crypto", "stocks", "vault", "academy"];
@@ -121,13 +138,13 @@ function viewPose(view: ViewId, activeIsle: DistrictId = "crypto"): { pos: THREE
 }
 
 export default function WorldScene({
-  levels, selected, onSelect, handleRef, lang, islands, activeIsle, voyage, helmInput, yachtTier, world,
+  levels, selected, onSelect, handleRef, lang, islands, activeIsle, voyage, helmInput, yachtTier, world, decor, onFish, onVortex,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
   const labelEls = useRef<Record<string, HTMLDivElement | null>>({});
-  const propsRef = useRef({ levels, selected, onSelect, lang, islands, activeIsle, voyage, helmInput, yachtTier, world });
-  propsRef.current = { levels, selected, onSelect, lang, islands, activeIsle, voyage, helmInput, yachtTier, world };
+  const propsRef = useRef({ levels, selected, onSelect, lang, islands, activeIsle, voyage, helmInput, yachtTier, world, decor, onFish, onVortex });
+  propsRef.current = { levels, selected, onSelect, lang, islands, activeIsle, voyage, helmInput, yachtTier, world, decor, onFish, onVortex };
 
   const sceneApi = useRef<{
     flyTo: (view: ViewId, dur?: number) => void;
@@ -135,6 +152,7 @@ export default function WorldScene({
     rebuildIsle: (district: DistrictId) => void;
     rebuildDecor: (district: DistrictId) => void;
     rebuildYacht: () => void;
+    rebuildShop: (slot: IsleSlot) => void;
     syncIslands: () => void;
     setVoyage: (active: boolean) => void;
     refreshEnvironment: () => void;
@@ -199,7 +217,9 @@ export default function WorldScene({
     controls.addEventListener("end", onCtlEnd);
 
     /* ------------------------------ lights ------------------------------ */
-    const hemi = new THREE.HemisphereLight(0x9fd4cf, 0x1c2a2c, 0.55);
+    /* Đất phản xạ lên bằng sắc cát ấm chứ không phải xanh xám: mặt dưới của tán
+       dừa và hiên nhà không còn tối đen như bản trước. */
+    const hemi = new THREE.HemisphereLight(0xbfe4e8, 0x6a6047, 0.55);
     scene.add(hemi);
     const sunLight = new THREE.DirectionalLight(0xffd9a8, 2.0);
     sunLight.castShadow = true;
@@ -220,6 +240,55 @@ export default function WorldScene({
     /* Chớp giông: đèn bán cầu trắng, bình thường tắt hẳn. */
     const lightning = new THREE.HemisphereLight(0xdbe7ff, 0x7d8fa8, 0);
     scene.add(lightning);
+
+    /* ---------------------- bản đồ môi trường (phản chiếu) ----------------------
+       Vàng, kính và mặt đá bóng chỉ "ra chất" khi có gì đó để phản chiếu. Thay vì
+       tải một file HDR nặng, dựng một dải gradient trời–chân trời–biển rồi cho
+       PMREM nướng thành cubemap: vài chục kilobyte bộ nhớ, không thêm request. */
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    pmrem.compileEquirectangularShader();
+    let envTarget: THREE.WebGLRenderTarget | null = null;
+    let envKey = "";
+    const envTop = new THREE.Color();
+    const envHorizon = new THREE.Color();
+    const envGround = new THREE.Color();
+
+    function refreshEnvMap(daylight: number, fogHex: number, shallowHex: number) {
+      /* Chỉ nướng lại khi ánh sáng đổi đủ nhiều — mỗi phút một lần là quá thừa. */
+      const key = `${Math.round(daylight * 12)}|${fogHex}|${shallowHex}`;
+      if (key === envKey) return;
+      envKey = key;
+      const W = 32;
+      const H = 16;
+      const data = new Uint8Array(W * H * 4);
+      envTop.setHex(0x0b2b45).lerp(new THREE.Color(0x8fc7e8), daylight);
+      envHorizon.setHex(fogHex).lerp(new THREE.Color(0xffd9b0), daylight * 0.5);
+      envGround.setHex(shallowHex).multiplyScalar(0.35 + daylight * 0.6);
+      const mix = new THREE.Color();
+      for (let y = 0; y < H; y++) {
+        /* v = 0 ở đỉnh trời, 1 ở đáy biển; chân trời nằm giữa. */
+        const v = y / (H - 1);
+        if (v < 0.5) mix.copy(envTop).lerp(envHorizon, Math.pow(v * 2, 0.7));
+        else mix.copy(envHorizon).lerp(envGround, Math.pow((v - 0.5) * 2, 0.6));
+        for (let x = 0; x < W; x++) {
+          const i = (y * W + x) * 4;
+          data[i] = Math.round(THREE.MathUtils.clamp(mix.r, 0, 1) * 255);
+          data[i + 1] = Math.round(THREE.MathUtils.clamp(mix.g, 0, 1) * 255);
+          data[i + 2] = Math.round(THREE.MathUtils.clamp(mix.b, 0, 1) * 255);
+          data[i + 3] = 255;
+        }
+      }
+      const texture = new THREE.DataTexture(data, W, H);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.mapping = THREE.EquirectangularReflectionMapping;
+      texture.needsUpdate = true;
+      const target = pmrem.fromEquirectangular(texture);
+      texture.dispose();
+      envTarget?.dispose();
+      envTarget = target;
+      scene.environment = target.texture;
+      scene.environmentIntensity = 0.35 + daylight * 0.45;
+    }
 
     /* ------------------------------ world ------------------------------ */
     const m = makeMats();
@@ -257,18 +326,35 @@ export default function WorldScene({
     staticTicks.push(dust.tick);
 
     /* ---------------------- terrain (rebuilt per season) ---------------------- */
+
+    /** Sắc nền người chơi mua ở Chợ, nếu đang đặt trên đảo đó. */
+    function groundPaletteOf(slot: IsleSlot): GroundPalette | null {
+      for (const id of propsRef.current.decor[slot] ?? []) {
+        const item = SHOP_BY_ID.get(id);
+        if (item?.cat === "ground" && item.palette) return item.palette;
+      }
+      return null;
+    }
+
     let terrain: THREE.Mesh | null = null;
-    let terrainSeason: Season | null = null;
+    let terrainKey: string | null = null;
+    let activeSeason: Season = seasonForDate(new Date());
     function rebuildTerrain(season: Season) {
-      if (terrainSeason === season) return;
-      terrainSeason = season;
+      const ground = groundPaletteOf("main");
+      const key = `${season}|${ground ? ground.top.toString(16) : "-"}`;
+      if (terrainKey === key) return;
+      terrainKey = key;
       if (terrain) {
         scene.remove(terrain);
         terrain.geometry.dispose();
         (terrain.material as THREE.Material).dispose();
       }
       const palette = SEASON_PALETTES[season];
-      terrain = buildTerrain({ foliage: palette.foliage, foliageAlt: palette.foliageAlt, snow: palette.snow });
+      /* Sắc nền mua ở Chợ pha vào màu mùa chứ không thay hẳn — mùa đông vẫn ra
+         mùa đông, chỉ là thảm cỏ mang sắc người chơi chọn. */
+      const foliage = ground ? new THREE.Color(palette.foliage).lerp(new THREE.Color(ground.top), 0.72).getHex() : palette.foliage;
+      const foliageAlt = ground ? new THREE.Color(palette.foliageAlt).lerp(new THREE.Color(ground.rim), 0.55).getHex() : palette.foliageAlt;
+      terrain = buildTerrain({ foliage, foliageAlt, snow: palette.snow });
       scene.add(terrain);
       /* Cây và thảm cỏ dùng vật liệu dùng chung nên chỉ cần đổi màu, không dựng lại. */
       m.leaves1.color.setHex(palette.foliage);
@@ -320,7 +406,9 @@ export default function WorldScene({
       const profile = WEATHER_PROFILES[chosen];
       currentWeather = chosen;
       currentDaylight = state.daylight;
+      activeSeason = season;
       rebuildTerrain(season);
+      refreshEnvMap(state.daylight, palette.fog, palette.shallow);
 
       /* ---- ánh sáng ---- */
       const lit = state.daylight * profile.lightScale;
@@ -334,14 +422,17 @@ export default function WorldScene({
       moonLight.position.copy(state.moonDir).multiplyScalar(110);
       moonLight.intensity = Math.max(0, state.moonDir.y) * (1 - state.daylight) * 0.55 * profile.lightScale;
 
-      hemi.intensity = 0.2 + lit * 0.55;
+      hemi.intensity = 0.28 + lit * 0.72;
       rim.intensity = 0.2 + (1 - state.daylight) * 0.4;
-      renderer.toneMappingExposure = 0.82 + state.daylight * 0.32 + palette.warmth * 0.06;
+      renderer.toneMappingExposure = 0.9 + state.daylight * 0.34 + palette.warmth * 0.07;
 
       /* ---- sương mù và biển ---- */
-      fogColor.setHex(palette.fog).multiplyScalar(0.35 + state.daylight * 0.85);
+      /* Sương mù nhạt đi nhiều so với bản trước. Ở mật độ 0,0085 thì ngay cả đảo
+         chính — cách camera khoảng 110 đơn vị — đã chìm một nửa vào sương, khiến
+         cả khung hình bạc phếch thay vì trong veo như vùng biển nhiệt đới. */
+      fogColor.setHex(palette.fog).lerp(new THREE.Color(0x7fb8cf), state.daylight * 0.38).multiplyScalar(0.45 + state.daylight * 0.62);
       (scene.fog as THREE.FogExp2).color.copy(fogColor);
-      (scene.fog as THREE.FogExp2).density = 0.0085 * profile.fogScale;
+      (scene.fog as THREE.FogExp2).density = 0.0036 * profile.fogScale;
       shallowColor.setHex(palette.shallow);
       ocean.apply({ daylight: state.daylight, sunDir: state.sunDir, moonDir: state.moonDir, fog: fogColor, shallow: shallowColor, rain: profile.rain });
       boundary.setTint(shallowColor);
@@ -417,7 +508,45 @@ export default function WorldScene({
       lamp.position.set(px, 0, pz);
       scenery.add(lamp);
     }
+
+    /* Dừa và luống hoa men theo bãi cát. Ảnh tham chiếu của hòn đảo dày đặc cây
+       cối; bản cũ chỉ có 15 cây thông nên mép đảo trông trơ trọi. */
+    const palmSpots: [number, number, number][] = [
+      [20.5, 4.5, 1.0], [21.8, -1.5, 0.9], [19.6, 9.4, 1.05], [16.8, 15.2, 0.95], [11.5, 19.4, 1.0],
+      [5.4, 21.6, 0.88], [-1.5, 22.2, 1.0], [-8.2, 21.0, 0.92], [-14.4, 18.2, 1.0], [-19.2, 12.6, 0.95],
+      [-21.6, 6.2, 1.05], [-22.2, -0.8, 0.9], [-20.8, -7.4, 1.0], [-17.4, -13.6, 0.95], [-12.2, -17.8, 1.0],
+      [-5.6, -20.6, 0.88], [1.8, -21.4, 1.02], [8.6, -20.2, 0.94], [14.8, -16.8, 1.0], [19.2, -11.4, 0.92],
+      [9.2, 8.6, 0.8], [-9.4, 8.2, 0.85], [9.0, -6.8, 0.8], [-8.8, -6.4, 0.85],
+    ];
+    for (const [x, z, s] of palmSpots) {
+      const palm = makePalm(m);
+      palm.position.set(x, 0, z);
+      palm.scale.setScalar(s * 1.25);
+      palm.rotation.y = x * z;
+      scenery.add(palm);
+    }
+    const flowerSpots: [number, number, number][] = [
+      [6.4, 6.2, 0xb79cff], [-6.6, 6.0, 0xff9ac1], [6.2, -4.4, 0xf0c268], [-6.4, -4.2, 0x5ce8c4],
+      [13.8, 6.8, 0xff9ac1], [-13.6, 6.6, 0xb79cff], [3.2, 11.4, 0xf0c268], [-3.4, 11.2, 0xe9f3f0],
+      [15.4, -8.2, 0xb79cff], [-15.2, -8.0, 0xff9ac1],
+    ];
+    for (const [x, z, color] of flowerSpots) {
+      const bed = makeFlowerPatch(color);
+      bed.position.set(x, 0, z);
+      bed.rotation.y = x + z;
+      scenery.add(bed);
+    }
     scene.add(scenery);
+
+    /* ---------------------- xóm làng và bến câu ---------------------- */
+    const village = buildVillage(m, staticTicks);
+    scene.add(village);
+
+    const pier = buildFishingPier(m, staticTicks);
+    pier.position.copy(PIER_POSITION);
+    pier.rotation.y = PIER_ROTATION;
+    pier.userData.tag = "fishing";
+    scene.add(pier);
 
     /* --------------------------- living world --------------------------- */
     const shirtColors = [0x5ce8c4, 0xe0aa50, 0xff7f6e, 0x9fd0ff, 0xdde9e4, 0xf0c268, 0x7fe8bb, 0xd9a066, 0x8ba4a7, 0xffd88a];
@@ -548,7 +677,9 @@ export default function WorldScene({
       disposeGroup(holder);
       isleTicks[district] = [];
       const island = propsRef.current.islands[district];
-      if (island.unlocked) holder.add(buildIsle(m, island.level, isleTicks[district], district, island.theme));
+      if (island.unlocked) {
+        holder.add(buildIsle(m, island.level, isleTicks[district], district, island.theme, groundPaletteOf(district)));
+      }
     }
 
     function rebuildDecor(district: DistrictId) {
@@ -568,6 +699,7 @@ export default function WorldScene({
         ghostGroups[district].group.visible = !unlocked;
         isleGroups[district].visible = unlocked;
         decorGroups[district].visible = unlocked;
+        shopHolders[district].visible = unlocked;
         const walker = isleWalkers.find((candidate) => candidate.island === district);
         if (walker) walker.p.group.visible = unlocked;
       }
@@ -577,7 +709,63 @@ export default function WorldScene({
       rebuildIsle(district);
       rebuildDecor(district);
     }
+
+    /* ---------------------- đồ trang trí mua từ Chợ ---------------------- */
+    const shopHolders = {} as Record<IsleSlot, THREE.Group>;
+    const shopTicks = {} as Record<IsleSlot, TickFn[]>;
+    for (const slot of ISLE_SLOTS) {
+      const holder = new THREE.Group();
+      if (slot === "main") holder.position.set(0, 0, 0);
+      else holder.position.copy(ISLE_POSITIONS[slot]).setY(0.2);
+      scene.add(holder);
+      shopHolders[slot] = holder;
+      shopTicks[slot] = [];
+    }
+
+    function rebuildShop(slot: IsleSlot) {
+      const holder = shopHolders[slot];
+      disposeGroup(holder);
+      shopTicks[slot] = [];
+      if (slot !== "main" && !propsRef.current.islands[slot].unlocked) return;
+      const radius = slot === "main" ? 20.5 : ISLE_RADIUS - 1.4;
+      const ids = propsRef.current.decor[slot] ?? [];
+      ids.forEach((id, index) => {
+        const item = SHOP_BY_ID.get(id);
+        /* `ground` không có hình khối riêng — nó nằm trong bảng màu nền đảo. */
+        if (!item || item.kind === "ground") return;
+        const copies = Math.max(1, item.count ?? 1);
+        for (let copy = 0; copy < copies; copy++) {
+          const node = makeProp(item, m, shopTicks[slot]);
+          placeProp(item, index, radius, holder, node, copy);
+        }
+      });
+      /* Sắc nền của đảo riêng nằm trong địa hình nên phải dựng lại cả hòn đảo. */
+      if (slot === "main") rebuildTerrain(activeSeason);
+    }
+    for (const slot of ISLE_SLOTS) rebuildShop(slot);
     syncIslands();
+
+    /* ---------------------- xoáy nước ngoài khơi ---------------------- */
+    const WHIRLPOOL_COUNT = compactGpu ? 3 : 5;
+    /** Xoáy phải nằm ngoài thềm cát nhưng trong vành san hô, tránh đè lên đảo riêng. */
+    function randomVortexSpot(target: THREE.Vector3) {
+      for (let attempt = 0; attempt < 24; attempt++) {
+        const angle = Math.random() * Math.PI * 2;
+        const radius = 46 + Math.random() * (SAIL_LIMIT - 56);
+        target.set(Math.cos(angle) * radius, WATER_LEVEL + 0.05, Math.sin(angle) * radius);
+        const clash = DISTRICT_IDS.some((district) => target.distanceToSquared(ISLE_POSITIONS[district]) < Math.pow(ISLE_RADIUS + 7, 2));
+        if (!clash) return;
+      }
+    }
+    const whirlpools = Array.from({ length: WHIRLPOOL_COUNT }, () => {
+      const pool = makeWhirlpool();
+      randomVortexSpot(pool.group.position);
+      scene.add(pool.group);
+      staticTicks.push(pool.tick);
+      return { pool, cooldown: 0 };
+    });
+    /** Bán kính bắt: du thuyền chạm vào là mở bảng câu cá. */
+    const VORTEX_CATCH = 4.6;
 
     /* ---------------------------- player yacht ---------------------------- */
     const yachtHolder = new THREE.Group();
@@ -639,6 +827,34 @@ export default function WorldScene({
     const burst = makeBurstPool(scene);
     staticTicks.push(burst.tick);
 
+    /* ------------------------------ bloom ------------------------------
+       Đèn hải đăng, rune ngọc, vàng và xoáy nước đều là nguồn sáng — không có
+       bloom thì chúng chỉ là những mảng màu phẳng. `RenderPass` vẽ vào bộ đệm
+       tuyến tính (tone mapping bị hoãn lại), `OutputPass` mới tone-map và mã hoá
+       sRGB một lần duy nhất ở cuối, nên nước và bầu trời — vốn tự gọi
+       `<tonemapping_fragment>` — không bị nướng hai lần. */
+    const composer = new EffectComposer(renderer);
+    composer.setPixelRatio(renderPixelRatio);
+    composer.setSize(container.clientWidth, container.clientHeight);
+    composer.addPass(new RenderPass(scene, camera));
+    const bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(container.clientWidth, container.clientHeight),
+      0.62,
+      0.72,
+      0.82
+    );
+    composer.addPass(bloomPass);
+    composer.addPass(new OutputPass());
+
+    /** Bloom là hiệu ứng đắt nhất trong khung hình; máy yếu thì tắt hẳn. */
+    function bloomEnabled(): boolean {
+      const prefs = propsRef.current.world;
+      if (!prefs.effects) return false;
+      if (prefs.quality === "balanced") return false;
+      if (prefs.quality === "high") return true;
+      return !compactGpu && renderPixelRatio >= 1;
+    }
+
     /* ------------------------------ camera tween ------------------------------ */
     let tween: { t0: number; dur: number; fromPos: THREE.Vector3; toPos: THREE.Vector3; fromTgt: THREE.Vector3; toTgt: THREE.Vector3 } | null = null;
     function flyTo(view: ViewId, dur = 1.6) {
@@ -692,6 +908,7 @@ export default function WorldScene({
       raycaster.setFromCamera(pointer, camera);
       const targets: THREE.Object3D[] = [
         lighthouse,
+        pier,
         ...DISTRICT_IDS.map((d) => districtGroups[d] as THREE.Object3D),
         ...DISTRICT_IDS.map((d) => isleGroups[d] as THREE.Object3D),
         ...DISTRICT_IDS.map((d) => ghostGroups[d].group as THREE.Object3D),
@@ -741,7 +958,8 @@ export default function WorldScene({
       const tag = pickAt(e.clientX, e.clientY);
       if (tag) {
         sound.tick();
-        if (tag.startsWith("isle:")) propsRef.current.onSelect("isle", tag.slice(5) as DistrictId);
+        if (tag === "fishing") propsRef.current.onFish("shore");
+        else if (tag.startsWith("isle:")) propsRef.current.onSelect("isle", tag.slice(5) as DistrictId);
         else propsRef.current.onSelect(tag as ViewId);
       }
     }
@@ -819,6 +1037,10 @@ export default function WorldScene({
         tip.innerHTML = `<strong>${t("ct.title")}</strong><span>${t("ct.sub")}</span>`;
         return;
       }
+      if (hovered === "fishing") {
+        tip.innerHTML = `<strong>${t("fs.spot")}</strong><span>${t("fs.spotHint")}</span>`;
+        return;
+      }
       const d = hovered as DistrictId;
       tip.innerHTML = `<strong>${t(`d.${d}.building`)}</strong><span>${t(`d.${d}.tagline`)}</span><span class="tt-lv">${t("ws.lvl", { n: propsRef.current.levels[d] })}</span>`;
     }
@@ -830,6 +1052,8 @@ export default function WorldScene({
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       renderer.setSize(w, h);
+      composer.setSize(w, h);
+      bloomPass.setSize(w, h);
     }
     window.addEventListener("resize", onResize);
 
@@ -840,6 +1064,7 @@ export default function WorldScene({
       rebuildIsle,
       rebuildDecor,
       rebuildYacht,
+      rebuildShop,
       syncIslands,
       setVoyage,
       refreshEnvironment: () => applyEnvironment(true),
@@ -904,6 +1129,8 @@ export default function WorldScene({
           renderPixelRatio = nextRatio;
           renderer.setPixelRatio(renderPixelRatio);
           renderer.setSize(container.clientWidth, container.clientHeight, false);
+          composer.setPixelRatio(renderPixelRatio);
+          composer.setSize(container.clientWidth, container.clientHeight);
           renderer.domElement.dataset.quality = renderPixelRatio < 1 ? "balanced" : "high";
         }
         perfFrames = 0;
@@ -950,6 +1177,19 @@ export default function WorldScene({
         /* Vách sáng ranh giới hiện dần trong 22 đơn vị cuối trước rạn san hô. */
         const distanceOut = Math.hypot(yachtHolder.position.x, yachtHolder.position.z);
         boundary.setProximity(THREE.MathUtils.smoothstep(distanceOut, SAIL_LIMIT - 22, SAIL_LIMIT));
+
+        /* Lái vào xoáy nước: mở bảng câu cá, xoáy tắt rồi mọc lại chỗ khác. */
+        for (const entry of whirlpools) {
+          if (entry.cooldown > 0) continue;
+          const dx = yachtHolder.position.x - entry.pool.group.position.x;
+          const dz = yachtHolder.position.z - entry.pool.group.position.z;
+          if (dx * dx + dz * dz > VORTEX_CATCH * VORTEX_CATCH) continue;
+          entry.cooldown = 26;
+          entry.pool.setActive(false);
+          burst.fire(entry.pool.group.position.clone().setY(WATER_LEVEL + 1.2), "jade");
+          propsRef.current.onVortex();
+        }
+
         if (!tween) {
           desiredYachtTarget.set(yachtHolder.position.x, yachtHolder.position.y + 1.15, yachtHolder.position.z);
           followDelta.subVectors(desiredYachtTarget, controls.target).multiplyScalar(1 - Math.exp(-dt * 5));
@@ -958,6 +1198,16 @@ export default function WorldScene({
         }
       } else {
         boundary.setProximity(0);
+      }
+      /* Xoáy đã dùng mọc lại ở chỗ khác sau vài chục giây — biển không bao giờ
+         hết chỗ câu, nhưng cũng không đứng yên một điểm. */
+      for (const entry of whirlpools) {
+        if (entry.cooldown <= 0) continue;
+        entry.cooldown -= dt;
+        if (entry.cooldown <= 0) {
+          randomVortexSpot(entry.pool.group.position);
+          entry.pool.setActive(true);
+        }
       }
       for (const wake of wakes) {
         if (wake.life <= 0) continue;
@@ -981,6 +1231,7 @@ export default function WorldScene({
       for (const d of DISTRICT_IDS) for (const fn of districtTicks[d]) fn(t, dt);
       for (const district of DISTRICT_IDS) for (const fn of isleTicks[district]) fn(t, dt);
       for (const district of DISTRICT_IDS) for (const fn of decorTicks[district]) fn(t, dt);
+      for (const slot of ISLE_SLOTS) for (const fn of shopTicks[slot]) fn(t, dt);
 
       labelClock += dt;
       if (labelClock >= 1 / 30) {
@@ -988,7 +1239,14 @@ export default function WorldScene({
         updateLabels();
         updateTooltipContent();
       }
-      renderer.render(scene, camera);
+      /* Bloom mạnh hơn về đêm: ban ngày ánh mặt trời đã đủ chói, thêm quầng sáng
+         chỉ làm cảnh bệt màu. */
+      if (bloomEnabled()) {
+        bloomPass.strength = 0.34 + (1 - currentDaylight) * 0.62;
+        composer.render();
+      } else {
+        renderer.render(scene, camera);
+      }
     }
     frame();
 
@@ -1020,6 +1278,9 @@ export default function WorldScene({
           sprite.material.dispose();
         }
       });
+      composer.dispose();
+      envTarget?.dispose();
+      pmrem.dispose();
       renderer.dispose();
       if (renderer.domElement.parentElement === container) container.removeChild(renderer.domElement);
       sceneApi.current = null;
@@ -1084,6 +1345,21 @@ export default function WorldScene({
   useEffect(() => {
     sceneApi.current?.rebuildYacht();
   }, [yachtTier]);
+
+  /* Đặt hay cất một món ở Chợ chỉ dựng lại đúng hòn đảo đó. */
+  const prevDecor = useRef<Record<IsleSlot, string> | null>(null);
+  useEffect(() => {
+    const api = sceneApi.current;
+    if (!api) return;
+    const next = {} as Record<IsleSlot, string>;
+    for (const slot of ISLE_SLOTS) {
+      const key = (decor[slot] ?? []).join(",");
+      next[slot] = key;
+      if (prevDecor.current && prevDecor.current[slot] === key) continue;
+      if (prevDecor.current) api.rebuildShop(slot);
+    }
+    prevDecor.current = next;
+  }, [decor]);
 
   /* Đổi mùa, thời tiết hoặc chất lượng thì áp dụng ngay, không đợi sang phút mới. */
   useEffect(() => {
