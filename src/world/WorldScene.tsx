@@ -38,7 +38,7 @@ import {
   propFlowerbed as makeFlowerPatch, PIER_POSITION, PIER_ROTATION,
 } from "./props";
 import { makeSky, makeSun, makeMoon, makeShootingStars, makeCloudLayer, skyStateFor } from "./atmosphere";
-import { makeOcean, makeSandShelf, makeBoundary, TERRITORY_RADIUS, WATER_LEVEL } from "./ocean";
+import { makeOcean, makeSandShelf, makeBoundary, ISLAND_RADIUS, TERRITORY_RADIUS, WATER_LEVEL } from "./ocean";
 import { makeWeather } from "./weather";
 import { makeYacht, YACHT_LENGTH } from "./yacht";
 import { SEASON_PALETTES, WEATHER_PROFILES, seasonForDate, autoWeather } from "../lib/season";
@@ -727,7 +727,12 @@ export default function WorldScene({
       disposeGroup(holder);
       shopTicks[slot] = [];
       if (slot !== "main" && !propsRef.current.islands[slot].unlocked) return;
-      const radius = slot === "main" ? 20.5 : ISLE_RADIUS - 1.4;
+      /* `seaRadius` phải vượt hẳn mép nước của từng hòn đảo, còn `seaY` là mực
+         nước tính theo gốc của nhóm chứa — đảo riêng nằm cao hơn đảo chính. */
+      const layout =
+        slot === "main"
+          ? { radius: 20.5, seaRadius: ISLAND_RADIUS + 2.6, seaY: WATER_LEVEL }
+          : { radius: ISLE_RADIUS - 1.4, seaRadius: ISLE_RADIUS + 1.6, seaY: WATER_LEVEL - 0.2 };
       const ids = propsRef.current.decor[slot] ?? [];
       ids.forEach((id, index) => {
         const item = SHOP_BY_ID.get(id);
@@ -736,7 +741,7 @@ export default function WorldScene({
         const copies = Math.max(1, item.count ?? 1);
         for (let copy = 0; copy < copies; copy++) {
           const node = makeProp(item, m, shopTicks[slot]);
-          placeProp(item, index, radius, holder, node, copy);
+          placeProp(item, index, layout, holder, node, copy);
         }
       });
       /* Sắc nền của đảo riêng nằm trong địa hình nên phải dựng lại cả hòn đảo. */
@@ -752,7 +757,9 @@ export default function WorldScene({
       for (let attempt = 0; attempt < 24; attempt++) {
         const angle = Math.random() * Math.PI * 2;
         const radius = 46 + Math.random() * (SAIL_LIMIT - 56);
-        target.set(Math.cos(angle) * radius, WATER_LEVEL + 0.05, Math.sin(angle) * radius);
+        /* Đỉnh sóng cao tới 0,34 so với mực nước trung bình; đặt vòng xoáy thấp
+           hơn thế thì nó lúc ẩn lúc hiện sau từng con sóng. */
+        target.set(Math.cos(angle) * radius, WATER_LEVEL + 0.42, Math.sin(angle) * radius);
         const clash = DISTRICT_IDS.some((district) => target.distanceToSquared(ISLE_POSITIONS[district]) < Math.pow(ISLE_RADIUS + 7, 2));
         if (!clash) return;
       }

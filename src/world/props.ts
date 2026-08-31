@@ -1165,19 +1165,43 @@ export function makeProp(item: ShopItem, m: Mats, ticks: TickFn[]): THREE.Group 
   }
 }
 
+/** Kích thước hòn đảo mà vật phẩm sẽ được rải lên. */
+export interface PlaceLayout {
+  /** bán kính vùng đất đặt được */
+  radius: number;
+  /** bán kính đặt hạng mục "ven biển" — phải nằm ngoài mép nước */
+  seaRadius: number;
+  /** cao độ mặt nước so với gốc của nhóm chứa */
+  seaY: number;
+}
+
 /**
  * Rải các bản sao của một vật phẩm quanh một vòng tròn. Chỉ số `index` quyết
  * định góc, nên bố cục ổn định giữa các lần dựng lại — người chơi cất một món
  * đi thì những món còn lại không nhảy chỗ.
+ *
+ * Hạng mục "ven biển" đi ra ngoài mép nước và hạ xuống mực nước: thuyền buồm
+ * hay phao tiêu mà nằm giữa bãi cát thì trông như đồ chơi bỏ quên.
  */
-export function placeProp(item: ShopItem, index: number, radius: number, group: THREE.Group, node: THREE.Group, copy: number): void {
+export function placeProp(
+  item: ShopItem,
+  index: number,
+  layout: PlaceLayout,
+  group: THREE.Group,
+  node: THREE.Group,
+  copy: number
+): void {
   const total = Math.max(1, item.count ?? 1);
   /* Góc vàng: các món khác nhau không bao giờ chồng lên nhau. */
   const golden = 2.399963;
   const angle = index * golden + (copy / total) * Math.PI * 2 * 0.32;
-  const ringRadius = item.cat === "sea" ? radius * 1.06 : radius * (0.52 + ((index * 7 + copy * 3) % 5) * 0.08);
-  node.position.set(Math.cos(angle) * ringRadius, 0, Math.sin(angle) * ringRadius);
-  node.rotation.y = -angle + Math.PI / 2;
+  const atSea = item.cat === "sea";
+  const ringRadius = atSea
+    ? layout.seaRadius + (copy % 3) * 1.4
+    : layout.radius * (0.52 + ((index * 7 + copy * 3) % 5) * 0.08);
+  node.position.set(Math.cos(angle) * ringRadius, atSea ? layout.seaY : 0, Math.sin(angle) * ringRadius);
+  /* Cầu tàu chĩa ra biển; những thứ khác quay mặt về phía tâm đảo. */
+  node.rotation.y = atSea ? Math.atan2(node.position.x, node.position.z) + Math.PI : -angle + Math.PI / 2;
   node.scale.setScalar(item.scale ?? 1);
   group.add(node);
 }
@@ -1373,8 +1397,9 @@ export function makeWhirlpool(): Whirlpool {
   core.rotation.x = -Math.PI / 2;
   core.position.y = 0.1;
   g.add(core);
+  /* Phễu thò lên khỏi mặt nước một đoạn: chìm hẳn thì đại dương đục che mất. */
   const funnel = new THREE.Mesh(new THREE.ConeGeometry(1.5, 2.4, 20, 1, true), additive(0x9ff0e2, 0.16));
-  funnel.position.y = -1.1;
+  funnel.position.y = -0.7;
   g.add(funnel);
   const light = new THREE.PointLight(0x7fe8bb, 0.9, 22);
   light.position.y = 1.4;
