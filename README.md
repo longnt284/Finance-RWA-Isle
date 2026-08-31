@@ -94,6 +94,25 @@ seed mà ứng dụng dùng, nên nó bấm trúng chứ không đoán.
 - **Cạnh vát**: mọi khối hộp đủ dày dùng `RoundedBoxGeometry` với bán kính bo
   rất nhỏ. Vật thể thật không có cạnh sắc tuyệt đối, và chính dải bo đó bắt lấy
   một đường highlight mảnh chạy dọc mép.
+- **GTAO** (che khuất môi trường theo phương pháp ground-truth) chạy trong cùng
+  chuỗi hậu kỳ, ngay sau `RenderPass` và trước bloom. Chân tường, kẽ mái, gốc cây
+  và mép bậc thềm tối lại đúng như ngoài đời. Bán kính 0,75 đơn vị, cỡ của một
+  bóng tiếp xúc thật ở tỉ lệ công trình cao 5–10 đơn vị. Vì nó phải vẽ lại toàn
+  cảnh một lượt nữa để lấy pháp tuyến và chiều sâu, ngưỡng tự tắt chặt hơn bloom
+  (20ms thay vì 26ms) và máy yếu bị loại thẳng. Cận cảnh camera nâng từ 0,1 lên
+  0,6 và viễn cảnh hạ từ 1400 xuống 950: tỉ lệ xa/gần 14.000 lần của bản trước
+  làm depth texture vỡ vụn, bóng tiếp xúc biến thành những vệt sọc.
+- **Thảm cỏ dựng bằng instancing**: **4.200 ngọn cỏ** trong đúng một lệnh vẽ.
+  Không có nó, khoảng giữa những công trình chỉ là một mảng màu xanh phẳng. Ngọn
+  cỏ ngả theo gió trong vertex shader (uốn theo `y` mũ 1,7 nên gốc đứng yên còn
+  ngọn ngả hẳn, pha lấy từ toạ độ thế giới của chính nó nên cả thảm gợn thành
+  sóng); gió mạnh dần theo mưa và mây. Sắc cỏ đổi theo mùa qua `instanceColor`
+  nên sang mùa chỉ là ghi lại một mảng nhỏ, không dựng lại hình. Máy yếu hạ xuống
+  1.600 ngọn, `prefers-reduced-motion` tắt hẳn thảm cỏ. Cây thông và cây dừa vẫn
+  dựng từng cây một: mỗi cây có số tầng tán, độ cong thân và độ rủ tàu lá riêng
+  theo hạt giống, gộp chúng thành một hình dùng chung sẽ đánh mất đúng cái làm
+  chúng đẹp. Cây được đặt theo cao độ mặt đất thật, nên những cây ngoài bán kính
+  17 đứng trên bãi thoải chứ không lơ lửng trên cát.
 - **Bản đồ môi trường** nướng bằng PMREM từ một dải gradient trời–chân trời–biển
   96×48 pixel có nướng sẵn cả đĩa mặt trời (không thêm request nào): vàng, mái
   kính và đá bóng nhận về một điểm chói thật thay vì một mảng sáng đều.
@@ -121,6 +140,61 @@ seed mà ứng dụng dùng, nên nó bấm trúng chứ không đoán.
   trọng lực. Mỗi cây được gộp lại còn đúng một mesh cho mỗi vật liệu, nên hình
   phức tạp hơn hẳn mà số lệnh vẽ vẫn giảm.
 
+## Camera
+
+- **Giới hạn góc theo ngữ cảnh.** `maxPolarAngle` được tính lại mỗi khung theo
+  khoảng cách camera–mục tiêu: 1,30 rad ở tầm gần, nới dần tới 1,52 khi lùi ra xa.
+  Ở tầm gần, trần mặc định của `OrbitControls` cho phép hạ camera xuống gần như
+  ngang mặt đất — và vì mặt đảo là một khối trụ hữu hạn, người chơi nhìn thẳng vào
+  mặt dưới của nó.
+- **Va chạm camera.** Mỗi khung, một tia bắn từ điểm ngắm ra phía camera; vướng
+  công trình hay địa hình thì camera bị kéo vào trước mặt vật cản 0,85 đơn vị. Bị
+  ép vào thì tức thì, lùi ra thì từ tốn — chậm một nhịp lúc bị ép là đúng một nhịp
+  nhìn xuyên qua tường. Tia bỏ qua 1,6 đơn vị đầu tiên quanh điểm ngắm, nên chính
+  thứ đang được lấy làm mẫu không đẩy camera vào; mặt sau bị loại theo `side` của
+  vật liệu nên tia xuất phát từ trong lòng một khối kín vẫn đi thẳng ra ngoài. Một
+  sàn cứng chặn camera rơi xuống dưới mặt cỏ hay chìm dưới mặt biển.
+- **Sáu góc máy đã ngắm sẵn**: cổng đảo từ biển, chân hải đăng, hàng chân trời,
+  bến câu sát nước, vành san hô, flycam toàn đảo. Mỗi khung có tiêu cự riêng
+  (30–52mm) và đặt một tiền cảnh cụ thể vào một phần ba khung, nên bấm một nút là
+  có ảnh thay vì phải tự xoay tìm. Bốn trong sáu khung đặt máy thấp hơn điểm ngắm
+  và ngước lên — đó là toàn bộ lý do chúng đẹp — nên chúng được quyền nới trần góc
+  chúi; quyền đó mất ngay khi người chơi cầm lấy chuột.
+- **Chuyến bay do GSAP dẫn nhịp.** Cái được không phải đường cong mượt hơn mà là
+  việc một chuyến bay mới tự huỷ chuyến đang chạy, kể cả khi nó đang tween cả tiêu
+  cự lẫn vị trí. `lagSmoothing` bị tắt hẳn: mặc định, khung hình dài quá 500ms chỉ
+  nhích đồng hồ GSAP thêm 33ms, nên trên máy chạy 2 khung/giây một cú bay 1,9 giây
+  kéo dài thành gần một phút. Bấm trong lúc đoạn mở đầu đang chạy thì đoạn mở đầu
+  nhường chỗ, thay vì nuốt mất cú bấm.
+
+## Chế độ ảnh và chế độ chỉ-thế-giới
+
+- **`P` mở chế độ ảnh**: toàn bộ giao diện biến mất, giờ trong ngày trượt tự do
+  0–24h, mùa và thời tiết mở khoá, sáu góc máy nằm sẵn trên thanh dưới.
+- **Khung hình** 16:9 · 3:2 · 1:1 · 9:16 hoặc tự do, có mặt nạ letterbox cho biết
+  đâu là ảnh và đâu là phần bị cắt.
+- **Xuất PNG** ở độ phân giải gấp đôi lúc chơi, bật hết hiệu ứng kể cả khi lúc chơi
+  chúng đang bị tự động hạ xuống cho mượt. Ảnh không bao giờ dính giao diện: nó
+  đọc thẳng từ canvas WebGL. `preserveDrawingBuffer` vẫn tắt để khỏi giữ thêm một
+  bộ đệm màu suốt phiên chơi, nên hàm chụp vẽ và đọc trong cùng một nhịp đồng bộ.
+  Tệp đi qua blob chứ không qua data URL — một khung 3200×1800 ra chuỗi base64 vài
+  chục megabyte và Chrome im lặng từ chối điều hướng tới nó.
+- **Dấu đóng** tuỳ chọn ở góc trái: tên hòn đảo và ngày, để một tấm ảnh chia sẻ ra
+  ngoài vẫn nói được nó đến từ đâu.
+- **`H` bật chế độ chỉ-thế-giới**: giấu giao diện nhưng vẫn chơi bình thường. HUD
+  hiện chiếm khoảng 40% chiều ngang; đây là cách lấy lại toàn bộ khung hình bằng
+  một phím. Cả hai chế độ đều bỏ qua phím tắt khi con trỏ đang nằm trong ô nhập
+  liệu.
+
+## Khoảnh khắc vàng
+
+Thời gian vẫn trôi đều, nhưng có hai lát cắt mỗi ngày mà khung hình đẹp hẳn lên.
+Hệ thống biết chính xác lúc nào chúng tới — mặt trời trong khoảng ±0,105 độ cao
+quy ước, tức chừng hai mươi phút quanh lúc chạm mặt biển — nên nó lên tiếng mời
+người chơi ở lại, kèm sẵn nút mở chế độ ảnh. Lời mời chỉ cất tiếng khi đó là
+khoảnh khắc thật (không phải giờ do chế độ ảnh ấn định), khi trời đủ quang, và
+một lần cho mỗi buổi mỗi ngày. Không được đáp lại thì nó tự rút sau ba mươi giây.
+
 ## Câu cá
 
 - **Bến câu** nằm ở bờ nam đảo chính — bấm vào cầu gỗ để thả cần. **Xoáy nước**
@@ -133,12 +207,22 @@ seed mà ứng dụng dùng, nên nó bấm trúng chứ không đoán.
   hẹp, tiến trình tụt nhanh) và chỉ xuất hiện đúng vùng nước, đúng mùa, đúng
   ngày hoặc đêm của nó. Xoáy nước có `luck` 0,8 so với 0,12 ở bến câu, nên cá
   huyền thoại gần như chỉ gặp ngoài khơi.
+- **Hình vẽ riêng cho từng loài.** Ba mươi lăm loài trước đây là ba mươi lăm ô
+  chữ dùng chung một biểu tượng cá. Nay mỗi loài có một dáng thân (18 kiểu: thân
+  thoi, thân dẹp cao, đuôi liềm, mũi kiếm, đầu búa, thân dải, thân cầu có gai, xúc
+  tu, mai và càng…) cùng bảng ba màu riêng. Vẽ bằng SVG dựng tại chỗ nên không
+  thêm một byte tài nguyên nào phải tải, mà vẫn sắc nét từ ô 40px trong giỏ cá tới
+  tấm chân dung lúc vừa kéo được cá lên. Loài chưa gặp giữ nguyên dáng thân nhưng
+  tô đen — bạn thấy được mình còn thiếu con cá hình gì.
 - **Bộ sưu tập** giữ mọi loài từng bắt kèm kỷ lục cân nặng, kể cả khi cá đã bán.
   **Giỏ cá** là phần chưa bán; bán lấy **xu**, giá theo cân nặng thật của con cá.
 - **Cần câu lên cấp** theo tổng số cá đã bắt (15 · 45 · 110 · 240 con): khung
   rộng ra và tiến trình nạp nhanh hơn.
 
 ## Chợ Trang Trí
+
+> Tiếng Anh gọi mục này là **Decor Shop**, không phải "Decor Market": "Market" đã
+> là bảng giá thị trường thật, để hai chỗ trùng tên thì người dùng bấm nhầm.
 
 - **100 hạng mục** chia bảy nhóm: sắc nền, cây cối, ánh sáng, công trình, tượng
   đài, ven biển và hiệu ứng. Mua bằng xu bán cá.
@@ -249,6 +333,12 @@ Proxy nhận `?symbols=AAPL,FPT.VN` và trả
 
 ## Tài khoản và quyền riêng tư
 
+Người chơi đã có bản lưu — kể cả bản lưu vừa kéo từ đám mây xuống trên một máy lạ
+— vẫn được thấy trang bìa khi quay lại, mỗi phiên một lần. Nội dung khác bản dành
+cho người mới: thay vì mời khai mở một hòn đảo, nó chào tên hòn đảo họ đã dựng
+cùng cấp quần đảo, tổng cấp và tài sản ròng — ba con số nói rằng nó vẫn còn
+nguyên ở đó.
+
 Mặc định mọi tiến độ nằm trong `localStorage` của trình duyệt — không cần đăng ký,
 không thu thập gì. Bật tài khoản để giữ tiến độ khi đổi máy:
 
@@ -285,6 +375,8 @@ ghi đè ngầm là cách nhanh nhất để người dùng mất tiến độ.
 
 ## Hiệu năng
 
+- Thảm cỏ 4.200 ngọn nằm gọn trong một `InstancedMesh` (xem *Thế giới 3D*), nên
+  nó tốn đúng một lệnh vẽ.
 - Renderer tự hạ/tăng pixel ratio theo frame time, giảm shadow map và mật độ hạt
   trên thiết bị yếu, và tôn trọng `prefers-reduced-motion`.
 - Ba mức chất lượng (tự động / cao / cân bằng) cùng công tắc tắt hẳn hiệu ứng hạt
@@ -311,6 +403,11 @@ ghi đè ngầm là cách nhanh nhất để người dùng mất tiến độ.
 - `src/world/yacht.ts` — du thuyền 5 hạng.
 - `src/world/build.ts` — địa hình, công trình bốn lĩnh vực, đảo riêng, trang trí.
 - `src/world/props.ts` — 40 kiểu vật phẩm của Chợ, xóm làng, bến câu, xoáy nước.
+- `src/world/camera.ts` — giá máy: giới hạn góc theo ngữ cảnh, va chạm, sáu góc máy đẹp.
+- `src/world/grass.ts` — thảm cỏ dựng bằng instancing, ngả theo gió trong shader.
+- `src/components/Photo.tsx` — chế độ ảnh: giờ, mùa, thời tiết, khung hình, xuất PNG.
+- `src/components/FishArt.tsx` — bộ dựng hình SVG cho 35 loài cá.
+- `src/lib/fishArt.ts` — dáng thân và bảng màu của từng loài.
 - `src/lib/fishing.ts` — danh mục cá, xổ số cắn câu và hằng số minigame.
 - `src/lib/shop.ts` — 100 hạng mục trang trí, tên song ngữ nằm trong dữ liệu.
 - `src/lib/news.ts` — client bảng tin, bộ nhớ dùng chung và dấu "đã đọc".
@@ -336,3 +433,5 @@ ghi đè ngầm là cách nhanh nhất để người dùng mất tiến độ.
 - `tests/fishing.cjs` — luật câu cá, chạy offline trên chính `lib/fishing.ts`.
 - `tests/shop_catalog.cjs` — danh mục Chợ và đối chiếu `kind` với `props.ts`.
 - `tests/feed_language.cjs` — bảng Hoạt động đổi ngôn ngữ ở cả hai chiều.
+- `tests/photo_camera.cjs` — góc máy, chế độ ảnh và xuất PNG; fail khi nút Chụp
+  không ra được tệp.

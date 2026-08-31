@@ -8,11 +8,14 @@ import { makeT } from "../lib/i18n";
 import { fmtMoney, dayKey, timeAgo, fmtPrice, compactVND, fmt } from "../lib/format";
 import { useMarket, market, ASSET_BY_ID } from "../lib/market";
 import { useNews, unreadCount } from "../lib/news";
+import { sound } from "../lib/audio";
+import { SHOT_IDS } from "../world/camera";
+import type { ShotId } from "../world/camera";
 import {
   IconBitcoin, IconChart, IconVault, IconBook, IconHome, IconCompass, IconIsland,
   IconBolt, IconGift, IconSound, IconSoundOff, IconCoins, IconCalc, IconNote, IconHelp,
   IconClose, IconTrendUp, IconTrendDown, IconChevD, IconCalendar, IconSliders, IconUser,
-  IconBrain, IconNews, IconStore, IconFish, IconCoinPurse,
+  IconBrain, IconNews, IconStore, IconFish, IconCoinPurse, IconCamera, IconEyeOff,
 } from "./icons";
 
 export type DrawerId = "market" | "tools" | "notes" | "tutorial" | "quests" | "world" | "account" | "news" | "shop" | null;
@@ -30,6 +33,12 @@ interface Props {
   onHelmInput: (input: { throttle: number; turn: number }) => void;
   onExam: (district: DistrictId) => void;
   onFish: () => void;
+  /** Mở chế độ ảnh: giấu giao diện, mở khoá giờ và thời tiết, xuất PNG. */
+  onPhoto: () => void;
+  /** Chỉ giấu giao diện, vẫn chơi bình thường. */
+  onClean: () => void;
+  /** Bay tới một góc máy đã ngắm sẵn. */
+  onShot: (id: ShotId) => void;
 }
 
 const NAV_ICONS: Record<string, (p: { className?: string }) => React.ReactElement> = {
@@ -185,10 +194,16 @@ function VoyageControls({ onInput, onExit }: { onInput: (input: { throttle: numb
   );
 }
 
-export default function HUD({ selected, onSelect, drawer, onDrawer, muted, onToggleMute, voyage, canVoyage, onVoyage, onHelmInput, onExam, onFish }: Props) {
+export default function HUD({
+  selected, onSelect, drawer, onDrawer, muted, onToggleMute, voyage, canVoyage, onVoyage, onHelmInput,
+  onExam, onFish, onPhoto, onClean, onShot,
+}: Props) {
   const { state, api } = useStore();
   const t = makeT(state.lang);
   const feed = useNews();
+  /* Danh sách góc máy mở ra ngay dưới nút, không phải một bảng bên phải nữa:
+     chọn khung hình là việc của một nhịp, không đáng một lần mở panel. */
+  const [shotsOpen, setShotsOpen] = useState(false);
   const [feedOpen, setFeedOpen] = useState(() => typeof window === "undefined" || window.innerWidth >= 640);
   useEffect(() => {
     const compact = window.matchMedia("(max-width: 639px)");
@@ -281,6 +296,62 @@ export default function HUD({ selected, onSelect, drawer, onDrawer, muted, onTog
                 {l}
               </button>
             ))}
+          </div>
+          {/* ------------------------ máy ảnh ------------------------ */}
+          <div className="relative">
+            <button
+              onClick={() => setShotsOpen(!shotsOpen)}
+              title={t("hud.shots")}
+              aria-label={t("hud.shots")}
+              aria-expanded={shotsOpen}
+              className={`chip flex items-center gap-1.5 rounded-lg px-3 py-2 text-[11px] transition-all ${
+                shotsOpen ? "border-gold-500/50 text-gold-300" : "text-mist-400 hover:border-gold-500/40 hover:text-gold-300"
+              }`}
+            >
+              <IconCamera className="h-4 w-4" />
+              <span className="hidden 2xl:inline">{t("hud.shots")}</span>
+            </button>
+            {shotsOpen && (
+              <div className="panel anim-rise absolute right-0 top-full z-40 mt-1.5 w-[190px] rounded-xl p-1.5">
+                {SHOT_IDS.map((id) => (
+                  <button
+                    key={id}
+                    onClick={() => {
+                      onShot(id);
+                      setShotsOpen(false);
+                      sound.tick();
+                    }}
+                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[11.5px] text-mist-300 transition-colors hover:bg-gold-500/10 hover:text-gold-300"
+                  >
+                    <span className="h-1.5 w-1.5 rotate-45 bg-gold-500/70" />
+                    {t(`shot.${id}`)}
+                  </button>
+                ))}
+                <div className="my-1 h-px bg-mist-500/12" />
+                <button
+                  onClick={() => {
+                    setShotsOpen(false);
+                    onPhoto();
+                  }}
+                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[11.5px] text-gold-300 transition-colors hover:bg-gold-500/10"
+                >
+                  <IconCamera className="h-3.5 w-3.5" />
+                  {t("hud.photo")}
+                  <span className="ml-auto font-mono text-[9px] text-mist-500">P</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setShotsOpen(false);
+                    onClean();
+                  }}
+                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[11.5px] text-mist-300 transition-colors hover:bg-gold-500/10 hover:text-gold-300"
+                >
+                  <IconEyeOff className="h-3.5 w-3.5" />
+                  {t("hud.clean")}
+                  <span className="ml-auto font-mono text-[9px] text-mist-500">H</span>
+                </button>
+              </div>
+            )}
           </div>
           <button
             onClick={onFish}

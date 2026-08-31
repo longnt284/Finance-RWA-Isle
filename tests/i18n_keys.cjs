@@ -70,6 +70,7 @@ const SEASONS = stringArray("src/lib/season.ts", "SEASONS");
 const WEATHERS = stringArray("src/lib/season.ts", "WEATHERS");
 const PHASES = stringArray("src/lib/season.ts", "DAY_PHASES");
 const MAX_YACHT_TIER = Number(/MAX_YACHT_TIER: YachtTier = (\d+)/.exec(read("src/state/store.tsx"))[1]);
+const SHOT_IDS = stringArray("src/world/camera.ts", "SHOT_IDS");
 const TUTORIAL_STEPS = Number(/const STEPS = (\d+)/.exec(read("src/components/Modals.tsx"))[1]);
 
 const expected = new Set();
@@ -94,6 +95,11 @@ for (const s of ["all", "bank", "realty", "industrial", "energy", "consumer", "t
 for (const tier of [1, 2, 3]) add(`exam.tier${tier}`);
 for (const tier of ["easy", "mid", "hard"]) add(`tier.${tier}`);
 for (const theme of ["emerald", "sunset", "lagoon", "violet"]) add(`theme.${theme}`);
+/* Góc máy đẹp, khung hình của chế độ ảnh và hai khoảnh khắc vàng đều được
+   dựng khoá động từ danh sách hằng, y như mùa và thời tiết bên trên. */
+for (const id of SHOT_IDS) add(`shot.${id}`);
+for (const id of ["free", "wide", "classic", "square", "tall"]) add(`pm.frame.${id}`);
+for (const kind of ["sunrise", "sunset"]) { add(`gh.${kind}.t`); add(`gh.${kind}.b`); }
 
 /* ------------------- khoá tĩnh có trong mã nguồn ------------------- */
 

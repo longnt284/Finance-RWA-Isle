@@ -877,6 +877,48 @@ function segDist2(px: number, pz: number, ax: number, az: number, bx: number, bz
   return Math.sqrt(dx * dx + dz * dz);
 }
 
+/* Bãi cát bắt đầu sớm hơn và trải rộng gấp đôi so với bản trước. */
+const BEACH_START = 17.0;
+const SHORE_EDGE = ISLAND_RADIUS - 0.5;
+const TERRAIN_ANCHORS = [DISTRICT_POS.crypto, DISTRICT_POS.stocks, DISTRICT_POS.vault, DISTRICT_POS.academy];
+
+/**
+ * Hệ số "đất được phép gợn" tại một điểm trên cao nguyên: 0 ở quảng trường hải
+ * đăng, ở bốn bệ công trình và dọc các lối đi lát đá; 1 ở nơi cỏ mọc tự do.
+ *
+ * Nó vốn nằm lọt trong vòng lặp dựng địa hình. Tách ra vì lớp cây cỏ instancing
+ * cần đúng con số này để không gieo một bụi cỏ nào lên giữa lối đi.
+ */
+export function terrainFlatness(x: number, z: number): number {
+  const r = Math.sqrt(x * x + z * z);
+  /* Quảng trường hải đăng rộng 9,8 nên vùng phẳng phải trùm hết chỗ đó, nếu
+     không những gợn đất sẽ chọc lên xuyên qua mặt sân. */
+  let flat = THREE.MathUtils.smoothstep(r, 8.5, 12.5);
+  for (const a of TERRAIN_ANCHORS) {
+    const d = Math.sqrt((x - a.x) ** 2 + (z - a.z) ** 2);
+    flat *= THREE.MathUtils.smoothstep(d, 3.6, 6.4);
+    const pd = segDist2(x, z, 0, 0, a.x, a.z);
+    flat *= THREE.MathUtils.smoothstep(pd, 1.1, 2.4);
+  }
+  return flat;
+}
+
+/**
+ * Cao độ mặt đảo tại `(x, z)` trong toạ độ thế giới — 0 là mặt cao nguyên.
+ *
+ * Cùng một công thức với đỉnh khối trụ trong `buildTerrain`, đã trừ sẵn
+ * `mesh.position.y = -3`, nên cây trồng theo hàm này luôn đứng đúng trên cỏ.
+ */
+export function terrainHeightAt(x: number, z: number): number {
+  const r = Math.sqrt(x * x + z * z);
+  const n =
+    Math.sin(x * 0.28) * Math.cos(z * 0.31) * 0.5 +
+    Math.sin(x * 0.11 + 2.1) * Math.sin(z * 0.13 + 1.3) * 0.7 +
+    Math.cos(x * 0.45 - z * 0.37) * 0.25;
+  const shoreFall = THREE.MathUtils.smoothstep(r, BEACH_START, SHORE_EDGE);
+  return n * 0.4 * terrainFlatness(x, z) - shoreFall * 2.35;
+}
+
 export interface TerrainPalette {
   /** sắc cỏ chính theo mùa */
   foliage: number;
@@ -893,7 +935,6 @@ export interface TerrainPalette {
 export function buildTerrain(palette: TerrainPalette): THREE.Mesh {
   const geo = new THREE.CylinderGeometry(ISLAND_RADIUS, ISLAND_RADIUS - 7, 6, 84, 5);
   const pos = geo.attributes.position as THREE.BufferAttribute;
-  const anchors = [DISTRICT_POS.crypto, DISTRICT_POS.stocks, DISTRICT_POS.vault, DISTRICT_POS.academy];
   const colors: number[] = [];
   const grassA = new THREE.Color(palette.foliage);
   const grassB = new THREE.Color(palette.foliageAlt);
@@ -907,10 +948,6 @@ export function buildTerrain(palette: TerrainPalette): THREE.Mesh {
   const snowAmount = palette.snow ?? 0;
   const c = new THREE.Color();
 
-  /* Bãi cát bắt đầu sớm hơn và trải rộng gấp đôi so với bản trước. */
-  const BEACH_START = 17.0;
-  const SHORE_EDGE = ISLAND_RADIUS - 0.5;
-
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i);
     const y0 = pos.getY(i);
@@ -922,19 +959,9 @@ export function buildTerrain(palette: TerrainPalette): THREE.Mesh {
         Math.sin(x * 0.28) * Math.cos(z * 0.31) * 0.5 +
         Math.sin(x * 0.11 + 2.1) * Math.sin(z * 0.13 + 1.3) * 0.7 +
         Math.cos(x * 0.45 - z * 0.37) * 0.25;
-      /* Quảng trường hải đăng rộng 9,8 nên vùng phẳng phải trùm hết chỗ đó, nếu
-         không những gợn đất sẽ chọc lên xuyên qua mặt sân. */
-      let flat = THREE.MathUtils.smoothstep(r, 8.5, 12.5);
-      for (const a of anchors) {
-        const d = Math.sqrt((x - a.x) ** 2 + (z - a.z) ** 2);
-        flat *= THREE.MathUtils.smoothstep(d, 3.6, 6.4);
-        const pd = segDist2(x, z, 0, 0, a.x, a.z);
-        flat *= THREE.MathUtils.smoothstep(pd, 1.1, 2.4);
-      }
       /* Vùng ngoài BEACH_START hạ dần xuống sát mực nước, tạo bãi thoải. */
       const shoreFall = THREE.MathUtils.smoothstep(r, BEACH_START, SHORE_EDGE);
-      const height = 3 + n * 0.4 * flat - shoreFall * 2.35;
-      pos.setY(i, height);
+      pos.setY(i, 3 + terrainHeightAt(x, z));
       /* Cát nở ra phía ngoài để mép đảo tròn đều, mềm mắt hơn. */
       if (shoreFall > 0) {
         const widen = 1 + shoreFall * 0.055;

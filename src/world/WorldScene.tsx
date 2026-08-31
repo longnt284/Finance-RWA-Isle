@@ -1,9 +1,11 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
+import gsap from "gsap";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { GTAOPass } from "three/examples/jsm/postprocessing/GTAOPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
 import { GradeShader } from "./grade";
@@ -32,9 +34,14 @@ import {
   makeLamp,
   makeDecor,
   makePalm,
+  terrainHeightAt,
   DECOR_IDS,
 } from "./build";
 import type { TickFn, Mats, DecorId } from "./build";
+import { makeGrass } from "./grass";
+import type { Grass } from "./grass";
+import { makeCameraRig, polarBetween, CAMERA_SHOTS, SHOT_BY_ID } from "./camera";
+import type { ShotId } from "./camera";
 import {
   makeProp, placeProp, buildVillage, buildFishingPier, makeWhirlpool,
   propFlowerbed as makeFlowerPatch, PIER_POSITION, PIER_ROTATION,
@@ -43,8 +50,8 @@ import { makeSky, makeSun, makeMoon, makeShootingStars, makeCloudLayer, skyState
 import { makeOcean, makeSandShelf, makeBoundary, ISLAND_RADIUS, TERRITORY_RADIUS, WATER_LEVEL } from "./ocean";
 import { makeWeather } from "./weather";
 import { makeYacht, YACHT_LENGTH } from "./yacht";
-import { SEASON_PALETTES, WEATHER_PROFILES, seasonForDate, autoWeather } from "../lib/season";
-import type { Season, WeatherId } from "../lib/season";
+import { SEASON_PALETTES, WEATHER_PROFILES, seasonForDate, autoWeather, goldenPhase, goldenWeatherOk } from "../lib/season";
+import type { Season, WeatherId, GoldenKind } from "../lib/season";
 import { SHOP_BY_ID } from "../lib/shop";
 import type { GroundPalette } from "../lib/shop";
 import { DISTRICTS, ISLE_UNLOCK_LEVELS, ISLE_SLOTS, VISUAL_MAX } from "../state/store";
@@ -55,6 +62,10 @@ import { sound } from "../lib/audio";
 
 export interface WorldHandle {
   fireBurst(view: ViewId, kind: "gold" | "jade"): void;
+  /** Bay tới một trong những góc máy đã ngắm sẵn. */
+  flyToShot(id: ShotId): void;
+  /** Chụp khung hình đang hiển thị ở độ phân giải gấp đôi, trả về data URL PNG. */
+  capture(): string | null;
 }
 
 export interface IslandWorldState {
@@ -87,9 +98,27 @@ interface Props {
   onFish: (zone: "shore" | "vortex") => void;
   /** Du thuyền lọt vào một xoáy nước ngoài khơi. */
   onVortex: () => void;
+  /** Giờ trong ngày do chế độ ảnh ấn định (0..24), hoặc `null` để bám đồng hồ thật. */
+  timeOverride: number | null;
+  /** Chế độ ảnh và chế độ "chỉ thế giới" đều tắt nhãn công trình. */
+  showLabels: boolean;
+  /** Mặt trời vừa chạm chân trời trong một khung hình đáng giữ lại. */
+  onGolden: (kind: GoldenKind) => void;
 }
 
 const DISTRICT_IDS: DistrictId[] = ["crypto", "stocks", "vault", "academy"];
+
+/**
+ * Tắt `lagSmoothing` của GSAP.
+ *
+ * Mặc định, khi một khung hình kéo dài quá 500ms, GSAP chỉ nhích đồng hồ nội bộ
+ * thêm 33ms để hoạt hình không "nhảy cóc". Với hoạt hình giao diện thì đó là
+ * lựa chọn đúng; với chuyến bay của camera thì nó là thảm hoạ: trên máy đang
+ * chạy 2 khung/giây, một cú bay 1,9 giây kéo dài thành gần một phút, và người
+ * chơi tưởng nút bấm bị hỏng. Tắt đi thì thời lượng bám đồng hồ thật — máy yếu
+ * thấy chuyến bay giật hơn, nhưng vẫn đúng 1,9 giây.
+ */
+gsap.ticker.lagSmoothing(0);
 
 type Builder = (level: number, m: Mats, ticks: TickFn[]) => THREE.Group;
 const BUILDERS: Record<DistrictId, Builder> = {
@@ -140,16 +169,25 @@ function viewPose(view: ViewId, activeIsle: DistrictId = "crypto"): { pos: THREE
 }
 
 export default function WorldScene({
-  levels, selected, onSelect, handleRef, lang, islands, activeIsle, voyage, helmInput, yachtTier, world, decor, onFish, onVortex,
+  levels, selected, onSelect, handleRef, lang, islands, activeIsle, voyage, helmInput, yachtTier, world, decor,
+  onFish, onVortex, timeOverride, showLabels, onGolden,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
   const labelEls = useRef<Record<string, HTMLDivElement | null>>({});
-  const propsRef = useRef({ levels, selected, onSelect, lang, islands, activeIsle, voyage, helmInput, yachtTier, world, decor, onFish, onVortex });
-  propsRef.current = { levels, selected, onSelect, lang, islands, activeIsle, voyage, helmInput, yachtTier, world, decor, onFish, onVortex };
+  const propsRef = useRef({
+    levels, selected, onSelect, lang, islands, activeIsle, voyage, helmInput, yachtTier, world, decor,
+    onFish, onVortex, timeOverride, showLabels, onGolden,
+  });
+  propsRef.current = {
+    levels, selected, onSelect, lang, islands, activeIsle, voyage, helmInput, yachtTier, world, decor,
+    onFish, onVortex, timeOverride, showLabels, onGolden,
+  };
 
   const sceneApi = useRef<{
     flyTo: (view: ViewId, dur?: number) => void;
+    flyToShot: (id: ShotId) => void;
+    capture: () => string | null;
     rebuildDistrict: (d: DistrictId) => void;
     rebuildIsle: (district: DistrictId) => void;
     rebuildDecor: (district: DistrictId) => void;
@@ -190,7 +228,12 @@ export default function WorldScene({
     const scene = new THREE.Scene();
     scene.fog = new THREE.FogExp2(0x08222b, 0.011);
 
+    /* Cận cảnh 0,6 và viễn cảnh 950 thay cho 0,1–1400. GTAO đọc chiều sâu từ
+       một depth texture số nguyên: tỉ lệ xa/gần 14.000 lần như bản trước làm
+       độ chính xác vỡ vụn, bóng tiếp xúc biến thành những vệt sọc. Vòm trời
+       nằm ở bán kính 620 nên 950 vẫn thừa chỗ. */
     const camera = new THREE.PerspectiveCamera(46, Math.max(0.1, container.clientWidth / Math.max(1, container.clientHeight)), 0.1, 1400);
+    const BASE_FOV = 46;
     camera.position.set(4, 95, 155);
 
     const controls = new OrbitControls(camera, renderer.domElement);
@@ -198,6 +241,8 @@ export default function WorldScene({
     controls.dampingFactor = 0.07;
     controls.minDistance = 9;
     controls.maxDistance = 165;
+    /* `maxPolarAngle` được giá máy ghi lại mỗi khung theo khoảng cách; giá trị
+       này chỉ là điểm khởi đầu cho khung hình đầu tiên. */
     controls.maxPolarAngle = 1.5;
     controls.minPolarAngle = 0.1;
     controls.autoRotateSpeed = 0.4;
@@ -208,6 +253,9 @@ export default function WorldScene({
     const onCtlStart = () => {
       userInteracting = true;
       window.clearTimeout(idleTimer);
+      /* Người chơi vừa cầm lấy chuột: khung hình dựng sẵn hết hiệu lực, giới
+         hạn góc tự động quay lại làm việc của nó. */
+      rig.polarOverride = null;
     };
     const onCtlEnd = () => {
       window.clearTimeout(idleTimer);
@@ -217,6 +265,8 @@ export default function WorldScene({
     };
     controls.addEventListener("start", onCtlStart);
     controls.addEventListener("end", onCtlEnd);
+
+    const rig = makeCameraRig(camera, controls);
 
     /* ------------------------------ lights ------------------------------ */
     /* Đất phản xạ lên bằng sắc cát ấm chứ không phải xanh xám: mặt dưới của tán
@@ -371,26 +421,38 @@ export default function WorldScene({
     let terrain: THREE.Mesh | null = null;
     let terrainKey: string | null = null;
     let activeSeason: Season = seasonForDate(new Date());
+    /* Thảm cỏ được dựng sau, nhưng `rebuildTerrain` là nơi duy nhất biết bảng
+       màu của mùa nên nó vẫn phải là chỗ tô lại cỏ. */
+    let grassLayer: Grass | null = null;
+
     function rebuildTerrain(season: Season) {
       const ground = groundPaletteOf("main");
       const key = `${season}|${ground ? ground.top.toString(16) : "-"}`;
-      if (terrainKey === key) return;
-      terrainKey = key;
-      if (terrain) {
-        scene.remove(terrain);
-        terrain.geometry.dispose();
-        (terrain.material as THREE.Material).dispose();
-      }
       const palette = SEASON_PALETTES[season];
       /* Sắc nền mua ở Chợ pha vào màu mùa chứ không thay hẳn — mùa đông vẫn ra
          mùa đông, chỉ là thảm cỏ mang sắc người chơi chọn. */
       const foliage = ground ? new THREE.Color(palette.foliage).lerp(new THREE.Color(ground.top), 0.72).getHex() : palette.foliage;
       const foliageAlt = ground ? new THREE.Color(palette.foliageAlt).lerp(new THREE.Color(ground.rim), 0.55).getHex() : palette.foliageAlt;
-      terrain = buildTerrain({ foliage, foliageAlt, snow: palette.snow });
-      scene.add(terrain);
       /* Cây và thảm cỏ dùng vật liệu dùng chung nên chỉ cần đổi màu, không dựng lại. */
       m.leaves1.color.setHex(palette.foliage);
       m.leaves2.color.setHex(palette.foliageAlt);
+      grassLayer?.setPalette(foliage, foliageAlt, palette.snow);
+      if (terrainKey === key) return;
+      terrainKey = key;
+      const previousTerrain = terrain;
+      if (terrain) {
+        scene.remove(terrain);
+        terrain.geometry.dispose();
+        (terrain.material as THREE.Material).dispose();
+      }
+      terrain = buildTerrain({ foliage, foliageAlt, snow: palette.snow });
+      scene.add(terrain);
+      /* Địa hình được dựng lại mỗi lần sang mùa, nên danh sách vật cản của
+         camera phải trỏ sang khối mới — nếu không, sau lần đổi mùa đầu tiên
+         camera lại chui xuống được dưới đảo. */
+      const stale = rig.colliders.indexOf(previousTerrain as THREE.Object3D);
+      if (stale >= 0) rig.colliders.splice(stale, 1);
+      if (rig.colliders.length) rig.colliders.push(terrain);
     }
     rebuildTerrain(seasonForDate(new Date()));
 
@@ -430,6 +492,20 @@ export default function WorldScene({
       sunLight.shadow.map = null;
     }
 
+    /**
+     * Đồng hồ của thế giới. Chế độ ảnh ấn định một giờ cụ thể để người chơi
+     * dựng khung hình hoàng hôn lúc mười giờ sáng; mọi lúc khác nó là đồng hồ
+     * thật của máy.
+     */
+    function worldNow(): Date {
+      const override = propsRef.current.timeOverride;
+      const now = new Date();
+      if (override === null) return now;
+      const virtual = new Date(now.getTime());
+      virtual.setHours(Math.floor(override), Math.round((override % 1) * 60), 0, 0);
+      return virtual;
+    }
+
     /** Cường độ hạt theo thiết lập chất lượng — máy yếu vẫn mượt. */
     function effectStrength(): number {
       const prefs = propsRef.current.world;
@@ -440,7 +516,7 @@ export default function WorldScene({
     }
 
     function applyEnvironment(force = false) {
-      const now = new Date();
+      const now = worldNow();
       const prefs = propsRef.current.world;
       const minute = now.getHours() * 60 + now.getMinutes();
       const season: Season = prefs.mode === "manual" ? prefs.season : seasonForDate(now);
@@ -511,7 +587,35 @@ export default function WorldScene({
       weather.set(chosen, effectStrength());
       (dust.points.material as THREE.PointsMaterial).opacity = 0.18 + state.daylight * 0.42;
       dust.points.visible = effectStrength() > 0;
+
+      /* Gió là thứ duy nhất trong khung hình cho biết trời đang lặng hay đang
+         giông trước cả khi hạt mưa rơi xuống. Nó chạy trong vertex shader nên
+         không tốn gì, và vẫn thổi kể cả khi người chơi tắt hạt hiệu ứng. */
+      grassLayer?.setWind(reduceMotion ? 0 : 0.24 + profile.rain * 0.7 + profile.overcast * 0.35);
+
+      checkGolden(now, chosen);
     }
+
+    /* ---------------------- khoảnh khắc bình minh / hoàng hôn ----------------------
+       Thời gian trong trò này vẫn trôi đều, nhưng có hai lát cắt trong ngày mà
+       khung hình đẹp hẳn lên. Hệ thống biết chính xác lúc nào chúng tới, nên nó
+       lên tiếng mời người chơi ở lại thay vì để họ tình cờ bắt gặp. */
+    let goldenKey = "";
+    function checkGolden(now: Date, weather: WeatherId) {
+      /* Chỉ mời khi đó là khoảnh khắc thật. Giờ do chế độ ảnh ấn định thì người
+         chơi đang tự dựng hoàng hôn rồi, mời nữa là thừa. */
+      if (propsRef.current.timeOverride !== null || propsRef.current.world.mode === "manual") return;
+      const kind = goldenPhase(now);
+      if (!kind) return;
+      const key = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}|${kind}`;
+      if (key === goldenKey) return;
+      /* Trời mưa hay giông thì mặt trời chẳng chạm được mặt biển. Không ghi
+         `goldenKey` để nếu trời quang lại trong cửa sổ ấy thì vẫn kịp mời. */
+      if (!goldenWeatherOk(weather)) return;
+      goldenKey = key;
+      propsRef.current.onGolden(kind);
+    }
+
     applyEnvironment(true);
 
     /* district groups */
@@ -542,10 +646,17 @@ export default function WorldScene({
       [15.5, 3, 1.2], [-15, 4, 1.05], [14, -12, 0.9], [-14, -12.5, 1.15], [5.5, 14, 1.0],
       [-5.5, 14.5, 0.85], [17.5, -4, 0.8], [-17.5, -4.5, 0.95], [0.5, -15.5, 1.1], [-8, -16, 0.8],
       [8.5, -16.5, 0.9], [12, 11.5, 0.95], [-12, 11.5, 1.05], [18, 8, 0.85], [-18, 8.5, 0.9],
+      /* Trồng dày thêm về phía sườn trong: một rừng thông thưa mười lăm cây chỉ
+         đọc ra "vài cái cây", không đọc ra "hòn đảo có rừng". */
+      [10.5, 15.5, 0.86], [-10.2, 15.8, 0.92], [16.4, -8.6, 1.02], [-16.6, -8.4, 0.88],
+      [3.4, -17.4, 0.94], [-3.6, -17.2, 1.06], [19.6, 2.4, 0.8], [-19.8, 2.6, 0.86],
+      [6.8, 17.6, 0.78], [-6.6, 17.4, 0.84], [13.4, -15.2, 0.82], [-13.2, -15.4, 0.9],
     ];
     for (const [x, z, s] of treeSpots) {
       const tree = makeTree(m, s, Math.random() > 0.5 ? m.leaves1 : m.leaves2);
-      tree.position.set(x, 0, z);
+      /* Đặt theo cao độ mặt đất thật chứ không phải y = 0: những cây nằm ngoài
+         bán kính 17 đứng trên bãi thoải, để y = 0 là chúng lơ lửng trên cát. */
+      tree.position.set(x, terrainHeightAt(x, z), z);
       tree.rotation.y = x * z;
       scenery.add(tree);
     }
@@ -582,11 +693,24 @@ export default function WorldScene({
     ];
     for (const [x, z, s] of palmSpots) {
       const palm = makePalm(m);
-      palm.position.set(x, 0, z);
+      palm.position.set(x, terrainHeightAt(x, z), z);
       palm.scale.setScalar(s * 1.25);
       palm.rotation.y = x * z;
       scenery.add(palm);
     }
+
+    /* ---------------------- thảm cỏ dựng bằng instancing ----------------------
+       Bốn nghìn ngọn cỏ trong đúng một lệnh vẽ. Không có nó, khoảng giữa những
+       công trình chỉ là một mảng màu xanh phẳng. Cây thông và cây dừa vẫn dựng
+       từng cây một: mỗi cây có số tầng tán, độ cong thân và độ rủ tàu lá riêng,
+       gộp chúng thành một hình dùng chung sẽ đánh mất đúng cái làm chúng đẹp. */
+    grassLayer = makeGrass(reduceMotion ? 0 : compactGpu ? 1600 : 4200);
+    if (grassLayer.mesh) {
+      scene.add(grassLayer.mesh);
+      staticTicks.push(grassLayer.tick);
+    }
+    /* Dựng xong mới có gì để tô: gọi lại để thảm cỏ nhận bảng màu của mùa. */
+    rebuildTerrain(activeSeason);
     const flowerSpots: [number, number, number][] = [
       [6.4, 6.2, 0xb79cff], [-6.6, 6.0, 0xff9ac1], [6.2, -4.4, 0xf0c268], [-6.4, -4.2, 0x5ce8c4],
       [13.8, 6.8, 0xff9ac1], [-13.6, 6.6, 0xb79cff], [3.2, 11.4, 0xf0c268], [-3.4, 11.2, 0xe9f3f0],
@@ -915,6 +1039,25 @@ export default function WorldScene({
     composer.setPixelRatio(renderPixelRatio);
     composer.setSize(container.clientWidth, container.clientHeight);
     composer.addPass(new RenderPass(scene, camera));
+    /* ------------------------------ GTAO ------------------------------
+       Che khuất môi trường theo phương pháp ground-truth: chỗ hai khối gặp
+       nhau — chân tường, kẽ mái, gốc cây, mép bậc thềm — tối lại đúng như ngoài
+       đời. Đây là thứ khiến hòn đảo hết trông như đồ chơi nhựa xếp trên mặt
+       phẳng. Bán kính để 0,75 đơn vị: nhà ở đây cao 5–10 đơn vị nên đó đúng là
+       cỡ của một bóng tiếp xúc, còn để rộng hơn thì cả sườn đảo xám lại. */
+    const gtaoPass = new GTAOPass(scene, camera, container.clientWidth, container.clientHeight);
+    gtaoPass.output = GTAOPass.OUTPUT.Default;
+    gtaoPass.blendIntensity = 0.9;
+    gtaoPass.updateGtaoMaterial({
+      radius: 0.75,
+      distanceExponent: 1.4,
+      thickness: 1.2,
+      scale: 1.05,
+      samples: compactGpu ? 8 : 16,
+      screenSpaceRadius: false,
+    });
+    composer.addPass(gtaoPass);
+
     const bloomPass = new UnrealBloomPass(
       new THREE.Vector2(container.clientWidth, container.clientHeight),
       0.62,
@@ -956,18 +1099,83 @@ export default function WorldScene({
       return !compactGpu || averageFrameMs < 30;
     }
 
-    /* ------------------------------ camera tween ------------------------------ */
-    let tween: { t0: number; dur: number; fromPos: THREE.Vector3; toPos: THREE.Vector3; fromTgt: THREE.Vector3; toTgt: THREE.Vector3 } | null = null;
+    /**
+     * GTAO đắt hơn bloom: nó vẽ lại toàn cảnh một lượt nữa để lấy pháp tuyến và
+     * chiều sâu. Ngưỡng tự động vì thế chặt hơn (20ms thay vì 26ms) và máy yếu
+     * bị loại thẳng — thà không có bóng tiếp xúc còn hơn tụt xuống 30fps.
+     */
+    function gtaoEnabled(): boolean {
+      const prefs = propsRef.current.world;
+      if (!prefs.effects || compactGpu) return false;
+      if (prefs.quality === "balanced") return false;
+      if (prefs.quality === "high") return true;
+      return renderPixelRatio >= 1 && averageFrameMs < 20;
+    }
+
+    /* Đoạn mở đầu tự lái camera từ ngoài không gian xuống. Cờ này nằm ở đây,
+       trên `flyToPose`, vì một chuyến bay do người chơi yêu cầu được quyền cắt
+       ngang nó. */
+    let introDone = false;
+
+    /* ------------------------------ camera tween ------------------------------
+       Chuyến bay của camera do GSAP dẫn nhịp. Cái được không phải là "đường
+       cong mượt hơn" — `easeInOutCubic` viết tay vẫn mượt — mà là việc một
+       chuyến bay mới tự huỷ chuyến đang chạy, kể cả khi nó đang tween cả tiêu
+       cự lẫn vị trí. Bản trước ghi đè `tween` giữa chừng nên nếu người chơi
+       bấm hai góc máy liên tiếp, tiêu cự sẽ kẹt lại ở giá trị dở dang. */
+    const flight = { k: 1 };
+    const flyFromPos = new THREE.Vector3();
+    const flyToPos = new THREE.Vector3();
+    const flyFromTgt = new THREE.Vector3();
+    const flyToTgt = new THREE.Vector3();
+    let flyFromFov = BASE_FOV;
+    let flyToFov = BASE_FOV;
+    let flying = false;
+    let flightTween: gsap.core.Tween | null = null;
+
+    function flyToPose(pos: THREE.Vector3, target: THREE.Vector3, fov: number, dur: number) {
+      /* Đoạn mở đầu cũng lái camera. Người chơi bấm một quận hay một góc máy
+         trong hai giây rưỡi đó thì phải được đi ngay, chứ không phải ngồi nhìn
+         cú bấm của mình bị nuốt mất. */
+      introDone = true;
+      flightTween?.kill();
+      flyFromPos.copy(camera.position);
+      flyToPos.copy(pos);
+      flyFromTgt.copy(controls.target);
+      flyToTgt.copy(target);
+      flyFromFov = camera.fov;
+      flyToFov = fov;
+      flight.k = 0;
+      flying = true;
+      /* Cờ `flying` được hạ trong vòng lặp dựng hình chứ không ở đây.
+         `onComplete` của GSAP chạy trong nhịp rAF của chính nó, có thể rơi vào
+         giữa hai khung hình của cảnh: trên máy chạy 2 khung/giây, lần lấy mẫu
+         cuối cùng của vòng lặp là k ≈ 0,8 và camera đứng lại giữa đường. Để
+         vòng lặp tự thấy k = 1 thì khung cuối luôn đúng đích. */
+      flightTween = gsap.to(flight, {
+        k: 1,
+        duration: reduceMotion ? 0.25 : dur,
+        ease: "power2.inOut",
+        onComplete: () => {
+          flightTween = null;
+        },
+      });
+    }
+
     function flyTo(view: ViewId, dur = 1.6) {
       const { pos, target } = viewPose(view, propsRef.current.activeIsle);
-      tween = {
-        t0: performance.now(),
-        dur: (reduceMotion ? 0.25 : dur) * 1000,
-        fromPos: camera.position.clone(),
-        toPos: pos,
-        fromTgt: controls.target.clone(),
-        toTgt: target,
-      };
+      rig.polarOverride = null;
+      flyToPose(pos, target, BASE_FOV, dur);
+      sound.whoosh();
+    }
+
+    /** Bay tới một khung hình đã ngắm sẵn, kèm tiêu cự riêng của khung đó. */
+    function flyToShot(id: ShotId) {
+      const shot = SHOT_BY_ID.get(id) ?? CAMERA_SHOTS[0];
+      /* Bốn trong sáu khung hình đặt máy thấp hơn điểm ngắm và ngước lên; giới
+         hạn góc tự động sẽ đẩy chúng vọt lên trời nếu không được nới ra. */
+      rig.polarOverride = polarBetween(shot.pos, shot.target) + 0.03;
+      flyToPose(shot.pos.clone(), shot.target.clone(), shot.fov, 1.9);
       sound.whoosh();
     }
 
@@ -977,6 +1185,9 @@ export default function WorldScene({
       heldKeys.clear();
       controls.minDistance = active ? 6 : 9;
       controls.maxDistance = active ? 38 : 165;
+      /* Ngoài khơi không có gì để camera đâm vào, mà tia va chạm lại hay quét
+         trúng chính con tàu — tắt hẳn giá va chạm khi đang lái. */
+      rig.enabled = !active;
       if (active) {
         const target = yachtHolder.position.clone().add(new THREE.Vector3(0, 1.2, 0));
         const behind = new THREE.Vector3(
@@ -984,14 +1195,7 @@ export default function WorldScene({
           yachtCamera.height,
           -Math.cos(yachtHeading) * yachtCamera.distance
         );
-        tween = {
-          t0: performance.now(),
-          dur: reduceMotion ? 250 : 1200,
-          fromPos: camera.position.clone(),
-          toPos: yachtHolder.position.clone().add(behind),
-          fromTgt: controls.target.clone(),
-          toTgt: target,
-        };
+        flyToPose(yachtHolder.position.clone().add(behind), target, BASE_FOV, 1.2);
       }
     }
 
@@ -1026,10 +1230,20 @@ export default function WorldScene({
     }
 
     function onPointerMove(e: PointerEvent) {
+      const tip = tooltipRef.current;
+      /* Chế độ chỉ-thế-giới không có chú giải: người chơi đang ngắm cảnh, một
+         thẻ chữ bám theo con trỏ là thứ duy nhất còn che khung hình. */
+      if (!propsRef.current.showLabels) {
+        if (hovered) {
+          hovered = null;
+          renderer.domElement.style.cursor = "grab";
+        }
+        if (tip) tip.style.opacity = "0";
+        return;
+      }
       /* Raycast là phần đắt nhất trong khung hình; 60ms một lần là đủ mượt
          với con trỏ mà không ăn hết ngân sách CPU khi rê chuột nhanh. */
       const now = performance.now();
-      const tip = tooltipRef.current;
       if (now - lastPickAt >= 60) {
         lastPickAt = now;
         const tag = pickAt(e.clientX, e.clientY);
@@ -1095,9 +1309,16 @@ export default function WorldScene({
     function updateLabels() {
       const w = container.clientWidth;
       const h = container.clientHeight;
+      /* Chế độ ảnh và chế độ "chỉ thế giới" đều muốn khung hình sạch: nhãn tắt
+         hẳn chứ không chỉ mờ đi, để chúng không lọt vào ảnh xuất ra. */
+      const visible = propsRef.current.showLabels;
       for (const id of labelIds) {
         const el = labelEls.current[id];
         if (!el) continue;
+        if (!visible) {
+          el.style.opacity = "0";
+          continue;
+        }
         const islandId = id.startsWith("isle:") ? (id.slice(5) as DistrictId) : null;
         const base = islandId ? ISLE_POSITIONS[islandId] : DISTRICT_POS[id];
         const lv = id === "center" || islandId ? 0 : propsRef.current.levels[id as DistrictId];
@@ -1159,9 +1380,61 @@ export default function WorldScene({
     }
     window.addEventListener("resize", onResize);
 
+    /* ------------------------- ảnh chụp độ phân giải cao -------------------------
+       `preserveDrawingBuffer` để `false` vì bật lên là mỗi khung hình phải giữ
+       thêm một bộ đệm màu suốt phiên chơi. Đổi lại, muốn đọc pixel thì phải vẽ
+       và đọc trong cùng một nhịp đồng bộ, trước khi trình duyệt kịp xoá bộ đệm.
+       Toàn bộ hàm này vì thế không được có một `await` nào. */
+    function capture(): string | null {
+      const w = Math.max(1, container.clientWidth);
+      const h = Math.max(1, container.clientHeight);
+      /* Gấp đôi mật độ điểm ảnh so với lúc chơi: ảnh xuất ra để chia sẻ và
+         phóng to, không phải để hiển thị vừa khít khung hiện tại. */
+      const shotRatio = Math.min(2.6, Math.max(2, window.devicePixelRatio || 1));
+      const resolution = gradePass.material.uniforms.uResolution.value as THREE.Vector2;
+      const wasResolution = resolution.clone();
+      try {
+        renderer.setPixelRatio(shotRatio);
+        renderer.setSize(w, h, false);
+        composer.setPixelRatio(shotRatio);
+        composer.setSize(w, h);
+        /* Quang sai của ống kính tính theo `uResolution`. Bộ đệm lúc chụp lớn
+           gấp đôi, nên không cập nhật con số này thì viền màu trong ảnh xuất ra
+           đậm gấp đôi những gì người chơi vừa ngắm. */
+        resolution.set(w * shotRatio, h * shotRatio);
+        renderFrame(clock.elapsedTime, true);
+        return renderer.domElement.toDataURL("image/png");
+      } catch {
+        /* Trình duyệt có thể từ chối `toDataURL` nếu canvas bị "vấy bẩn"; lúc
+           đó thà không có ảnh còn hơn làm sập cả thế giới 3D. */
+        return null;
+      } finally {
+        resolution.copy(wasResolution);
+        renderer.setPixelRatio(renderPixelRatio);
+        renderer.setSize(w, h, false);
+        composer.setPixelRatio(renderPixelRatio);
+        composer.setSize(w, h);
+      }
+    }
+
+    /* ---------------------- vật cản của camera ----------------------
+       Chỉ những khối thật sự chắn tầm nhìn mới nằm trong danh sách. Biển, trời,
+       mây và thảm cỏ bị bỏ ra: đâm xuyên qua chúng là chuyện bình thường, còn
+       đưa chúng vào thì mỗi lần lia camera là một lần camera bị giật vào. */
+    rig.colliders = [
+      lighthouse,
+      village,
+      pier,
+      ...DISTRICT_IDS.map((d) => districtGroups[d] as THREE.Object3D),
+      ...DISTRICT_IDS.map((d) => isleGroups[d] as THREE.Object3D),
+    ];
+    if (terrain) rig.colliders.push(terrain);
+
     /* ------------------------------ API ------------------------------ */
     sceneApi.current = {
       flyTo,
+      flyToShot,
+      capture,
       rebuildDistrict,
       rebuildIsle,
       rebuildDecor,
@@ -1182,6 +1455,8 @@ export default function WorldScene({
     };
     handleRef.current = {
       fireBurst: (view, kind) => sceneApi.current?.burst(view, kind),
+      flyToShot: (id) => sceneApi.current?.flyToShot(id),
+      capture: () => sceneApi.current?.capture() ?? null,
     };
     if (propsRef.current.voyage) setVoyage(true);
 
@@ -1192,7 +1467,6 @@ export default function WorldScene({
     const introStart = performance.now();
     const introFrom = camera.position.clone();
     const introTargetFrom = new THREE.Vector3(0, 20, 0);
-    let introDone = false;
     let labelClock = 0;
     let perfFrames = 0;
     let perfTime = 0;
@@ -1242,18 +1516,26 @@ export default function WorldScene({
         perfTime = 0;
       }
 
+      /* Trả camera về đúng quỹ đạo mà `OrbitControls` tưởng nó đang ở, trước
+         khi bất cứ ai chạm vào vị trí camera trong khung này. */
+      rig.beforeControls();
+
       if (!introDone) {
         const k = Math.min(1, (performance.now() - introStart) / (reduceMotion ? 300 : 2600));
         const e = easeInOutCubic(k);
         camera.position.lerpVectors(introFrom, introPose.pos, e);
         controls.target.lerpVectors(introTargetFrom, introPose.target, e);
         if (k >= 1) introDone = true;
-      } else if (tween) {
-        const k = Math.min(1, (performance.now() - tween.t0) / tween.dur);
-        const e = easeInOutCubic(k);
-        camera.position.lerpVectors(tween.fromPos, tween.toPos, e);
-        controls.target.lerpVectors(tween.fromTgt, tween.toTgt, e);
-        if (k >= 1) tween = null;
+      } else if (flying) {
+        const e = flight.k;
+        camera.position.lerpVectors(flyFromPos, flyToPos, e);
+        controls.target.lerpVectors(flyFromTgt, flyToTgt, e);
+        const fov = THREE.MathUtils.lerp(flyFromFov, flyToFov, e);
+        if (Math.abs(fov - camera.fov) > 0.01) {
+          camera.fov = fov;
+          camera.updateProjectionMatrix();
+        }
+        if (e >= 1) flying = false;
       }
 
       if (propsRef.current.voyage) {
@@ -1295,7 +1577,7 @@ export default function WorldScene({
           propsRef.current.onVortex();
         }
 
-        if (!tween) {
+        if (!flying) {
           desiredYachtTarget.set(yachtHolder.position.x, yachtHolder.position.y + 1.15, yachtHolder.position.z);
           followDelta.subVectors(desiredYachtTarget, controls.target).multiplyScalar(1 - Math.exp(-dt * 5));
           controls.target.add(followDelta);
@@ -1328,8 +1610,12 @@ export default function WorldScene({
       /* Trường hạt thời tiết luôn bám quanh camera nên không bao giờ thấy mép. */
       if (currentWeather !== "clear") weather.setCenter(controls.target.x, controls.target.z);
 
-      controls.autoRotate = !propsRef.current.voyage && propsRef.current.selected === "overview" && !tween && !userInteracting && introDone && !reduceMotion;
+      controls.autoRotate = !propsRef.current.voyage && propsRef.current.selected === "overview" && !flying && !userInteracting && introDone && !reduceMotion;
       controls.update();
+      /* Kẹp góc chúi theo khoảng cách, đẩy camera ra trước vật cản, ghim sàn.
+         Dùng `rawDt` chứ không phải `dt`: `dt` đã bị kẹp xuống 0,05 giây để vật
+         lý du thuyền không nhảy cóc, còn giá máy cần thời gian thật. */
+      rig.afterControls(rawDt);
 
       for (const fn of staticTicks) fn(t, dt);
       for (const fn of yachtTicks) fn(t, dt);
@@ -1344,21 +1630,37 @@ export default function WorldScene({
         updateLabels();
         updateTooltipContent();
       }
+      renderFrame(t);
+    }
+
+    /**
+     * Vẽ một khung hình.
+     *
+     * Tách khỏi `frame()` vì chế độ ảnh cần vẽ lại đúng cảnh này ở độ phân giải
+     * cao rồi đọc canvas ngay trong cùng một nhịp đồng bộ — `preserveDrawingBuffer`
+     * bị tắt để tiết kiệm bộ nhớ, nên chỉ có cách đó mới lấy được pixel.
+     *
+     * `hero` là khung dành cho ảnh tĩnh: nó không có ngân sách khung hình để lo,
+     * nên bật hết hiệu ứng kể cả khi lúc chơi chúng đang bị tự động hạ xuống.
+     */
+    function renderFrame(t: number, hero = false) {
+      const effects = propsRef.current.world.effects;
+      if (!(hero ? effects : postEnabled())) {
+        renderer.render(scene, camera);
+        return;
+      }
+      bloomPass.enabled = hero ? effects : bloomEnabled();
+      gtaoPass.enabled = hero ? effects && !compactGpu : gtaoEnabled();
       /* Bloom mạnh hơn về đêm: ban ngày ánh mặt trời đã đủ chói, thêm quầng sáng
          chỉ làm cảnh bệt màu. */
-      if (postEnabled()) {
-        bloomPass.enabled = bloomEnabled();
-        bloomPass.strength = 0.34 + (1 - currentDaylight) * 0.62;
-        const grade = gradePass.material.uniforms;
-        grade.uTime.value = t;
-        /* Ban đêm hạt phim và tối góc mạnh tay hơn: đó là lúc một cảm biến thật
-           phải đẩy ISO lên, nên ảnh đêm sạch bong mới là cái phi thực. */
-        grade.uGrain.value = 0.022 + (1 - currentDaylight) * 0.03;
-        grade.uVignette.value = 0.28 + (1 - currentDaylight) * 0.14;
-        composer.render();
-      } else {
-        renderer.render(scene, camera);
-      }
+      bloomPass.strength = 0.34 + (1 - currentDaylight) * 0.62;
+      const grade = gradePass.material.uniforms;
+      grade.uTime.value = t;
+      /* Ban đêm hạt phim và tối góc mạnh tay hơn: đó là lúc một cảm biến thật
+         phải đẩy ISO lên, nên ảnh đêm sạch bong mới là cái phi thực. */
+      grade.uGrain.value = 0.022 + (1 - currentDaylight) * 0.03;
+      grade.uVignette.value = 0.28 + (1 - currentDaylight) * 0.14;
+      composer.render();
     }
     frame();
 
@@ -1375,6 +1677,9 @@ export default function WorldScene({
       renderer.domElement.removeEventListener("pointerdown", onPointerDown);
       renderer.domElement.removeEventListener("pointerup", onPointerUp);
       renderer.domElement.removeEventListener("pointerleave", onPointerLeave);
+      flightTween?.kill();
+      gtaoPass.dispose();
+      grassLayer?.dispose();
       controls.dispose();
       scene.traverse((o) => {
         const mesh = o as THREE.Mesh;

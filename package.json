@@ -21,10 +21,12 @@
     "test:ui": "node tests/ui_audit.cjs --out .artifacts/ui-audit",
     "test:features": "node tests/feature_shots.cjs --out .artifacts/features",
     "test:panels": "node tests/panel_shots.cjs --out .artifacts/panels",
+    "test:photo": "node tests/photo_camera.cjs --out .artifacts/photo",
     "test:exam": "node tests/exam_pass.cjs --out .artifacts/panels",
     "test:fish": "node tests/fishing_play.cjs"
   },
   "dependencies": {
+    "gsap": "^3.15.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "three": "^0.185.1"

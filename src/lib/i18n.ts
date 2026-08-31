@@ -603,6 +603,60 @@ const vi: Dict = {
   "hud.news": "Bảng tin",
   "hud.shop": "Chợ",
   "hud.fishing": "Câu cá",
+
+  /* ---------- góc máy, chế độ ảnh, khoảnh khắc vàng ---------- */
+  "hud.shots": "Góc máy",
+  "hud.photo": "Chế độ ảnh",
+  "hud.clean": "Chỉ thế giới",
+  "hud.cleanExit": "H · hiện lại giao diện",
+
+  "shot.harbor": "Cổng đảo từ biển",
+  "shot.lighthouse": "Chân hải đăng",
+  "shot.skyline": "Hàng chân trời",
+  "shot.pier": "Bến câu sát nước",
+  "shot.lagoon": "Vành san hô",
+  "shot.drone": "Flycam toàn đảo",
+
+  "pm.title": "Chế độ ảnh",
+  "pm.shutter": "Chụp",
+  "pm.exit": "Thoát",
+  "pm.time": "Giờ trong ngày",
+  "pm.timeLive": "Theo giờ thật",
+  "pm.season": "Mùa",
+  "pm.weather": "Thời tiết",
+  "pm.auto": "Trả về tự động",
+  "pm.shots": "Góc máy",
+  "pm.stamp": "Đóng dấu",
+  "pm.hidePanel": "Ẩn bảng chỉnh",
+  "pm.showPanel": "Bảng chỉnh",
+  "pm.hint": "Kéo để xoay, lăn để thu phóng. Ảnh xuất ra ở độ phân giải gấp đôi và không kèm giao diện.",
+  "pm.saved": "Đã lưu ảnh",
+  "pm.savedSub": "Tệp PNG đã tải về máy bạn",
+  "pm.failed": "Không chụp được khung hình này",
+  "pm.frame.free": "Tự do",
+  "pm.frame.wide": "16:9",
+  "pm.frame.classic": "3:2",
+  "pm.frame.square": "1:1",
+  "pm.frame.tall": "9:16",
+
+  "gh.kicker": "Khoảnh khắc vàng",
+  "gh.stay": "Chụp ảnh",
+  "gh.later": "Để sau",
+  "gh.sunrise.t": "Mặt trời vừa nhô khỏi mặt biển",
+  "gh.sunrise.b": "Ánh sáng đầu ngày chỉ kéo dài chừng hai mươi phút. Đây là lúc mặt nước ngả hồng và bóng đổ dài nhất trong ngày.",
+  "gh.sunset.t": "Mặt trời đang chạm mặt biển",
+  "gh.sunset.b": "Vài phút nữa thôi là hết. Nếu định giữ lại một khung hình của hòn đảo, thì là bây giờ.",
+
+  /* ---------- trang bìa cho người quay lại ---------- */
+  "hero.rKicker": "Hòn đảo vẫn ở đó · Chào mừng trở lại",
+  "hero.rTitle": "Trở lại",
+  "hero.rSub": "Bản lưu của bạn vừa được nạp. Thị trường đã chạy tiếp trong lúc bạn vắng mặt, mùa đã sang, và những gì bạn dựng vẫn nguyên vẹn.",
+  "hero.rBegin": "Vào đảo",
+  "hero.rHint": "Nhấn P để mở chế độ ảnh · Nhấn H để ẩn giao diện",
+  "hero.r1k": "Cấp quần đảo",
+  "hero.r2k": "Tổng cấp",
+  "hero.r3k": "Tài sản ròng",
+
 };
 
 const en: Dict = {
@@ -807,7 +861,7 @@ const en: Dict = {
   "tu.6.b": "Quick notes, compound calculator, VND↔USD converter and custom achievements — all in the tray at the top right.",
   "tu.7.t": "Fish for coins",
   "tu.7.b": "The pier sits on the southern shore of the main island — click it to cast. Hold the mouse or spacebar to lift the bar over the fish; keep it there long enough and the fish is yours. Sail out and steer into a glowing vortex for the rare species.",
-  "tu.8.t": "The Decor Market",
+  "tu.8.t": "The Decor Shop",
   "tu.8.b": "Sell your catch for coins, then spend them on any of 100 items: plants, lights, houses, monuments, ground palettes. Place them on the main island or any of the four private isles, up to 14 per isle.",
   "tu.9.t": "Keep your progress",
   "tu.9.b": "By default everything is stored in this browser. Create an account to carry progress between devices — the full privacy commitment is right there in the sign-up screen.",
@@ -875,8 +929,8 @@ const en: Dict = {
   "ach.a22.n": "Seasoned angler", "ach.a22.d": "Collect 12 different species",
   "ach.a23.n": "Ocean codex", "ach.a23.d": "Complete the entire fish collection",
   "ach.a24.n": "Deep-sea legend", "ach.a24.d": "Land a legendary species",
-  "ach.a25.n": "Decorator's touch", "ach.a25.d": "Buy 10 items at the Decor Market",
-  "ach.a26.n": "Isle architect", "ach.a26.d": "Buy 40 items at the Decor Market",
+  "ach.a25.n": "Decorator's touch", "ach.a25.d": "Buy 10 items at the Decor Shop",
+  "ach.a26.n": "Isle architect", "ach.a26.d": "Buy 40 items at the Decor Shop",
   "ach.a27.n": "Prosperous catch", "ach.a27.d": "Earn 2,000 coins from selling fish",
 
   "misc.visits": "visits",
@@ -959,7 +1013,7 @@ const en: Dict = {
   "quest.q_fish3.n": "A short session", "quest.q_fish3.d": "Land 3 fish",
   "quest.q_fish8.n": "Into the shoal", "quest.q_fish8.d": "Land 8 fish",
   "quest.q_news.n": "Morning read", "quest.q_news.d": "Open the news board once",
-  "quest.q_shop.n": "Shopping trip", "quest.q_shop.d": "Buy one item at the Decor Market",
+  "quest.q_shop.n": "Shopping trip", "quest.q_shop.d": "Buy one item at the Decor Shop",
 
   /* ---------- yacht ---------- */
   "yacht.tier1": "Starter Skiff",
@@ -986,7 +1040,7 @@ const en: Dict = {
   "log.fishNew": "New species collected: {f} · {w} kg (+{x} XP)",
   "log.sell": "Sold {n}× {f} · +{c} coins",
   "log.sellAll": "Sold the whole basket, {n} fish · +{c} coins",
-  "log.buy": "Bought {n} at the Decor Market · −{c} coins",
+  "log.buy": "Bought {n} at the Decor Shop · −{c} coins",
 
   /* ---------- world: time, season, weather ---------- */
   "wd.title": "Climate & time",
@@ -1159,7 +1213,7 @@ const en: Dict = {
   "fs.earned": "{c} coins earned from fish",
 
   /* ---------- decor shop ---------- */
-  "sp.title": "Decor Market",
+  "sp.title": "Decor Shop",
   "sp.sub": "Spend the coins your catch earns on plants, lights, buildings and ground palettes.",
   "sp.coins": "{c} coins",
   "sp.buy": "Buy",
@@ -1192,8 +1246,62 @@ const en: Dict = {
   /* ---------- coin purse ---------- */
   "hud.coins": "Coins",
   "hud.news": "News",
-  "hud.shop": "Market",
+  "hud.shop": "Shop",
   "hud.fishing": "Fishing",
+
+  /* ---------- camera shots, photo mode, golden hour ---------- */
+  "hud.shots": "Camera",
+  "hud.photo": "Photo mode",
+  "hud.clean": "World only",
+  "hud.cleanExit": "H · show the interface",
+
+  "shot.harbor": "Gate from the sea",
+  "shot.lighthouse": "Under the lighthouse",
+  "shot.skyline": "Island skyline",
+  "shot.pier": "Pier at water level",
+  "shot.lagoon": "The coral ring",
+  "shot.drone": "Drone over the isle",
+
+  "pm.title": "Photo mode",
+  "pm.shutter": "Shoot",
+  "pm.exit": "Exit",
+  "pm.time": "Time of day",
+  "pm.timeLive": "Real time",
+  "pm.season": "Season",
+  "pm.weather": "Weather",
+  "pm.auto": "Back to automatic",
+  "pm.shots": "Shots",
+  "pm.stamp": "Stamp",
+  "pm.hidePanel": "Hide the panel",
+  "pm.showPanel": "Scene panel",
+  "pm.hint": "Drag to orbit, scroll to zoom. Shots export at double resolution with no interface in frame.",
+  "pm.saved": "Photo saved",
+  "pm.savedSub": "The PNG has been downloaded",
+  "pm.failed": "That frame could not be captured",
+  "pm.frame.free": "Free",
+  "pm.frame.wide": "16:9",
+  "pm.frame.classic": "3:2",
+  "pm.frame.square": "1:1",
+  "pm.frame.tall": "9:16",
+
+  "gh.kicker": "Golden hour",
+  "gh.stay": "Take a photo",
+  "gh.later": "Not now",
+  "gh.sunrise.t": "The sun has just cleared the sea",
+  "gh.sunrise.b": "First light lasts about twenty minutes. The water turns pink and the shadows run longer than at any other hour.",
+  "gh.sunset.t": "The sun is touching the water",
+  "gh.sunset.b": "A few minutes and it is gone. If you were ever going to keep one frame of this island, it is now.",
+
+  /* ---------- returning-player cover ---------- */
+  "hero.rKicker": "Your island is still standing · Welcome back",
+  "hero.rTitle": "Return to",
+  "hero.rSub": "Your save is loaded. Markets kept running while you were away, the season has turned, and everything you built is exactly where you left it.",
+  "hero.rBegin": "Enter the island",
+  "hero.rHint": "Press P for photo mode · Press H to hide the interface",
+  "hero.r1k": "Archipelago level",
+  "hero.r2k": "Total levels",
+  "hero.r3k": "Net worth",
+
 };
 
 const DICTS: Record<Lang, Dict> = { vi, en };
