@@ -72,6 +72,39 @@ export function skyStateFor(date: Date): SkyState {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Sắc trời dùng chung                                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Đúng những hằng số mà shader vòm trời dùng, nhưng ở phía JavaScript.
+ *
+ * Mặt nước phải phản chiếu **chính bầu trời đang treo trên đầu nó**. Trước đây
+ * nó mượn tạm sắc sương mù, mà sương mù thì nhạt và ngả ấm, nên hễ nhìn lướt
+ * là cả mặt biển bạc trắng ra như sữa. Chia sẻ đúng bộ màu này giữ cho nước và
+ * trời luôn là một.
+ *
+ * Giá trị ở không gian tuyến tính vì shader nước cũng làm việc tuyến tính rồi
+ * mới tone-map ở cuối.
+ */
+const linear = (r: number, g: number, b: number) => new THREE.Color().setRGB(r, g, b, THREE.LinearSRGBColorSpace);
+const SKY_NIGHT_TOP = linear(0.0018, 0.0055, 0.019);
+const SKY_DAY_TOP = linear(0.055, 0.24, 0.44);
+const SKY_NIGHT_MID = linear(0.005, 0.014, 0.038);
+const SKY_DAY_MID = linear(0.16, 0.44, 0.58);
+const SKY_OVERCAST = linear(0.16, 0.18, 0.20);
+
+/** Ghi sắc đỉnh trời và sắc vòm gần chân trời vào hai màu cho sẵn. */
+export function skyGradient(state: SkyState, overcast: number, top: THREE.Color, horizon: THREE.Color): void {
+  top.copy(SKY_NIGHT_TOP).lerp(SKY_DAY_TOP, state.daylight);
+  horizon.copy(SKY_NIGHT_MID).lerp(SKY_DAY_MID, state.daylight);
+  if (overcast > 0.01) {
+    /* Trời u ám thì vòm xám lại, và mặt nước phải xám theo. */
+    top.lerp(SKY_OVERCAST, overcast * 0.75);
+    horizon.lerp(SKY_OVERCAST, overcast * 0.6);
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /*  Vòm trời                                                           */
 /* ------------------------------------------------------------------ */
 
@@ -253,7 +286,10 @@ export function makeSun(): CelestialBody {
     opacity: 0.9,
   });
   const sprite = new THREE.Sprite(material);
-  sprite.renderOrder = -90;
+  /* Sau mặt nước (-10) nên vầng mặt trời vẫn nằm trên mặt biển như bản trước:
+     mặt nước giờ trong mờ, nếu để nó vẽ sau thì nó sẽ xoá mất đĩa mặt trời lúc
+     hoàng hôn. */
+  sprite.renderOrder = -5;
   sprite.scale.set(58, 58, 1);
   sprite.frustumCulled = false;
 
@@ -341,7 +377,7 @@ export function makeMoon(): CelestialBody {
     opacity: 0,
   });
   const sprite = new THREE.Sprite(material);
-  sprite.renderOrder = -89;
+  sprite.renderOrder = -4;
   sprite.scale.set(34, 34, 1);
   sprite.frustumCulled = false;
 
