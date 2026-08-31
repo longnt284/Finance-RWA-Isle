@@ -25,10 +25,19 @@ Kiểm thử không cần trình duyệt (chạy được ở mọi môi trườ
 các nguồn giá):
 
 ```bash
-npm test                # typecheck + i18n + chuỗi nguồn giá
+npm test                # typecheck + i18n + giá + bảng tin + câu cá + Chợ
 npm run test:i18n       # mọi khoá i18n mà mã nguồn yêu cầu đều có đủ vi lẫn en
 npm run test:prices     # thứ tự xoay vòng nguồn giá, có stub fetch
+npm run test:news       # bóc tách RSS, khử trùng lặp, chịu được nguồn 403
+npm run test:fishing    # điều kiện xuất hiện, giá theo cân nặng, bậc cần câu
+npm run test:shop       # 100 hạng mục và mọi `kind` đều dựng được hình
 ```
+
+`test:fishing` và `test:shop` biên dịch `src/lib/*.ts` tại chỗ nên kiểm đúng bộ
+luật ứng dụng dùng. `test:shop` còn đối chiếu mọi `kind` trong danh mục với các
+nhánh `case` trong `world/props.ts`: thêm hạng mục mà quên viết bộ dựng thì món
+đó vẫn mua và "đặt lên đảo" được nhưng không hiện ra gì — lỗi im lặng khó thấy
+nhất trong cả tính năng này.
 
 Smoke test WebGL/UI (chạy `npm run dev` ở terminal khác trước):
 
@@ -43,7 +52,13 @@ npm run test:features   # ngày/đêm, bốn mùa, chín kiểu thời tiết
 npm run test:panels     # các bảng bên phải, luồng khảo thí, bầu trời đêm
 npm run test:exam       # tự trả lời đúng cả 5 câu rồi kiểm tra màn hình "Đạt"
 npm run test:feed       # bảng Hoạt động đổi ngôn ngữ đúng ở cả hai chiều
+npm run test:fish       # tự chơi minigame câu cá tới khi bắt được một con
 ```
+
+`test:fish` đọc vị trí khung và vị trí cá từ DOM rồi giữ hoặc thả chuột đúng như
+một người chơi, nên nó phủ trọn đường đi từ vòng lặp `requestAnimationFrame`, qua
+reducer, tới `localStorage`. Chính bài này phát hiện lực nâng khung ban đầu quá
+nhẹ khiến không ván nào thắng được — thứ mà đọc code không thấy ra.
 
 `test:exam` biên dịch `src/lib/quiz.ts` tại chỗ để lấy đúng đáp án theo cùng
 seed mà ứng dụng dùng, nên nó bấm trúng chứ không đoán.
@@ -60,10 +75,59 @@ seed mà ứng dụng dùng, nên nó bấm trúng chứ không đoán.
 - **Chín kiểu thời tiết**: quang đãng, nhiều mây, mưa, giông bão (có chớp), tuyết
   rơi, mưa hoa, lá rơi, sương mù và đom đóm ban đêm. Thời tiết tự đổi vài lần mỗi
   ngày theo mùa, hoặc bạn tự chọn trong bảng *Khí hậu & thời gian*.
+- **Bloom** chạy qua `EffectComposer`: `RenderPass` vẽ vào bộ đệm tuyến tính,
+  `OutputPass` mới tone-map và mã hoá sRGB một lần ở cuối — nên nước và bầu
+  trời, vốn tự gọi `<tonemapping_fragment>`, không bị nướng hai lần. Bloom tự
+  tắt ở mức chất lượng "cân bằng", trên máy yếu, và khi khung hình vượt 26ms.
+- **Bản đồ môi trường** nướng bằng PMREM từ một dải gradient trời–chân trời–biển
+  (32×16 pixel, không thêm request nào): vàng, mái kính và đá bóng có phản chiếu
+  thật thay vì màu bệt.
+- **Xóm làng** 21 công trình — nhà gỗ, quầy chợ, lều trại, vọng lâu, cối xay
+  gió, tháp canh, nhà kính — cùng 24 cây dừa và 10 luống hoa ven bãi cát. Quảng
+  trường hải đăng là sân tròn nhiều bậc có lan can, chậu lửa và nan hoa lát đá.
 - **Lãnh hải hình tròn**: bãi cát mở rộng và thoải dần xuống thềm nông ngọc lam,
   ngoài xa là vành san hô phát sáng đánh dấu ranh giới. Mặt nước là một đĩa tròn
   nên đường chân trời không bao giờ lộ góc vuông. Lái du thuyền tới gần rìa, một
   vách sáng hiện dần để bạn biết đã tới giới hạn.
+
+## Câu cá
+
+- **Bến câu** nằm ở bờ nam đảo chính — bấm vào cầu gỗ để thả cần. **Xoáy nước**
+  phát sáng rải ngoài khơi (giữa vành 46 và 102): lái du thuyền vào là mở phiên
+  câu cá hiếm, xoáy tắt rồi mọc lại chỗ khác sau 26 giây.
+- Cơ chế giống Stardew Valley: giữ chuột hoặc **phím cách** để nâng khung, thả
+  ra thì khung rơi. Khung trùm lên cá thì thanh tiến trình nạp, ra ngoài thì tụt.
+  Đầy là bắt được, cạn là cá thoát.
+- **35 loài** chia năm bậc hiếm. Cá hiếm giật mạnh hơn (`difficulty` cao → khung
+  hẹp, tiến trình tụt nhanh) và chỉ xuất hiện đúng vùng nước, đúng mùa, đúng
+  ngày hoặc đêm của nó. Xoáy nước có `luck` 0,8 so với 0,12 ở bến câu, nên cá
+  huyền thoại gần như chỉ gặp ngoài khơi.
+- **Bộ sưu tập** giữ mọi loài từng bắt kèm kỷ lục cân nặng, kể cả khi cá đã bán.
+  **Giỏ cá** là phần chưa bán; bán lấy **xu**, giá theo cân nặng thật của con cá.
+- **Cần câu lên cấp** theo tổng số cá đã bắt (15 · 45 · 110 · 240 con): khung
+  rộng ra và tiến trình nạp nhanh hơn.
+
+## Chợ Trang Trí
+
+- **100 hạng mục** chia bảy nhóm: sắc nền, cây cối, ánh sáng, công trình, tượng
+  đài, ven biển và hiệu ứng. Mua bằng xu bán cá.
+- Đặt được lên **đảo chính lẫn bốn đảo riêng**, tối đa 14 món mỗi đảo. Vị trí
+  rải theo góc vàng nên bố cục ổn định — cất một món đi thì những món còn lại
+  không nhảy chỗ.
+- **Sắc nền** là loại một-chọn-một: đặt nền mới thì nền cũ tự nhường chỗ. Trên
+  đảo chính, sắc nền pha vào bảng màu mùa chứ không thay hẳn, nên mùa đông vẫn
+  ra mùa đông.
+
+## Bảng tin
+
+- `/api/news` gom **tám nguồn RSS** công khai (CoinDesk, Cointelegraph, Decrypt,
+  Yahoo Finance, CNBC, VnExpress Kinh doanh, CafeF, Vietstock) thành một dòng
+  tin đã khử trùng lặp theo liên kết và sắp xếp mới nhất lên đầu.
+- Mỗi nguồn được gắn sẵn chủ đề (crypto · chứng khoán · Việt Nam · thế giới) để
+  lọc mà không cần đoán. Một nguồn hỏng không kéo cả bảng tin xuống; trường
+  `tried` nói rõ nguồn nào hỏng vì lý do gì.
+- Máy chủ cache 3 phút, client cache 5 phút. Khi mọi nguồn đều bị chặn, giao
+  diện nói thẳng là mạng đang chặn RSS chứ không hiện bảng trắng.
 
 ## Tiến trình và khảo thí
 
@@ -83,10 +147,11 @@ seed mà ứng dụng dùng, nên nó bấm trúng chứ không đoán.
 
 - **Điểm danh chu kỳ 7 ngày**, phần thưởng tăng dần và lớn nhất ở ngày thứ bảy.
   Bỏ lỡ một ngày thì chu kỳ quay lại Ngày 1.
-- **Ba nhiệm vụ mới mỗi ngày** rút từ 11 mẫu: hoàn thành nhiệm vụ, ghi nhanh hoạt
+- **Ba nhiệm vụ mới mỗi ngày** rút từ 15 mẫu: hoàn thành nhiệm vụ, ghi nhanh hoạt
   động, nhích mục tiêu, ghi nhận tài sản ròng, thêm mã vào bảng chạy, viết ghi
-  chú, ghé thăm các quận, ra khơi, vượt khảo thí, chỉnh trang đảo. Cùng một ngày
-  luôn ra cùng bộ nhiệm vụ; XP nhận được nhân theo chuỗi ngày.
+  chú, ghé thăm các quận, ra khơi, vượt khảo thí, chỉnh trang đảo, câu cá, đọc
+  bảng tin, sắm đồ ở Chợ. Cùng một ngày luôn ra cùng bộ nhiệm vụ; XP nhận được
+  nhân theo chuỗi ngày.
 
 ## Du thuyền
 
@@ -115,6 +180,9 @@ Nâng cấp trong bảng *Khí hậu & thời gian → Xưởng du thuyền*.
   gửi theo lô 25 mã song song; server cache 20 giây và giới hạn 8 request đồng
   thời tới upstream.
 - Tỷ giá USD/VND từ open.er-api, refresh mỗi 30 phút.
+- Máy tính lãi kép & DCA nhập được bằng **triệu ₫ hoặc nghìn $**; đổi đơn vị thì
+  giá trị thật giữ nguyên, và kết quả luôn hiện kèm con số đối chiếu bằng đơn vị
+  còn lại. Ô ghi nhận tài sản ròng cũng theo đúng đơn vị đang hiển thị.
 
 **Mỗi endpoint xoay vòng nhiều nguồn**, không phụ thuộc một nhà cung cấp duy nhất:
 
@@ -122,6 +190,7 @@ Nâng cấp trong bảng *Khí hậu & thời gian → Xưởng du thuyền*.
 | --- | --- | --- |
 | `/api/quotes` | Yahoo `query1` → Yahoo `query2` → Stooq | Stooq chỉ phủ sàn Mỹ; mã `.VN` vẫn trông vào Yahoo |
 | `/api/crypto` | Binance REST → CoinGecko → CoinMarketCap | CoinMarketCap chỉ bật khi có `CMC_API_KEY` phía máy chủ |
+| `/api/news` | 8 nguồn RSS gọi song song | Nguồn nào hỏng thì bỏ qua nguồn đó, phần còn lại vẫn lên bảng |
 
 CoinGecko được hỏi theo `id`, mà bản đồ ký hiệu → `id` thì có thể sai. Nên máy chủ
 **đối chiếu lại `symbol` mà CoinGecko trả về**: lệch là loại luôn mục đó. Thà thiếu
@@ -202,6 +271,11 @@ ghi đè ngầm là cách nhanh nhất để người dùng mất tiến độ.
 - `src/world/weather.ts` — hệ hạt mưa, tuyết, cánh hoa, lá, sương, đom đóm.
 - `src/world/yacht.ts` — du thuyền 5 hạng.
 - `src/world/build.ts` — địa hình, công trình bốn lĩnh vực, đảo riêng, trang trí.
+- `src/world/props.ts` — 40 kiểu vật phẩm của Chợ, xóm làng, bến câu, xoáy nước.
+- `src/lib/fishing.ts` — danh mục cá, xổ số cắn câu và hằng số minigame.
+- `src/lib/shop.ts` — 100 hạng mục trang trí, tên song ngữ nằm trong dữ liệu.
+- `src/lib/news.ts` — client bảng tin, bộ nhớ dùng chung và dấu "đã đọc".
+- `api/news.js` — gom RSS nhiều nguồn, parse không cần dependency.
 - `src/lib/season.ts` — mùa, pha ngày, bảng màu và bộ chọn thời tiết (thuần, không
   phụ thuộc Three.js nên state và UI dùng được).
 - `src/lib/quiz.ts` — ngân hàng câu hỏi khảo thí song ngữ và bộ sinh đề.
@@ -219,4 +293,7 @@ ghi đè ngầm là cách nhanh nhất để người dùng mất tiến độ.
 - `tests/feature_shots.cjs` — bộ ảnh kiểm chứng tính năng.
 - `tests/i18n_keys.cjs` — đối chiếu mọi khoá i18n mã nguồn yêu cầu với hai từ điển.
 - `tests/price_providers.cjs` — chuỗi xoay vòng nguồn giá, chạy offline.
+- `tests/news_feed.cjs` — bóc tách RSS và khử trùng lặp, chạy offline.
+- `tests/fishing.cjs` — luật câu cá, chạy offline trên chính `lib/fishing.ts`.
+- `tests/shop_catalog.cjs` — danh mục Chợ và đối chiếu `kind` với `props.ts`.
 - `tests/feed_language.cjs` — bảng Hoạt động đổi ngôn ngữ ở cả hai chiều.

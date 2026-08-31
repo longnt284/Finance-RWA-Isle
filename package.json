@@ -11,14 +11,18 @@
     "dev": "vite",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
-    "test": "npm run typecheck && npm run test:i18n && npm run test:prices",
+    "test": "npm run typecheck && npm run test:i18n && npm run test:prices && npm run test:news && npm run test:fishing && npm run test:shop",
     "test:i18n": "node tests/i18n_keys.cjs",
     "test:prices": "node tests/price_providers.cjs",
+    "test:news": "node tests/news_feed.cjs",
+    "test:fishing": "node tests/fishing.cjs",
+    "test:shop": "node tests/shop_catalog.cjs",
     "test:feed": "node tests/feed_language.cjs",
     "test:ui": "node tests/ui_audit.cjs --out .artifacts/ui-audit",
     "test:features": "node tests/feature_shots.cjs --out .artifacts/features",
     "test:panels": "node tests/panel_shots.cjs --out .artifacts/panels",
-    "test:exam": "node tests/exam_pass.cjs --out .artifacts/panels"
+    "test:exam": "node tests/exam_pass.cjs --out .artifacts/panels",
+    "test:fish": "node tests/fishing_play.cjs"
   },
   "dependencies": {
     "react": "^18.2.0",

@@ -5,7 +5,7 @@ import {
 } from "../state/store";
 import type { DistrictId, Goal, Task, ViewId, AchTier, IslandTheme } from "../state/store";
 import { makeT } from "../lib/i18n";
-import { compactVND, fmt, fmtMoney, fmtSmart, pct, timeAgo } from "../lib/format";
+import { compactVND, fmt, fmtMoney, fmtSmart, pct, timeAgo, USD_RATE } from "../lib/format";
 import { sound } from "../lib/audio";
 import {
   IconCheck, IconClose, IconPlus, IconTarget, IconMedal, IconReset,
@@ -327,6 +327,15 @@ function VaultExtra() {
   const values = state.snapshots.map((s) => s.v);
   const prev = values.length > 1 ? values[values.length - 2] : null;
   const delta = prev !== null && nw !== null ? nw - prev : null;
+  /* Ô nhập theo đúng đơn vị đang hiển thị: gõ "12000" khi đang xem USD nghĩa là
+     12.000 đô, không phải 12.000 đồng. Kho vẫn lưu gốc VND. */
+  function submit() {
+    const amount = parseFloat(val);
+    if (!Number.isFinite(amount) || amount <= 0) return;
+    api.logNetWorth(Math.round(state.currency === "USD" ? amount * USD_RATE : amount));
+    setVal("");
+    sound.coin();
+  }
   return (
     <div className="rounded-lg border border-gold-500/20 bg-ink-850/70 p-3">
       <div className="flex items-center justify-between">
@@ -343,27 +352,17 @@ function VaultExtra() {
       <div className="mt-2 flex gap-2">
         <input
           className="field min-w-0 flex-1 rounded-md px-2.5 py-1.5 font-mono text-[12px] text-mist-100"
-          placeholder={t("ws.nwPh")}
+          placeholder={t(state.currency === "USD" ? "ws.nwPhUsd" : "ws.nwPh")}
           value={val}
-          inputMode="numeric"
-          onChange={(e) => setVal(e.target.value.replace(/[^\d]/g, ""))}
+          inputMode="decimal"
+          onChange={(e) => setVal(e.target.value.replace(/[^\d.]/g, ""))}
           onKeyDown={(e) => {
             if (e.key === "Enter" && val) {
-              api.logNetWorth(parseInt(val, 10));
-              setVal("");
-              sound.coin();
+              submit();
             }
           }}
         />
-        <button
-          className="btn-gold rounded-md px-3 py-1.5 font-display text-[10px] tracking-wider"
-          onClick={() => {
-            if (!val) return;
-            api.logNetWorth(parseInt(val, 10));
-            setVal("");
-            sound.coin();
-          }}
-        >
+        <button className="btn-gold rounded-md px-3 py-1.5 font-display text-[10px] tracking-wider" onClick={submit}>
           {t("ws.record")}
         </button>
       </div>

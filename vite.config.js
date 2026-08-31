@@ -3,12 +3,14 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import quoteHandler from "./api/quotes.js";
 import cryptoHandler from "./api/crypto.js";
+import newsHandler from "./api/news.js";
 
 /* Dựng lại các hàm serverless của production ngay trong `vite dev`, để chạy
    local cũng đi qua đúng đường dẫn mà bản deploy dùng. */
 const LOCAL_ROUTES = [
   ["/api/quotes", quoteHandler],
   ["/api/crypto", cryptoHandler],
+  ["/api/news", newsHandler],
 ];
 
 function localMarketApi() {

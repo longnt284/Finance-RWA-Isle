@@ -49,13 +49,15 @@ export function makeMats(): Mats {
     return material;
   };
   return {
-    stone: std({ color: 0xa9b9b3 }),
-    stoneDark: std({ color: 0x64787a, roughness: 0.95 }),
-    white: std({ color: 0xdde9e4, roughness: 0.8 }),
+    /* `envMapIntensity` là thứ biến khối vàng phẳng thành kim loại thật: nó lấy
+       bản đồ môi trường mà WorldScene nướng từ bầu trời để phản chiếu. */
+    stone: std({ color: 0xa9b9b3, roughness: 0.72, metalness: 0.06, envMapIntensity: 0.5 }),
+    stoneDark: std({ color: 0x64787a, roughness: 0.9, envMapIntensity: 0.35 }),
+    white: std({ color: 0xe4efe9, roughness: 0.6, metalness: 0.04, envMapIntensity: 0.7 }),
     wood: std({ color: 0x6e4b33 }),
-    roofTeal: std({ color: 0x1e5f58, roughness: 0.75 }),
-    gold: std({ color: 0xe0aa50, metalness: 0.85, roughness: 0.3 }),
-    goldBright: std({ color: 0xffd88a, metalness: 0.9, roughness: 0.22 }),
+    roofTeal: std({ color: 0x1e5f58, roughness: 0.55, metalness: 0.12, envMapIntensity: 0.8 }),
+    gold: std({ color: 0xe0aa50, metalness: 0.95, roughness: 0.22, envMapIntensity: 1.5 }),
+    goldBright: std({ color: 0xffd88a, metalness: 1.0, roughness: 0.14, envMapIntensity: 1.9 }),
     glowWarm: std({ color: 0x2a1c0a, emissive: 0xffc069, emissiveIntensity: 1.7, roughness: 0.4 }),
     glowCyan: std({ color: 0x06231f, emissive: 0x5ce8c4, emissiveIntensity: 1.9, roughness: 0.35 }),
     glowBlue: std({ color: 0x0a1a2a, emissive: 0x9fd0ff, emissiveIntensity: 1.6, roughness: 0.35 }),
@@ -657,13 +659,54 @@ export function buildAcademy(level: number, m: Mats, ticks: TickFn[]): THREE.Gro
 
 export function buildLighthouse(m: Mats, ticks: TickFn[]): THREE.Group {
   const g = new THREE.Group();
-  const plaza = cyl(5.6, 6.1, 0.45, 6, m.stoneDark);
-  plaza.position.y = 0.22;
+  /* Quảng trường tròn nhiều bậc, có lan can và nan hoa lát đá — ảnh tham chiếu
+     dựng hải đăng giữa một sân hình tròn chứ không phải trên một cái đế lục giác. */
+  const apron = cyl(9.4, 9.8, 0.3, 48, m.stoneDark);
+  apron.position.y = 0.08;
+  apron.receiveShadow = true;
+  g.add(apron);
+  const terrace = cyl(7.2, 7.6, 0.34, 48, m.stone);
+  terrace.position.y = 0.32;
+  terrace.receiveShadow = true;
+  g.add(terrace);
+  const plaza = cyl(5.6, 6.0, 0.36, 48, m.stoneDark);
+  plaza.position.y = 0.5;
   plaza.receiveShadow = true;
   g.add(plaza);
-  const inner = cyl(3.4, 3.7, 0.2, 6, m.stone);
-  inner.position.y = 0.5;
+  const inner = cyl(3.4, 3.7, 0.24, 48, m.stone);
+  inner.position.y = 0.72;
+  inner.receiveShadow = true;
   g.add(inner);
+
+  /* nan hoa lát đá sáng màu toả ra tám hướng */
+  for (let i = 0; i < 8; i++) {
+    const angle = (i / 8) * Math.PI * 2;
+    const spoke = box(0.9, 0.05, 3.6, m.white);
+    spoke.position.set(Math.cos(angle) * 7.6, 0.5, Math.sin(angle) * 7.6);
+    spoke.rotation.y = -angle;
+    spoke.receiveShadow = true;
+    g.add(spoke);
+  }
+  /* lan can quanh bậc ngoài, cứ vài trụ lại có một chậu lửa */
+  for (let i = 0; i < 24; i++) {
+    const angle = (i / 24) * Math.PI * 2;
+    const post = cyl(0.09, 0.12, 0.62, 6, m.white);
+    post.position.set(Math.cos(angle) * 9.1, 0.5, Math.sin(angle) * 9.1);
+    post.castShadow = true;
+    g.add(post);
+    if (i % 6 === 0) {
+      const bowl = cyl(0.26, 0.14, 0.24, 10, m.gold);
+      bowl.position.set(Math.cos(angle) * 9.1, 0.92, Math.sin(angle) * 9.1);
+      g.add(bowl);
+      const ember = new THREE.Mesh(new THREE.SphereGeometry(0.14, 8, 6), m.glowWarm);
+      ember.position.set(Math.cos(angle) * 9.1, 1.06, Math.sin(angle) * 9.1);
+      g.add(ember);
+    }
+  }
+  const rail = new THREE.Mesh(new THREE.TorusGeometry(9.1, 0.05, 6, 72), m.white);
+  rail.rotation.x = Math.PI / 2;
+  rail.position.y = 0.82;
+  g.add(rail);
 
   const segs: [number, number, number, THREE.Material][] = [
     [1.5, 1.25, 2.2, m.white],
@@ -758,8 +801,10 @@ export function buildTerrain(palette: TerrainPalette): THREE.Mesh {
   const colors: number[] = [];
   const grassA = new THREE.Color(palette.foliage);
   const grassB = new THREE.Color(palette.foliageAlt);
-  const sandDry = new THREE.Color(0xd8c391);
-  const sandWet = new THREE.Color(0xb8a677);
+  /* Cát sáng hơn hẳn bản trước: dưới ACES tone mapping, 0xd8c391 ra màu bùn chứ
+     không ra bãi biển. */
+  const sandDry = new THREE.Color(0xefdcae);
+  const sandWet = new THREE.Color(0xd2bd8c);
   const snowCap = new THREE.Color(0xeaf2f5);
   const cliffTop = new THREE.Color(0x4d6063);
   const cliffBot = new THREE.Color(0x2c3f43);
@@ -781,7 +826,9 @@ export function buildTerrain(palette: TerrainPalette): THREE.Mesh {
         Math.sin(x * 0.28) * Math.cos(z * 0.31) * 0.5 +
         Math.sin(x * 0.11 + 2.1) * Math.sin(z * 0.13 + 1.3) * 0.7 +
         Math.cos(x * 0.45 - z * 0.37) * 0.25;
-      let flat = THREE.MathUtils.smoothstep(r, 4.5, 8.5);
+      /* Quảng trường hải đăng rộng 9,8 nên vùng phẳng phải trùm hết chỗ đó, nếu
+         không những gợn đất sẽ chọc lên xuyên qua mặt sân. */
+      let flat = THREE.MathUtils.smoothstep(r, 8.5, 12.5);
       for (const a of anchors) {
         const d = Math.sqrt((x - a.x) ** 2 + (z - a.z) ** 2);
         flat *= THREE.MathUtils.smoothstep(d, 3.6, 6.4);
@@ -1026,9 +1073,23 @@ const ISLE_PALETTES: Record<IslandTheme, { rock: number; top: number; rim: numbe
   violet: { rock: 0x393452, top: 0x65568d, rim: 0xc6a8ff, pad: 0x403c5c, glow: 0xb79cff },
 };
 
-function isleTerrain(theme: IslandTheme): THREE.Group {
+/** Sắc nền mua ở Chợ, ghi đè bảng màu chủ đề của hòn đảo. */
+export interface IslePaletteOverride {
+  top: number;
+  rim: number;
+  rock: number;
+  glow: number;
+}
+
+function paletteFor(theme: IslandTheme, override?: IslePaletteOverride | null) {
+  const base = ISLE_PALETTES[theme];
+  if (!override) return base;
+  return { ...base, top: override.top, rim: override.rim, rock: override.rock, glow: override.glow };
+}
+
+function isleTerrain(theme: IslandTheme, override?: IslePaletteOverride | null): THREE.Group {
   const g = new THREE.Group();
-  const palette = ISLE_PALETTES[theme];
+  const palette = paletteFor(theme, override);
   const rock = new THREE.Mesh(
     new THREE.CylinderGeometry(ISLE_RADIUS, ISLE_RADIUS - 2.2, 4.6, 48, 3),
     new THREE.MeshStandardMaterial({ color: palette.rock, roughness: 0.94, metalness: 0.03 })
@@ -1264,9 +1325,10 @@ export function buildIsle(
   level: number,
   ticks: TickFn[],
   district: IslandKind = "crypto",
-  theme: IslandTheme = "emerald"
+  theme: IslandTheme = "emerald",
+  ground?: IslePaletteOverride | null
 ): THREE.Group {
-  const g = isleTerrain(theme);
+  const g = isleTerrain(theme, ground);
   const first = district === "stocks" ? exchangeMonolith(m, ticks) : district === "vault" ? whaleStatue(m, ticks) : district === "academy" ? obelisk(m, ticks) : miningRig(m, ticks);
   first.position.set(-2.4, 0.4, -1.6);
   first.rotation.y = 0.5;
@@ -1293,7 +1355,7 @@ export function buildIsle(
     holo.position.set(0, 1.1, 0);
     g.add(holo);
   }
-  const palette = ISLE_PALETTES[theme];
+  const palette = paletteFor(theme, ground);
   const beamMat = new THREE.MeshBasicMaterial({ color: palette.glow, transparent: true, opacity: 0.05, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending });
   const beam = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 0.4, 16, 10, 1, true), beamMat);
   beam.position.y = 8.4;
