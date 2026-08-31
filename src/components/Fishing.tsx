@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import gsap from "gsap";
 import { useStore, basketValue } from "../state/store";
 import { makeT } from "../lib/i18n";
 import { fmt } from "../lib/format";
@@ -9,6 +10,7 @@ import {
   biteDelay, fishName, fishValue, fishingConfig, nextFishTarget, rodProgress, rollFish, rollWeight,
 } from "../lib/fishing";
 import type { FishDef } from "../lib/fishing";
+import FishArt from "./FishArt";
 import { IconClose, IconFish, IconCoinPurse, IconCheck } from "./icons";
 
 export type FishingZone = "shore" | "vortex";
@@ -59,6 +61,7 @@ function Rod({ zone, onLanded }: { zone: FishingZone; onLanded: (fish: FishDef, 
   const barRef = useRef<HTMLDivElement>(null);
   const fishRef = useRef<HTMLDivElement>(null);
   const gaugeRef = useRef<HTMLDivElement>(null);
+  const portraitRef = useRef<HTMLDivElement>(null);
   const holding = useRef(false);
 
   const rod = rodProgress(state.fishCaught);
@@ -191,6 +194,24 @@ function Rod({ zone, onLanded }: { zone: FishingZone; onLanded: (fish: FishDef, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, hooked, paint, onLanded]);
 
+  /* Con cá vừa lên bờ nảy một cái rồi mới đứng yên.
+     Đây là chỗ duy nhất trong bảng câu cá đáng dùng tới đường cong đàn hồi:
+     nó biến một tấm ảnh xuất hiện đột ngột thành khoảnh khắc "được rồi!". */
+  useEffect(() => {
+    const el = portraitRef.current;
+    if (phase !== "caught" || !el) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const tween = gsap.fromTo(
+      el,
+      { xPercent: -22, rotate: -13, scale: 0.8, opacity: 0 },
+      { xPercent: 0, rotate: 0, scale: 1, opacity: 1, duration: 0.78, ease: "elastic.out(1, 0.62)" }
+    );
+    return () => {
+      tween.kill();
+      gsap.set(el, { clearProps: "all" });
+    };
+  }, [phase, result]);
+
   /* Phím cách điều khiển khung — chuột không phải lựa chọn duy nhất. */
   useEffect(() => {
     const down = (event: KeyboardEvent) => {
@@ -250,14 +271,19 @@ function Rod({ zone, onLanded }: { zone: FishingZone; onLanded: (fish: FishDef, 
             className="absolute inset-x-1 rounded-md border border-jade-400/60 bg-jade-500/25"
             style={{ height: "24%", bottom: "36%", boxShadow: "0 0 14px rgba(76,217,154,0.25) inset" }}
           />
-          {/* Cá tô đúng màu độ hiếm: nhìn một cái là biết đang vật lộn với con gì. */}
+          {/* Con cá trong khung là chính con đang cắn câu, không phải một biểu
+              tượng chung: nhìn dáng và màu là biết đang vật lộn với loài gì. */}
           <div
             ref={fishRef}
             data-rod-fish=""
             className="absolute left-1/2 -translate-x-1/2"
             style={{ bottom: "50%", color: hooked ? RARITY_META[hooked.rarity].color : "#8ba4a7" }}
           >
-            <IconFish className="h-[22px] w-[22px]" />
+            {hooked ? (
+              <FishArt fish={hooked} halo={false} className="h-[26px] w-[44px] -scale-x-100 drop-shadow-[0_0_6px_rgba(0,0,0,0.45)]" />
+            ) : (
+              <IconFish className="h-[22px] w-[22px]" />
+            )}
           </div>
           {/* Cột chỉ rộng 80px nên chữ nhét vào đây sẽ vỡ dòng; trạng thái đã có
               chỗ đọc tử tế ở cột bên phải, đây chỉ cần một dấu hiệu thị giác. */}
@@ -292,6 +318,9 @@ function Rod({ zone, onLanded }: { zone: FishingZone; onLanded: (fish: FishDef, 
           ) : result && phase === "caught" ? (
             <div className="anim-pop">
               {result.fresh && <div className="font-display text-[9px] tracking-[0.2em] text-jade-300">{t("fs.newSpecies")}</div>}
+              <div ref={portraitRef} className="mt-1 origin-left">
+                <FishArt fish={result.fish} className="h-[52px] w-full" />
+              </div>
               <div className="mt-0.5 text-[14px] font-semibold text-mist-100">{fishName(result.fish, state.lang)}</div>
               <div className="mt-1 flex flex-wrap items-center gap-1.5">
                 {rarityChip(result.fish.rarity, t(`fs.rarity.${result.fish.rarity}`))}
@@ -367,6 +396,7 @@ function Basket() {
         if (!fish) return null;
         return (
           <div key={id} className="flex items-center gap-2.5 rounded-lg border hairline-gold bg-ink-850/55 px-3 py-2.5">
+            <FishArt fish={fish} halo={false} className="h-8 w-12 shrink-0" />
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
                 <span className="truncate text-[12.5px] font-medium text-mist-100">{fishName(fish, state.lang)}</span>
@@ -429,6 +459,9 @@ function Collection() {
               className={`rounded-lg border p-2.5 transition-all ${record ? "bg-ink-850/70" : "border-mist-500/12 bg-ink-850/30 opacity-55"}`}
               style={record ? { borderColor: `${color}55` } : undefined}
             >
+              {/* Ô chưa mở khoá vẫn giữ đúng dáng thân, chỉ tô đen: người chơi
+                  thấy được mình còn thiếu một con cá hình gì. */}
+              <FishArt fish={fish} unknown={!record} className="mb-1 h-12 w-full" />
               <div className="flex items-start justify-between gap-1.5">
                 <span className={`text-[11.5px] font-medium ${record ? "text-mist-100" : "text-mist-500"}`}>
                   {record ? fishName(fish, state.lang) : "???"}

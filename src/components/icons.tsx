@@ -379,3 +379,18 @@ export const IconCoinPurse = ({ className }: P) => (
     <path d="M12 11v5m-1.7-3.8h2.6a1.3 1.3 0 0 1 0 2.6h-1.8a1.3 1.3 0 0 0 0 2.6h2.6" />
   </svg>
 );
+
+export const IconCamera = ({ className }: P) => (
+  <svg {...base(className)}>
+    <path d="M3 8.5A2.5 2.5 0 0 1 5.5 6h1.7l1.1-1.8A1 1 0 0 1 9.2 3.7h5.6a1 1 0 0 1 .9.5L16.8 6h1.7A2.5 2.5 0 0 1 21 8.5v8A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z" />
+    <circle cx="12" cy="12.4" r="3.4" />
+  </svg>
+);
+
+export const IconEyeOff = ({ className }: P) => (
+  <svg {...base(className)}>
+    <path d="M3 3l18 18" />
+    <path d="M10.6 6.3A9.3 9.3 0 0 1 12 6.2c5 0 9 5.8 9 5.8a17 17 0 0 1-2.9 3.4M6.5 7.9A16.6 16.6 0 0 0 3 12s4 5.8 9 5.8a8.7 8.7 0 0 0 3.6-.8" />
+    <path d="M9.9 10a3 3 0 0 0 4.2 4.2" />
+  </svg>
+);

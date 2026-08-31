@@ -1,13 +1,15 @@
-import { useEffect, useState } from "react";
-import { useStore, DISTRICT_IDS } from "../state/store";
+import { useEffect, useRef, useState } from "react";
+import gsap from "gsap";
+import { useStore, DISTRICT_IDS, cityLevel, netWorth, totalLevels } from "../state/store";
 import type { DistrictId } from "../state/store";
 import { makeT } from "../lib/i18n";
 import { useMarket, market, ASSET_BY_ID } from "../lib/market";
-import { fmtPrice } from "../lib/format";
+import { fmtPrice, fmtMoney } from "../lib/format";
 import { sound } from "../lib/audio";
+import type { GoldenKind } from "../lib/season";
 import {
   IconBitcoin, IconChart, IconVault, IconBook, IconArrowR, IconClose,
-  IconTrendUp, IconTrendDown, IconIsland, IconCompass,
+  IconTrendUp, IconTrendDown, IconIsland, IconCompass, IconCamera, IconSun,
 } from "./icons";
 
 const FOCUS_ICONS: Record<DistrictId, (p: { className?: string }) => React.ReactElement> = {
@@ -64,9 +66,29 @@ function HeroTicker() {
   );
 }
 
-export function Hero({ onBegin }: { onBegin: () => void }) {
+/**
+ * Màn mở đầu.
+ *
+ * `returning` là người chơi đã có bản lưu — kể cả bản lưu vừa kéo từ đám mây
+ * xuống trên một máy lạ. Họ vẫn được thấy trang bìa, chỉ khác nội dung: thay
+ * vì mời khai mở một hòn đảo mới, nó chào tên hòn đảo họ đã dựng và ba con số
+ * nói rằng nó vẫn còn nguyên ở đó.
+ */
+export function Hero({ onBegin, returning = false }: { onBegin: () => void; returning?: boolean }) {
   const { state, api } = useStore();
   const t = makeT(state.lang);
+  const worth = netWorth(state);
+  const stats: [string, string][] = returning
+    ? [
+        [String(cityLevel(state)), t("hero.r1k")],
+        [String(totalLevels(state)), t("hero.r2k")],
+        [worth === null ? "—" : fmtMoney(worth, state.currency), t("hero.r3k")],
+      ]
+    : [
+        [t("hero.s1v"), t("hero.s1k")],
+        [t("hero.s2v"), t("hero.s2k")],
+        [t("hero.s3v"), t("hero.s3k")],
+      ];
   return (
     <div className="absolute inset-0 z-40 overflow-hidden">
       {/* veils */}
@@ -132,15 +154,28 @@ export function Hero({ onBegin }: { onBegin: () => void }) {
           <div className="anim-fade-up max-w-3xl" style={{ animationDelay: "0.1s" }}>
             <div className="mb-5 flex items-center gap-3">
               <span className="h-px w-10 bg-gold-500" />
-              <span className="font-mono text-[11px] uppercase tracking-[0.3em] text-gold-400">{t("hero.kicker")}</span>
+              <span className="font-mono text-[11px] uppercase tracking-[0.3em] text-gold-400">
+                {returning ? t("hero.rKicker") : t("hero.kicker")}
+              </span>
             </div>
           </div>
           <h1 className="anim-fade-up font-display leading-[0.95]" style={{ animationDelay: "0.25s" }}>
-            <span className="block text-[13vw] font-bold tracking-tight text-mist-100 sm:text-[7.5vw] lg:text-[6.2rem]">{t("hero.t1")}</span>
-            <span className="text-outline block text-[13vw] font-bold tracking-tight sm:text-[7.5vw] lg:text-[6.2rem]">{t("hero.t2")}</span>
+            {returning ? (
+              <>
+                <span className="block text-[11vw] font-bold tracking-tight text-mist-100 sm:text-[6vw] lg:text-[4.6rem]">{t("hero.rTitle")}</span>
+                <span className="text-outline block break-words text-[11vw] font-bold tracking-tight sm:text-[6vw] lg:text-[4.6rem]">
+                  {state.city || t("brand.main")}
+                </span>
+              </>
+            ) : (
+              <>
+                <span className="block text-[13vw] font-bold tracking-tight text-mist-100 sm:text-[7.5vw] lg:text-[6.2rem]">{t("hero.t1")}</span>
+                <span className="text-outline block text-[13vw] font-bold tracking-tight sm:text-[7.5vw] lg:text-[6.2rem]">{t("hero.t2")}</span>
+              </>
+            )}
           </h1>
           <p className="anim-fade-up mt-6 max-w-xl text-[14px] leading-relaxed text-mist-300 sm:text-[15px]" style={{ animationDelay: "0.4s" }}>
-            {t("hero.sub")}
+            {returning ? t("hero.rSub") : t("hero.sub")}
           </p>
           <div className="anim-fade-up mt-8 flex flex-wrap items-center gap-3" style={{ animationDelay: "0.55s" }}>
             <button
@@ -151,26 +186,24 @@ export function Hero({ onBegin }: { onBegin: () => void }) {
               className="btn-gold flex items-center gap-2.5 rounded-xl px-6 py-3.5 font-display text-[12px] tracking-[0.14em]"
             >
               <IconCompass className="h-4.5 w-4.5 h-[18px] w-[18px]" />
-              {t("hero.begin")}
+              {returning ? t("hero.rBegin") : t("hero.begin")}
               <IconArrowR className="h-4 w-4" />
             </button>
-            <button
-              onClick={() => {
-                sound.coin();
-                api.completeOnboarding("", "crypto", true);
-              }}
-              className="btn-ghost rounded-xl px-6 py-3.5 font-display text-[12px] tracking-[0.14em]"
-            >
-              {t("hero.demo")}
-            </button>
+            {!returning && (
+              <button
+                onClick={() => {
+                  sound.coin();
+                  api.completeOnboarding("", "crypto", true);
+                }}
+                className="btn-ghost rounded-xl px-6 py-3.5 font-display text-[12px] tracking-[0.14em]"
+              >
+                {t("hero.demo")}
+              </button>
+            )}
           </div>
           {/* inline stats */}
           <div className="anim-fade-up mt-10 flex items-center gap-6" style={{ animationDelay: "0.7s" }}>
-            {([
-              [t("hero.s1v"), t("hero.s1k")],
-              [t("hero.s2v"), t("hero.s2k")],
-              [t("hero.s3v"), t("hero.s3k")],
-            ] as [string, string][]).map(([v, k], i) => (
+            {stats.map(([v, k], i) => (
               <div key={k} className="flex items-center gap-6">
                 {i > 0 && <span className="h-8 w-px rotate-12 bg-gold-500/40" />}
                 <div>
@@ -188,7 +221,9 @@ export function Hero({ onBegin }: { onBegin: () => void }) {
         <p className="anim-floaty max-w-xs text-[11.5px] italic leading-relaxed text-mist-500">{t("hero.quote")}</p>
       </div>
       <div className="absolute bottom-14 left-1/2 z-10 hidden -translate-x-1/2 md:block">
-        <span className="font-mono text-[9.5px] uppercase tracking-[0.22em] text-mist-500/80">{t("hero.hint")}</span>
+        <span className="font-mono text-[9.5px] uppercase tracking-[0.22em] text-mist-500/80">
+          {returning ? t("hero.rHint") : t("hero.hint")}
+        </span>
       </div>
 
       <HeroTicker />
@@ -343,6 +378,67 @@ export function TutorialOverlay({ open, onClose }: { open: boolean; onClose: () 
             )}
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/* ========================= KHOẢNH KHẮC VÀNG =========================
+   Thời gian trong trò vẫn trôi đều, nhưng hai lát cắt trong ngày thì khung
+   hình đẹp hẳn lên. Hệ thống biết chính xác lúc nào chúng tới, nên thay vì
+   để người chơi tình cờ bắt gặp, nó lên tiếng mời ở lại — và đưa sẵn cái nút
+   duy nhất đáng bấm lúc đó. Thẻ tự rút lui sau ba mươi giây: một lời mời
+   không được đáp lại thì phải biết im lặng, chứ không nằm che khung hình. */
+
+export function GoldenHourCard({ kind, onPhoto, onDismiss }: { kind: GoldenKind; onPhoto: () => void; onDismiss: () => void }) {
+  const { state } = useStore();
+  const t = makeT(state.lang);
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const timer = window.setTimeout(onDismiss, 30_000);
+    return () => window.clearTimeout(timer);
+  }, [onDismiss]);
+
+  useEffect(() => {
+    const el = cardRef.current;
+    if (!el || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const tween = gsap.fromTo(
+      el,
+      { y: 26, opacity: 0, scale: 0.96 },
+      { y: 0, opacity: 1, scale: 1, duration: 0.7, ease: "power3.out" }
+    );
+    return () => {
+      tween.kill();
+      gsap.set(el, { clearProps: "all" });
+    };
+  }, []);
+
+  return (
+    <div
+      ref={cardRef}
+      className="panel pointer-events-auto absolute bottom-20 left-1/2 z-40 flex w-[min(420px,calc(100vw-2rem))] -translate-x-1/2 flex-col gap-2.5 rounded-2xl border-gold-500/45 px-5 py-4"
+    >
+      <div className="flex items-center gap-2.5">
+        <span className="text-gold-400"><IconSun className="h-4 w-4" /></span>
+        <span className="font-display text-[9px] uppercase tracking-[0.26em] text-gold-400">{t("gh.kicker")}</span>
+      </div>
+      <div className="font-display text-[15px] font-semibold text-mist-100">{t(`gh.${kind}.t`)}</div>
+      <p className="text-[11.5px] leading-relaxed text-mist-400">{t(`gh.${kind}.b`)}</p>
+      <div className="mt-1 flex items-center justify-end gap-2">
+        <button onClick={onDismiss} className="btn-ghost rounded-lg px-3.5 py-2 font-display text-[10px] tracking-wider">
+          {t("gh.later")}
+        </button>
+        <button
+          onClick={() => {
+            sound.chime();
+            onPhoto();
+          }}
+          className="btn-gold flex items-center gap-2 rounded-lg px-4 py-2 font-display text-[10px] tracking-[0.14em]"
+        >
+          <IconCamera className="h-3.5 w-3.5" />
+          {t("gh.stay")}
+        </button>
       </div>
     </div>
   );

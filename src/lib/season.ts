@@ -20,6 +20,37 @@ export function seasonForDate(date: Date): Season {
   return "winter";
 }
 
+/**
+ * Độ cao mặt trời quy ước, −1 (nửa đêm) → 1 (chính ngọ).
+ *
+ * Đây đúng là công thức `atmosphere.ts` dùng để đặt mặt trời lên vòm trời. Nó
+ * được chép lại ở đây — một dòng — để lớp giao diện biết lúc nào mặt trời chạm
+ * mặt biển mà không phải kéo cả Three.js vào bundle.
+ */
+export function solarAltitude(hour: number): number {
+  return Math.sin(((hour - 6) / 12) * Math.PI);
+}
+
+/** Khoảnh khắc vàng: mặt trời sát đường chân trời, tính cả hai đầu ngày. */
+export type GoldenKind = "sunrise" | "sunset";
+
+/**
+ * `null` khi mặt trời còn cao hoặc đã lặn hẳn. Ngưỡng 0,105 tương ứng khoảng
+ * hai mươi phút quanh lúc chạm biển — đủ dài để kịp mời người chơi ở lại, đủ
+ * ngắn để lời mời vẫn là một sự kiện chứ không phải thông báo hằng giờ.
+ */
+export function goldenPhase(date: Date): GoldenKind | null {
+  const hour = date.getHours() + date.getMinutes() / 60;
+  const solar = solarAltitude(hour);
+  if (Math.abs(solar) > 0.105) return null;
+  return hour < 12 ? "sunrise" : "sunset";
+}
+
+/** Thời tiết có đủ quang để khoảnh khắc vàng thật sự đẹp hay không. */
+export function goldenWeatherOk(weather: WeatherId): boolean {
+  return weather === "clear" || weather === "petals" || weather === "leaves" || weather === "fireflies";
+}
+
 export function phaseForHour(hour: number): DayPhase {
   if (hour < 5) return "night";
   if (hour < 7.5) return "dawn";
