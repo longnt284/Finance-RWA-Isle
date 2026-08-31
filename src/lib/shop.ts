@@ -164,7 +164,8 @@ export const SHOP_ITEMS: ShopItem[] = [
   p("fx_aurajade", "Hào quang ngọc", "Jade Aura", "fx", 380, "aura", 0x5ce8c4),
   p("fx_auraviolet", "Hào quang tím", "Violet Aura", "fx", 380, "aura", 0xb79cff),
   p("fx_petals", "Mưa cánh hoa", "Petal Fall", "fx", 420, "petalfall", 0xffb7cd),
-  p("fx_bubbles", "Bong bóng biển", "Sea Bubbles", "fx", 340, "bubbles", 0x9ff0e2),
+  /* Món rẻ nhất của nhóm hiệu ứng — mỗi nhóm cần một cửa vào cho người chơi mới. */
+  p("fx_bubbles", "Bong bóng biển", "Sea Bubbles", "fx", 240, "bubbles", 0x9ff0e2),
   p("fx_sparks", "Đom đóm sao", "Star Sparks", "fx", 460, "sparks", 0xffe6a8),
 ];
 

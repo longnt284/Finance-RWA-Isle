@@ -25,11 +25,19 @@ Kiểm thử không cần trình duyệt (chạy được ở mọi môi trườ
 các nguồn giá):
 
 ```bash
-npm test                # typecheck + i18n + chuỗi nguồn giá + bảng tin
+npm test                # typecheck + i18n + giá + bảng tin + câu cá + Chợ
 npm run test:i18n       # mọi khoá i18n mà mã nguồn yêu cầu đều có đủ vi lẫn en
 npm run test:prices     # thứ tự xoay vòng nguồn giá, có stub fetch
 npm run test:news       # bóc tách RSS, khử trùng lặp, chịu được nguồn 403
+npm run test:fishing    # điều kiện xuất hiện, giá theo cân nặng, bậc cần câu
+npm run test:shop       # 100 hạng mục và mọi `kind` đều dựng được hình
 ```
+
+`test:fishing` và `test:shop` biên dịch `src/lib/*.ts` tại chỗ nên kiểm đúng bộ
+luật ứng dụng dùng. `test:shop` còn đối chiếu mọi `kind` trong danh mục với các
+nhánh `case` trong `world/props.ts`: thêm hạng mục mà quên viết bộ dựng thì món
+đó vẫn mua và "đặt lên đảo" được nhưng không hiện ra gì — lỗi im lặng khó thấy
+nhất trong cả tính năng này.
 
 Smoke test WebGL/UI (chạy `npm run dev` ở terminal khác trước):
 
@@ -84,7 +92,7 @@ seed mà ứng dụng dùng, nên nó bấm trúng chứ không đoán.
 - Cơ chế giống Stardew Valley: giữ chuột hoặc **phím cách** để nâng khung, thả
   ra thì khung rơi. Khung trùm lên cá thì thanh tiến trình nạp, ra ngoài thì tụt.
   Đầy là bắt được, cạn là cá thoát.
-- **34 loài** chia năm bậc hiếm. Cá hiếm giật mạnh hơn (`difficulty` cao → khung
+- **35 loài** chia năm bậc hiếm. Cá hiếm giật mạnh hơn (`difficulty` cao → khung
   hẹp, tiến trình tụt nhanh) và chỉ xuất hiện đúng vùng nước, đúng mùa, đúng
   ngày hoặc đêm của nó. Xoáy nước có `luck` 0,8 so với 0,12 ở bến câu, nên cá
   huyền thoại gần như chỉ gặp ngoài khơi.
@@ -279,4 +287,7 @@ ghi đè ngầm là cách nhanh nhất để người dùng mất tiến độ.
 - `tests/feature_shots.cjs` — bộ ảnh kiểm chứng tính năng.
 - `tests/i18n_keys.cjs` — đối chiếu mọi khoá i18n mã nguồn yêu cầu với hai từ điển.
 - `tests/price_providers.cjs` — chuỗi xoay vòng nguồn giá, chạy offline.
+- `tests/news_feed.cjs` — bóc tách RSS và khử trùng lặp, chạy offline.
+- `tests/fishing.cjs` — luật câu cá, chạy offline trên chính `lib/fishing.ts`.
+- `tests/shop_catalog.cjs` — danh mục Chợ và đối chiếu `kind` với `props.ts`.
 - `tests/feed_language.cjs` — bảng Hoạt động đổi ngôn ngữ ở cả hai chiều.
