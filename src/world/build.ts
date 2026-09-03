@@ -51,16 +51,15 @@ export function makeMats(): Mats {
     material.userData.shared = true;
     return material;
   };
+  const physical = (p: THREE.MeshPhysicalMaterialParameters) => {
+    const material = new THREE.MeshPhysicalMaterial({ roughness: 0.5, metalness: 0.1, ...p });
+    material.userData.shared = true;
+    return material;
+  };
   /**
-   * Vân bề mặt gắn kèm ngay lúc dựng vật liệu. `normalScale` cố ý nhỏ: mục
-   * tiêu là ánh sáng gợn theo mặt chứ không phải mặt bị rỗ.
-   *
-   * Về số lần lặp: vật liệu ở đây dùng chung cho cả khối lớn lẫn khối bé, mà
-   * UV của mọi hình dựng sẵn đều chạy 0..1 bất kể vật thể to hay nhỏ. Nghĩa là
-   * một con số lặp duy nhất sẽ ra vân mịn trên khối bé và vân khổng lồ trên
-   * khối lớn. Khi buộc phải chọn một phía, luôn chọn phía **lặp dày**: vân quá
-   * mịn thì cùng lắm là không nhìn thấy, còn vân quá to thì biến sân đá thành
-   * mặt sóng bê tông — đúng lỗi mà bản thử đầu tiên mắc phải.
+   * Vân bề mặt gắn kèm ngay lúc dựng vật liệu. Bản photoreal dùng tấm 512px,
+   * anisotropy 16, repeat dày hơn để vân mịn ở cả tầm gần — ánh sáng có hạt
+   * thay vì mảng phẳng.
    */
   const dressed = (
     p: THREE.MeshStandardMaterialParameters,
@@ -71,27 +70,56 @@ export function makeMats(): Mats {
     const maps = surface(kind, repeat);
     const material = std({ ...p, normalMap: maps.normalMap, roughnessMap: maps.roughnessMap });
     material.normalScale.set(normalScale, normalScale);
+    if (material.normalMap) material.normalMap.anisotropy = 16;
     return material;
   };
+  const dressedPhysical = (
+    p: THREE.MeshPhysicalMaterialParameters,
+    kind: Parameters<typeof surface>[0],
+    repeat: number,
+    normalScale: number
+  ) => {
+    const maps = surface(kind, repeat);
+    const material = physical({ ...p, normalMap: maps.normalMap, roughnessMap: maps.roughnessMap });
+    material.normalScale.set(normalScale, normalScale);
+    if (material.normalMap) material.normalMap.anisotropy = 16;
+    return material;
+  };
+  /* Vàng dùng MeshPhysicalMaterial + clearcoat: lớp phủ trong như mạ thật,
+     highlight sắc và có chiều sâu thay vì mảng kim loại phẳng. */
+  const gold = dressedPhysical(
+    { color: 0xdfa24e, metalness: 1.0, roughness: 0.24, envMapIntensity: 1.9, clearcoat: 0.55, clearcoatRoughness: 0.28 },
+    "metal", 8, 0.16
+  );
+  const goldBright = dressedPhysical(
+    { color: 0xffd88a, metalness: 1.0, roughness: 0.15, envMapIntensity: 2.4, clearcoat: 0.7, clearcoatRoughness: 0.18 },
+    "metal", 8, 0.12
+  );
+  const roofTeal = dressedPhysical(
+    { color: 0x1c5a54, roughness: 0.42, metalness: 0.35, envMapIntensity: 1.2, clearcoat: 0.5, clearcoatRoughness: 0.32 },
+    "metal", 10, 0.22
+  );
+  const white = dressedPhysical(
+    { color: 0xe8f2ec, roughness: 0.48, metalness: 0.02, envMapIntensity: 0.9, clearcoat: 0.25, clearcoatRoughness: 0.5, sheen: 0.3, sheenRoughness: 0.7, sheenColor: new THREE.Color(0xfff6e0) },
+    "plaster", 12, 0.22
+  );
   return {
-    /* `envMapIntensity` là thứ biến khối vàng phẳng thành kim loại thật: nó lấy
-       bản đồ môi trường mà WorldScene nướng từ bầu trời để phản chiếu. */
-    stone: dressed({ color: 0xa9b9b3, roughness: 0.72, metalness: 0.06, envMapIntensity: 0.5 }, "stone", 12, 0.32),
-    stoneDark: dressed({ color: 0x64787a, roughness: 0.9, envMapIntensity: 0.35 }, "stone", 12, 0.36),
-    white: dressed({ color: 0xe4efe9, roughness: 0.6, metalness: 0.04, envMapIntensity: 0.7 }, "plaster", 10, 0.28),
-    wood: dressed({ color: 0x6e4b33, roughness: 0.82 }, "wood", 6, 0.45),
-    roofTeal: dressed({ color: 0x1e5f58, roughness: 0.55, metalness: 0.12, envMapIntensity: 0.8 }, "metal", 8, 0.26),
-    gold: dressed({ color: 0xe0aa50, metalness: 0.95, roughness: 0.22, envMapIntensity: 1.5 }, "metal", 6, 0.18),
-    goldBright: dressed({ color: 0xffd88a, metalness: 1.0, roughness: 0.14, envMapIntensity: 1.9 }, "metal", 6, 0.14),
-    glowWarm: std({ color: 0x2a1c0a, emissive: 0xffc069, emissiveIntensity: 1.7, roughness: 0.4 }),
-    glowCyan: std({ color: 0x06231f, emissive: 0x5ce8c4, emissiveIntensity: 1.9, roughness: 0.35 }),
-    glowBlue: std({ color: 0x0a1a2a, emissive: 0x9fd0ff, emissiveIntensity: 1.6, roughness: 0.35 }),
-    leaves1: dressed({ color: 0x2e7d5f, roughness: 0.86 }, "foliage", 3, 0.35),
-    leaves2: dressed({ color: 0x3f9c70, roughness: 0.86 }, "foliage", 3, 0.35),
-    rock: dressed({ color: 0x47595d, roughness: 1 }, "stone", 4, 0.7),
-    scaffold: dressed({ color: 0x8a6a44, roughness: 1 }, "wood", 6, 0.45),
-    barUp: std({ color: 0x0f3d2e, emissive: 0x4cd99a, emissiveIntensity: 1.1 }),
-    barDown: std({ color: 0x3d150f, emissive: 0xff7f6e, emissiveIntensity: 1.0 }),
+    stone: dressed({ color: 0xa7b8b2, roughness: 0.68, metalness: 0.07, envMapIntensity: 0.65 }, "stone", 16, 0.30),
+    stoneDark: dressed({ color: 0x5f7477, roughness: 0.86, envMapIntensity: 0.45 }, "stone", 16, 0.34),
+    white,
+    wood: dressed({ color: 0x6e4b33, roughness: 0.74, envMapIntensity: 0.5 }, "wood", 8, 0.42),
+    roofTeal,
+    gold,
+    goldBright,
+    glowWarm: std({ color: 0x2a1c0a, emissive: 0xffc069, emissiveIntensity: 2.1, roughness: 0.4 }),
+    glowCyan: std({ color: 0x06231f, emissive: 0x5ce8c4, emissiveIntensity: 2.3, roughness: 0.35 }),
+    glowBlue: std({ color: 0x0a1a2a, emissive: 0x9fd0ff, emissiveIntensity: 2.0, roughness: 0.35 }),
+    leaves1: dressed({ color: 0x2c7a5c, roughness: 0.78 }, "foliage", 4, 0.32),
+    leaves2: dressed({ color: 0x3d9a6e, roughness: 0.78 }, "foliage", 4, 0.32),
+    rock: dressed({ color: 0x46585c, roughness: 0.96 }, "stone", 5, 0.65),
+    scaffold: dressed({ color: 0x8a6a44, roughness: 0.94 }, "wood", 8, 0.42),
+    barUp: std({ color: 0x0f3d2e, emissive: 0x4cd99a, emissiveIntensity: 1.35 }),
+    barDown: std({ color: 0x3d150f, emissive: 0xff7f6e, emissiveIntensity: 1.25 }),
   };
 }
 

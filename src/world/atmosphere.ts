@@ -115,7 +115,7 @@ export interface Sky {
 }
 
 export function makeSky(): Sky {
-  const geo = new THREE.SphereGeometry(SKY_RADIUS, 40, 24);
+  const geo = new THREE.SphereGeometry(SKY_RADIUS, 64, 40);
   const material = new THREE.ShaderMaterial({
     uniforms: {
       uTime: { value: 0 },
@@ -152,68 +152,101 @@ export function makeSky(): Sky {
                    mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), u.x), u.y);
       }
 
+      float fbm2(vec2 p) {
+        return noise(p) * 0.62 + noise(p * 2.13 + 7.7) * 0.26 + noise(p * 4.41 + 3.1) * 0.12;
+      }
+
       void main() {
         vec3 d = normalize(vDir);
         float h = d.y;
         float night = 1.0 - uDaylight;
+        vec3 sunN = normalize(uSunDir);
 
-        /* --- nền trời phân tầng --- */
-        /* Các giá trị đêm cố ý rất thấp: chúng đi qua tone mapping rồi mã hoá
-           sRGB, nên 0.02 tuyến tính đã hiện ra thành xám xanh đủ thấy. Đặt cao
-           hơn là bầu trời 22h trông như hoàng hôn. */
-        vec3 nightTop = vec3(0.0018, 0.0055, 0.019);
-        vec3 dayTop   = vec3(0.055, 0.24, 0.44);
-        vec3 nightMid = vec3(0.005, 0.014, 0.038);
-        vec3 dayMid   = vec3(0.16, 0.44, 0.58);
-        vec3 nightHor = vec3(0.012, 0.023, 0.050);
-        vec3 dayHor   = vec3(0.52, 0.70, 0.72);
+        /* --- nền trời phân tầng + Rayleigh ấm ở chân trời --- */
+        vec3 nightTop = vec3(0.0016, 0.0048, 0.017);
+        vec3 dayTop   = vec3(0.048, 0.225, 0.46);
+        vec3 nightMid = vec3(0.004, 0.012, 0.034);
+        vec3 dayMid   = vec3(0.145, 0.42, 0.585);
+        vec3 nightHor = vec3(0.010, 0.020, 0.046);
+        vec3 dayHor   = vec3(0.55, 0.71, 0.73);
         vec3 top = mix(nightTop, dayTop, uDaylight);
         vec3 mid = mix(nightMid, dayMid, uDaylight);
         vec3 hor = mix(nightHor, dayHor, uDaylight);
-        vec3 col = mix(hor, mid, smoothstep(-0.02, 0.28, h));
-        col = mix(col, top, smoothstep(0.20, 0.78, h));
+        vec3 col = mix(hor, mid, smoothstep(-0.03, 0.26, h));
+        col = mix(col, top, smoothstep(0.18, 0.80, h));
+        /* Haze ấm ôm chân trời phía mặt trời — bầu trời có chiều sâu khí quyển. */
+        float sunSideH = max(dot(normalize(vec3(d.x, 0.0, d.z) + vec3(1e-4)), normalize(vec3(sunN.x, 0.0, sunN.z) + vec3(1e-4))), 0.0);
+        float haze = exp(-max(h, 0.0) * 7.5) * (0.25 + 0.75 * pow(sunSideH, 2.0));
+        vec3 hazeTint = mix(vec3(0.10, 0.05, 0.09), vec3(1.0, 0.62, 0.34), uDaylight);
+        col += hazeTint * haze * (0.10 + uDaylight * 0.30 + uDusk * 0.35) * (1.0 - uOvercast * 0.7);
 
-        /* --- dải sao, chỉ hiện khi trời tối --- */
-        float starMask = night * (1.0 - uOvercast * 0.9) * smoothstep(-0.02, 0.22, h);
-        if (starMask > 0.004) {
+        /* --- sao: 2 mật độ + magnitude + twinkle lệch pha --- */
+        float starMask = night * (1.0 - uOvercast * 0.92) * smoothstep(-0.02, 0.20, h);
+        if (starMask > 0.003) {
           vec2 sp = d.xz / (abs(d.y) + 0.32);
-          vec2 cell = floor(sp * 190.0);
+          vec2 cell = floor(sp * 230.0);
           float rnd = hash21(cell);
-          float star = smoothstep(0.9942, 0.9992, rnd);
-          float twinkle = 0.55 + 0.45 * sin(uTime * (1.4 + rnd * 5.0) + rnd * 40.0);
-          vec3 starTint = mix(vec3(0.72, 0.84, 1.0), vec3(1.0, 0.9, 0.74), hash21(cell + 7.3));
-          col += starTint * star * twinkle * starMask * 1.7;
+          float mag = pow(hash21(cell + 3.7), 2.2);
+          float star = smoothstep(0.9955 - mag * 0.004, 0.9996, rnd);
+          float tw = 0.5 + 0.5 * sin(uTime * (1.2 + rnd * 6.0) + rnd * 43.0);
+          tw *= 0.65 + 0.35 * sin(uTime * 7.3 + rnd * 91.0);
+          vec3 starTint = mix(vec3(0.70, 0.83, 1.0), vec3(1.0, 0.90, 0.74), hash21(cell + 7.3));
+          col += starTint * star * tw * starMask * (1.2 + mag * 2.2);
+          /* lớp sao mờ thứ hai cho bầu trời dày */
+          vec2 cell2 = floor(sp * 110.0 + 17.0);
+          float rnd2 = hash21(cell2);
+          float star2 = smoothstep(0.9975, 1.0, rnd2);
+          col += vec3(0.8, 0.88, 1.0) * star2 * (0.4 + 0.6 * tw) * starMask * 0.7;
 
-          /* dải Ngân Hà nghiêng */
           float band = exp(-pow((d.y * 2.1 - d.x * 0.75) * 2.4, 2.0));
-          float milky = noise(sp * 5.2) * 0.55 + noise(sp * 13.0) * 0.3;
-          col += vec3(0.30, 0.36, 0.58) * band * milky * starMask * 0.22;
+          float milky = fbm2(sp * 4.6) * 0.6 + noise(sp * 12.0) * 0.28;
+          float dust = fbm2(sp * 2.2 + 4.0);
+          col += vec3(0.30, 0.37, 0.60) * band * milky * starMask * 0.30 * (0.5 + dust * 0.7);
+          col *= 1.0 - band * (1.0 - dust) * starMask * 0.25;
         }
 
-        /* --- quầng sáng quanh mặt trời --- */
-        float sunCos = max(dot(d, normalize(uSunDir)), 0.0);
-        float sunGlow = pow(sunCos, 220.0) * 1.5 + pow(sunCos, 12.0) * 0.32 + pow(sunCos, 3.0) * 0.10;
-        vec3 sunTint = mix(vec3(1.0, 0.48, 0.20), vec3(1.0, 0.93, 0.76), uDaylight);
-        col += sunTint * sunGlow * (0.22 + uDaylight * 0.95);
+        /* --- mặt trời: đĩa + Mie halo + forward scattering --- */
+        float sunCos = max(dot(d, sunN), 0.0);
+        float disc = smoothstep(0.99988, 0.99997, sunCos);
+        float mie = pow(sunCos, 650.0) * 2.2 + pow(sunCos, 90.0) * 0.55 + pow(sunCos, 9.0) * 0.30 + pow(sunCos, 2.5) * 0.10;
+        vec3 sunTint = mix(vec3(1.0, 0.42, 0.16), vec3(1.0, 0.94, 0.78), clamp(uDaylight * 1.2, 0.0, 1.0));
+        col += sunTint * (mie * (0.20 + uDaylight * 1.0) + disc * 3.2 * (0.25 + uDaylight));
 
-        /* --- quầng trăng --- */
+        /* --- quầng trăng + halo băng --- */
         float moonCos = max(dot(d, normalize(uMoonDir)), 0.0);
-        col += vec3(0.62, 0.72, 0.92) * pow(moonCos, 26.0) * night * 0.28;
+        col += vec3(0.60, 0.71, 0.92) * (pow(moonCos, 34.0) * 0.34 + pow(moonCos, 220.0) * 1.1) * night;
+        col += vec3(0.55, 0.65, 0.90) * exp(-pow((acos(clamp(moonCos, -1.0, 1.0)) - 0.38) * 9.0, 2.0)) * night * 0.10;
 
-        /* --- dải hoàng hôn ôm sát đường chân trời --- */
-        float band = exp(-abs(h - 0.015) * 15.0);
-        vec3 warm = mix(vec3(0.95, 0.36, 0.13), vec3(0.98, 0.62, 0.30), uDaylight);
-        float sunSide = 0.35 + 0.65 * max(dot(normalize(vec3(d.x, 0.0, d.z)), normalize(vec3(uSunDir.x, 0.0, uSunDir.z))), 0.0);
-        col += warm * band * uDusk * sunSide * 0.95;
+        /* --- dải hoàng hôn 2 tầng: lõi nóng + tàn lửa lan --- */
+        float bandLow = exp(-abs(h - 0.012) * 17.0);
+        float bandHigh = exp(-abs(h - 0.10) * 6.5);
+        vec3 warmLow = mix(vec3(1.0, 0.32, 0.10), vec3(1.0, 0.60, 0.28), uDaylight);
+        vec3 warmHigh = mix(vec3(0.55, 0.18, 0.28), vec3(1.0, 0.55, 0.42), uDaylight);
+        float sunSide = 0.30 + 0.70 * sunSideH;
+        col += warmLow * bandLow * uDusk * sunSide * 1.15 * (1.0 - uOvercast * 0.75);
+        col += warmHigh * bandHigh * uDusk * sunSide * 0.38 * (1.0 - uOvercast * 0.8);
 
-        /* --- mây mù khi bão --- */
+        /* --- mây: 2 tầng FBM + viền bạc khi ngược sáng --- */
+        vec2 cuv = d.xz / (abs(d.y) + 0.42);
+        float cirrus = fbm2(cuv * 1.4 + vec2(uTime * 0.010, uTime * 0.004));
+        cirrus = smoothstep(0.52, 0.85, cirrus) * smoothstep(0.03, 0.35, h) * (1.0 - uOvercast * 0.4);
+        vec3 cirrusCol = mix(vec3(0.05, 0.07, 0.12), vec3(1.02, 0.95, 0.88), uDaylight);
+        float silver = pow(sunCos, 18.0) * 0.9;
+        cirrusCol += vec3(1.0, 0.55, 0.30) * silver * (0.3 + uDusk * 0.9);
+        col = mix(col, cirrusCol, cirrus * 0.42);
         if (uOvercast > 0.01) {
-          float clouds = noise(d.xz * 2.4 / (abs(d.y) + 0.45) + uTime * 0.012);
-          clouds = clouds * 0.6 + noise(d.xz * 6.0 / (abs(d.y) + 0.45) - uTime * 0.02) * 0.4;
-          vec3 cloudCol = mix(vec3(0.10, 0.13, 0.17), vec3(0.52, 0.56, 0.60), uDaylight);
-          col = mix(col, cloudCol, uOvercast * smoothstep(0.0, 0.45, h) * (0.42 + clouds * 0.5));
+          float clouds = fbm2(cuv * 2.2 + vec2(uTime * 0.014, -uTime * 0.009));
+          clouds = clouds * 0.62 + noise(cuv * 5.6 - uTime * 0.02) * 0.38;
+          float cover = smoothstep(1.0 - uOvercast * 0.85, 1.05 - uOvercast * 0.35, clouds);
+          vec3 cloudDark = mix(vec3(0.055, 0.075, 0.10), vec3(0.30, 0.33, 0.37), uDaylight);
+          vec3 cloudLit = mix(vec3(0.10, 0.12, 0.16), vec3(0.72, 0.74, 0.76), uDaylight);
+          vec3 cloudCol = mix(cloudDark, cloudLit, 0.35 + 0.65 * pow(sunCos * 0.5 + 0.5, 2.0));
+          cloudCol += vec3(1.0, 0.5, 0.25) * pow(sunCos, 6.0) * uDusk * 0.5;
+          col = mix(col, cloudCol, cover * smoothstep(-0.02, 0.30, h) * 0.92);
         }
 
+        /* dither chống banding ngay trong vòm trời */
+        col += (hash21(gl_FragCoord.xy * 0.7) - 0.5) * (1.0 / 255.0);
         gl_FragColor = vec4(col, 1.0);
         /* ShaderMaterial thô không tự nhận tone mapping và chuyển sang sRGB như
            vật liệu dựng sẵn. Thiếu hai chunk này, mọi giá trị tuyến tính bị ghi
@@ -489,47 +522,85 @@ export interface CloudLayer {
   setCover(cover: number, tint: THREE.Color): void;
 }
 
-export function makeCloudLayer(count = 9): CloudLayer {
+export function makeCloudLayer(count = 12): CloudLayer {
   const group = new THREE.Group();
-  const material = new THREE.MeshBasicMaterial({
-    color: 0xa9c4c0,
-    transparent: true,
-    opacity: 0.075,
-    depthWrite: false,
-    fog: false,
-  });
-  const puffs: THREE.Group[] = [];
-  const geometry = new THREE.SphereGeometry(1, 10, 7);
-  for (let i = 0; i < count; i++) {
-    const puff = new THREE.Group();
-    const lobes: [number, number, number, number][] = [
-      [0, 0, 0, 1.9], [1.7, 0.16, 0.3, 1.25], [-1.6, 0.1, -0.22, 1.15], [0.6, 0.35, 0.5, 0.95],
-    ];
-    for (const [x, y, z, r] of lobes) {
-      const lobe = new THREE.Mesh(geometry, material);
-      lobe.position.set(x, y, z);
-      lobe.scale.set(r, r * 0.42, r);
-      puff.add(lobe);
+  /* Mây billboard xốp: 3 sprite puff chồng lệch nhau cho mỗi cụm, rìa feather
+     sâu nên không còn viền cầu cứng như bản sphere. Luôn quay về camera nên
+     dù ở góc nào mây cũng mềm và có khối. */
+  const baseColor = new THREE.Color(0xcfdfe0);
+  const materials: THREE.SpriteMaterial[] = [];
+  const puffs: THREE.Sprite[] = [];
+  let puffTexture: THREE.Texture | null = null;
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = 256;
+    canvas.height = 256;
+    const ctx = canvas.getContext("2d");
+    if (ctx) {
+      ctx.clearRect(0, 0, 256, 256);
+      const blobs: [number, number, number, number][] = [
+        [0.5, 0.56, 0.30, 0.9], [0.36, 0.59, 0.22, 0.72], [0.64, 0.58, 0.24, 0.74],
+        [0.46, 0.46, 0.20, 0.62], [0.58, 0.49, 0.18, 0.56],
+      ];
+      for (const [cx, cy, r, a] of blobs) {
+        const g = ctx.createRadialGradient(cx * 256, cy * 256, 1, cx * 256, cy * 256, r * 256);
+        g.addColorStop(0, `rgba(255,255,255,${a})`);
+        g.addColorStop(0.55, `rgba(255,255,255,${(a * 0.42).toFixed(3)})`);
+        g.addColorStop(1, "rgba(255,255,255,0)");
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, 256, 256);
+      }
     }
-    const azimuth = (i / count) * Math.PI * 2;
-    const radius = 92 + Math.random() * 66;
-    puff.position.set(Math.cos(azimuth) * radius, 46 + Math.random() * 22, Math.sin(azimuth) * radius);
-    puff.scale.setScalar(1.4 + Math.random() * 1.5);
-    group.add(puff);
-    puffs.push(puff);
+    puffTexture = new THREE.CanvasTexture(canvas);
+    puffTexture.colorSpace = THREE.SRGBColorSpace;
+  } catch {
+    puffTexture = null;
+  }
+  for (let i = 0; i < count; i++) {
+    const material = new THREE.SpriteMaterial({
+      map: puffTexture,
+      color: baseColor.clone(),
+      transparent: true,
+      opacity: 0.16,
+      depthWrite: false,
+      fog: false,
+    });
+    materials.push(material);
+    /* Mỗi cụm 2-3 sprite chồng để có chiều sâu thay vì một đốm đơn. */
+    const cluster = 2 + (i % 2);
+    for (let k = 0; k < cluster; k++) {
+      const sprite = new THREE.Sprite(k === 0 ? material : material.clone());
+      if (k > 0) materials.push(sprite.material as THREE.SpriteMaterial);
+      const azimuth = ((i + k * 0.35) / count) * Math.PI * 2;
+      const radius = 95 + Math.random() * 75;
+      sprite.position.set(
+        Math.cos(azimuth) * radius + (Math.random() - 0.5) * 18,
+        48 + Math.random() * 26 + k * 3.5,
+        Math.sin(azimuth) * radius + (Math.random() - 0.5) * 18
+      );
+      const w = (22 + Math.random() * 26) * (1 + k * 0.25);
+      sprite.scale.set(w, w * 0.42, 1);
+      sprite.renderOrder = -50;
+      group.add(sprite);
+      puffs.push(sprite);
+    }
   }
 
   return {
     group,
     setCover(cover, tint) {
-      material.opacity = 0.05 + cover * 0.30;
-      material.color.copy(tint);
+      for (const m of materials) {
+        m.opacity = 0.10 + cover * 0.42;
+        m.color.copy(tint).lerp(new THREE.Color(0xffffff), 0.18);
+      }
     },
     tick: (t, dt) => {
       puffs.forEach((puff, i) => {
-        puff.position.x += dt * (0.5 + i * 0.07);
-        if (puff.position.x > 190) puff.position.x = -190;
-        puff.position.y += Math.sin(t * 0.28 + i) * 0.004;
+        puff.position.x += dt * (0.55 + (i % 7) * 0.09);
+        if (puff.position.x > 200) puff.position.x = -200;
+        puff.position.y += Math.sin(t * 0.24 + i * 1.7) * 0.006;
+        const s = 1 + Math.sin(t * 0.18 + i) * 0.02;
+        puff.scale.x *= 1 + (s - 1) * 0.1;
       });
     },
   };
