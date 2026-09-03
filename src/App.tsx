@@ -258,7 +258,7 @@ function Shell() {
   }
 
   return (
-    <div className="relative h-screen w-screen select-none overflow-hidden bg-ink-900">
+    <div className="cine-grain cine-vignette relative h-screen w-screen select-none overflow-hidden bg-ink-900">
       <Suspense fallback={<div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_45%,#173f3a_0%,#071816_72%)]" aria-hidden="true" />}>
         <WorldScene
           levels={levels}

@@ -69,10 +69,10 @@ function NavChip({ id, onClick, active }: { id: string; onClick: () => void; act
   return (
     <button
       onClick={onClick}
-      className={`group flex w-full items-center gap-2.5 rounded-lg border px-3 py-2 text-left transition-all duration-200 ${
+      className={`group card-lift flex w-full items-center gap-2.5 rounded-xl border px-3 py-2 text-left duration-300 ${
         active
-          ? "border-gold-500/60 bg-gold-500/12 text-gold-300 shadow-[0_0_18px_rgba(224,170,80,0.15)]"
-          : "border-mist-500/12 bg-ink-850/60 text-mist-400 hover:border-gold-500/35 hover:text-mist-100 hover:translate-x-0.5"
+          ? "gold-frame text-gold-300 shadow-[0_0_22px_rgba(224,170,80,0.22),inset_0_1px_0_rgba(255,232,180,0.12)]"
+          : "border-mist-500/12 bg-ink-850/60 text-mist-400 hover:border-gold-500/40 hover:text-mist-100 hover:translate-x-0.5 hover:shadow-[0_8px_20px_rgba(0,0,0,0.35)]"
       }`}
     >
       <Icon className={`h-4 w-4 shrink-0 ${active ? "text-gold-400" : ""}`} />

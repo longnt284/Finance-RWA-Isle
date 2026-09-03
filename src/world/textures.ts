@@ -72,49 +72,58 @@ function fbm(x: number, y: number, period: number, octaves: number, seed: number
  * Trả về độ cao trong khoảng 0..1 tại toạ độ lưới (u, v) đã nhân sẵn tần số.
  */
 function heightFor(kind: SurfaceKind, u: number, v: number, period: number): number {
+  /* Lớp micro chung: hạt li ti ở tần số gấp 3 lần, biên độ nhỏ — thứ khiến
+     ánh sáng xiên tạo ra "hạt" thay vì mảng phẳng khi dí camera lại gần. */
+  const micro = (seed: number) => fbm(u * 18, v * 18, period * 18, 2, seed) * 0.09;
   switch (kind) {
     case "stone": {
       /* Mảng loang lớn cộng hạt sạn — mặt đá mài chứ không phải đá tảng thô. */
-      const blotch = fbm(u, v, period, 4, 11);
-      const grain = fbm(u * 4, v * 4, period * 4, 3, 29);
+      const blotch = fbm(u, v, period, 5, 11);
+      const grain = fbm(u * 4, v * 4, period * 4, 4, 29);
       /* Vài đường nứt mảnh: lấy rãnh của nhiễu (gần 0.5 thì tối đi). */
-      const crack = 1 - Math.min(1, Math.abs(fbm(u * 1.6, v * 1.6, period * 2, 3, 61) - 0.5) * 9);
-      return blotch * 0.62 + grain * 0.26 - crack * crack * 0.22 + 0.16;
+      const crack = 1 - Math.min(1, Math.abs(fbm(u * 1.6, v * 1.6, period * 2, 4, 61) - 0.5) * 9);
+      const pores = fbm(u * 11, v * 11, period * 11, 2, 101) * 0.08;
+      return blotch * 0.58 + grain * 0.24 - crack * crack * 0.20 + pores + micro(103) + 0.14;
     }
     case "plaster": {
-      /* Vữa trát: hạt rất mịn, gợn đều, không có hướng. */
-      return fbm(u * 3, v * 3, period * 3, 4, 7) * 0.7 + fbm(u * 9, v * 9, period * 9, 2, 43) * 0.3;
+      /* Vữa trát: hạt rất mịn, gợn đều, không có hướng + rỗ khí li ti. */
+      const pits = Math.pow(1 - fbm(u * 14, v * 14, period * 14, 2, 113), 3) * 0.12;
+      return fbm(u * 3, v * 3, period * 3, 5, 7) * 0.66 + fbm(u * 9, v * 9, period * 9, 3, 43) * 0.28 - pits + micro(107);
     }
     case "wood": {
       /* Vân gỗ là những vòng gần song song, bị nhiễu bẻ cong nhẹ. */
-      const warp = fbm(u * 0.9, v * 0.35, period, 3, 17) * 2.4;
+      const warp = fbm(u * 0.9, v * 0.35, period, 4, 17) * 2.4;
       const rings = Math.sin((v * 5.5 + warp) * Math.PI * 2) * 0.5 + 0.5;
-      const fibre = fbm(u * 1.2, v * 14, period * 14, 2, 53);
-      return rings * 0.5 + fibre * 0.32 + fbm(u * 2, v * 2, period * 2, 3, 71) * 0.18;
+      const fibre = fbm(u * 1.2, v * 14, period * 14, 3, 53);
+      const pore = fbm(u * 8, v * 30, period * 30, 2, 127) * 0.10;
+      return rings * 0.48 + fibre * 0.30 + fbm(u * 2, v * 2, period * 2, 4, 71) * 0.16 + pore * 0.4 + micro(109);
     }
     case "metal": {
-      /* Kim loại xước theo một hướng — đó là dấu hiệu "đã gia công". */
-      const brush = fbm(u * 0.5, v * 26, period * 26, 2, 23);
-      const patch = fbm(u, v, period, 3, 89);
-      return brush * 0.66 + patch * 0.34;
+      /* Kim loại xước theo một hướng + xước chéo mịn thứ hai cho ánh brushed thật. */
+      const brush = fbm(u * 0.5, v * 26, period * 26, 3, 23);
+      const cross = fbm(u * 22, v * 0.7, period * 22, 2, 137) * 0.18;
+      const patch = fbm(u, v, period, 4, 89);
+      return brush * 0.58 + patch * 0.30 + cross + micro(131);
     }
     case "sand": {
-      /* Sóng cát nhỏ chồng lên hạt li ti. */
-      const dune = Math.sin((u * 2.6 + fbm(u, v, period, 3, 5) * 3.1) * Math.PI * 2) * 0.5 + 0.5;
-      const speck = fbm(u * 12, v * 12, period * 12, 2, 97);
-      return dune * 0.34 + speck * 0.46 + fbm(u * 3, v * 3, period * 3, 3, 13) * 0.2;
+      /* Sóng cát nhỏ chồng lên hạt li ti + gợn gió thứ hai lệch hướng. */
+      const dune = Math.sin((u * 2.6 + fbm(u, v, period, 4, 5) * 3.1) * Math.PI * 2) * 0.5 + 0.5;
+      const dune2 = Math.sin((v * 3.4 + fbm(v, u, period, 3, 149) * 2.2) * Math.PI * 2) * 0.5 + 0.5;
+      const speck = fbm(u * 12, v * 12, period * 12, 3, 97);
+      return dune * 0.30 + dune2 * 0.12 + speck * 0.42 + fbm(u * 3, v * 3, period * 3, 4, 13) * 0.16 + micro(151);
     }
     case "fabric": {
-      /* Sợi dọc và sợi ngang đan nhau. */
+      /* Sợi dọc và sợi ngang đan nhau + độ lệch sợi ngẫu nhiên. */
       const warpThread = Math.sin(u * period * Math.PI * 2) * 0.5 + 0.5;
       const weftThread = Math.sin(v * period * Math.PI * 2) * 0.5 + 0.5;
-      return Math.max(warpThread, weftThread) * 0.55 + fbm(u * 6, v * 6, period * 6, 2, 37) * 0.45;
+      return Math.max(warpThread, weftThread) * 0.52 + fbm(u * 6, v * 6, period * 6, 3, 37) * 0.42 + micro(139);
     }
     case "foliage": {
-      /* Gân lá toả ra cộng lấm tấm mặt lá. */
+      /* Gân lá toả ra cộng lấm tấm mặt lá + đốm khô viền lá. */
       const veins = 1 - Math.min(1, Math.abs(Math.sin(v * 9.5 * Math.PI) ) * 2.2);
-      const mottle = fbm(u * 5, v * 5, period * 5, 3, 67);
-      return mottle * 0.72 + veins * 0.28;
+      const mottle = fbm(u * 5, v * 5, period * 5, 4, 67);
+      const speckle = fbm(u * 16, v * 16, period * 16, 2, 157) * 0.10;
+      return mottle * 0.68 + veins * 0.26 + speckle + micro(163);
     }
   }
 }
@@ -177,20 +186,24 @@ function dataTexture(data: Uint8Array, size: number, srgb: boolean): THREE.DataT
   texture.magFilter = THREE.LinearFilter;
   texture.minFilter = THREE.LinearMipmapLinearFilter;
   texture.generateMipmaps = true;
-  texture.anisotropy = 8;
+  /* Anisotropy 16 giữ vân sắc ở góc nhìn lướt (bãi cát, sân đá) thay vì
+     nhòe thành mảng phẳng. GPU hiện đại chịu được, máy yếu vẫn có mip. */
+  texture.anisotropy = 16;
   texture.needsUpdate = true;
   return texture;
 }
 
-/** Thông số riêng của từng loại: kích thước tấm, độ nổi, biên độ nhám. */
+/** Thông số riêng của từng loại: kích thước tấm, độ nổi, biên độ nhám.
+ *  Bản photoreal: tấm 512 cho mọi mặt hero, thêm tầng nhiễu micro để
+ *  ánh sáng có hạt ở cả tầm gần lẫn tầm xa. */
 const PROFILE: Record<SurfaceKind, { size: number; period: number; bump: number; rough: number }> = {
-  stone: { size: 256, period: 8, bump: 3.4, rough: 0.26 },
-  plaster: { size: 256, period: 8, bump: 1.6, rough: 0.16 },
-  wood: { size: 256, period: 6, bump: 2.6, rough: 0.22 },
-  metal: { size: 256, period: 8, bump: 1.1, rough: 0.30 },
-  sand: { size: 256, period: 10, bump: 2.2, rough: 0.14 },
-  fabric: { size: 128, period: 16, bump: 2.0, rough: 0.18 },
-  foliage: { size: 128, period: 8, bump: 1.8, rough: 0.20 },
+  stone: { size: 512, period: 9, bump: 3.1, rough: 0.34 },
+  plaster: { size: 512, period: 9, bump: 1.35, rough: 0.21 },
+  wood: { size: 512, period: 7, bump: 2.3, rough: 0.30 },
+  metal: { size: 512, period: 9, bump: 0.9, rough: 0.38 },
+  sand: { size: 512, period: 11, bump: 1.9, rough: 0.19 },
+  fabric: { size: 256, period: 18, bump: 1.7, rough: 0.24 },
+  foliage: { size: 256, period: 9, bump: 1.5, rough: 0.26 },
 };
 
 const CACHE = new Map<SurfaceKind, SurfaceMaps>();
@@ -240,19 +253,65 @@ export function surface(kind: SurfaceKind, repeat = 1): SurfaceMaps {
 let waterNormal: THREE.DataTexture | null = null;
 export function waterNormalMap(): THREE.DataTexture {
   if (waterNormal) return waterNormal;
-  const size = 256;
+  /* 512px + 3 tầng: gợn lừng, sóng chop, lăn tăn micro cho dải nắng vỡ vụn
+     mịn thay vì đốm to. Lặp liền mạch để cuộn 3 lớp không lộ mối nối. */
+  const size = 512;
   const period = 8;
   const height = new Float32Array(size * size);
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const u = (x / size) * period;
       const v = (y / size) * period;
-      /* Sóng lăn tăn: tầng thô định hình gợn, tầng mịn tạo lấp lánh. */
-      const swell = fbm(u * 0.8, v * 0.8, period, 3, 3);
-      const chop = fbm(u * 3.1, v * 3.1, period * 3, 3, 19);
-      height[y * size + x] = THREE.MathUtils.clamp(swell * 0.66 + chop * 0.34, 0, 1);
+      const swell = fbm(u * 0.8, v * 0.8, period, 4, 3);
+      const chop = fbm(u * 3.1, v * 3.1, period * 3, 4, 19);
+      const microW = fbm(u * 9.4, v * 9.4, period * 9, 2, 211);
+      height[y * size + x] = THREE.MathUtils.clamp(swell * 0.58 + chop * 0.30 + microW * 0.12, 0, 1);
     }
   }
-  waterNormal = dataTexture(heightToNormal(height, size, 2.8), size, false);
+  waterNormal = dataTexture(heightToNormal(height, size, 3.0), size, false);
   return waterNormal;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Sprite sinh tại chỗ cho tầng mây billboard                          */
+/* ------------------------------------------------------------------ */
+
+function canvasTexture(size: number, paint: (ctx: CanvasRenderingContext2D, s: number) => void): THREE.CanvasTexture {
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  if (ctx) paint(ctx, size);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 8;
+  /* Cùng quy ước với vật liệu dùng chung trong `build.ts`: tấm này được cache
+     ở tầng module và sống lâu hơn một lần dựng cảnh, nên vòng dọn dẹp của
+     WorldScene phải bỏ qua nó. Dispose nhầm thì lần mount sau cache vẫn trả về
+     đúng đối tượng ấy nhưng texture trên GPU đã chết — mây ra một mảng trắng. */
+  texture.userData.shared = true;
+  return texture;
+}
+
+let puffTex: THREE.CanvasTexture | null = null;
+/** Đốm mây xốp: nhiều blob gaussian chồng nhau + viền mềm — thay cho sphere
+ *  đặc, cho tầng mây nhẹ, trong, có chiều sâu khi xếp nhiều lớp. */
+export function cloudPuffTexture(): THREE.CanvasTexture {
+  if (puffTex) return puffTex;
+  puffTex = canvasTexture(256, (ctx, s) => {
+    ctx.clearRect(0, 0, s, s);
+    const blobs: [number, number, number, number][] = [
+      [0.5, 0.55, 0.30, 0.85], [0.36, 0.58, 0.22, 0.7], [0.64, 0.57, 0.24, 0.72],
+      [0.46, 0.46, 0.20, 0.6], [0.58, 0.48, 0.18, 0.55], [0.30, 0.50, 0.14, 0.5],
+    ];
+    for (const [cx, cy, r, a] of blobs) {
+      const g = ctx.createRadialGradient(cx * s, cy * s, 1, cx * s, cy * s, r * s);
+      g.addColorStop(0, `rgba(255,255,255,${a})`);
+      g.addColorStop(0.6, `rgba(255,255,255,${(a * 0.45).toFixed(3)})`);
+      g.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, s, s);
+    }
+  });
+  return puffTex;
 }

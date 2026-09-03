@@ -210,15 +210,21 @@ export default function WorldScene({
 
     const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const compactGpu = window.matchMedia("(max-width: 760px)").matches || (navigator.hardwareConcurrency ?? 8) <= 4;
-    const maxPixelRatio = compactGpu ? 1.15 : 1.6;
+    /* Photoreal cần pixel để nét: desktop lên tới 2.0, mobile 1.35. Composer
+       có MSAA riêng nên cờ antialias của renderer chỉ là lớp dự phòng khi
+       post tắt — bật luôn để khung fallback vẫn sắc. */
+    const maxPixelRatio = compactGpu ? 1.35 : 2.0;
     let renderPixelRatio = Math.min(window.devicePixelRatio, maxPixelRatio);
-    const renderer = new THREE.WebGLRenderer({ antialias: !compactGpu, powerPreference: "high-performance" });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance", stencil: false });
     renderer.setPixelRatio(renderPixelRatio);
     renderer.setSize(container.clientWidth, container.clientHeight);
+    /* three r185 đã bỏ PCFSoftShadowMap (tự rơi về PCF thường kèm warning).
+       Dùng PCFShadowMap tường minh: hết warning, và `shadow.radius` có tác
+       dụng làm mềm viền bóng — thứ PCFSoft vốn bỏ qua. */
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.type = THREE.PCFShadowMap;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.12;
+    renderer.toneMappingExposure = 1.16;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.domElement.tabIndex = 0;
     renderer.domElement.setAttribute("role", "img");
@@ -268,12 +274,13 @@ export default function WorldScene({
 
     const rig = makeCameraRig(camera, controls);
 
-    /* ------------------------------ lights ------------------------------ */
-    /* Đất phản xạ lên bằng sắc cát ấm chứ không phải xanh xám: mặt dưới của tán
-       dừa và hiên nhà không còn tối đen như bản trước. */
-    const hemi = new THREE.HemisphereLight(0xbfe4e8, 0x6a6047, 0.55);
+    /* ------------------------------ lights ------------------------------
+       3-point điện ảnh: key mặt trời có bóng, fill bán cầu trời/đất,
+       rim lam-lục tách khối khỏi nền biển. Đèn đường là pool 4 PointLight
+       chỉ bật về đêm để tiền cảnh có điểm ấm mà không tốn draw. */
+    const hemi = new THREE.HemisphereLight(0xc4e8ec, 0x6a6047, 0.62);
     scene.add(hemi);
-    const sunLight = new THREE.DirectionalLight(0xffd9a8, 2.0);
+    const sunLight = new THREE.DirectionalLight(0xffd9a8, 2.2);
     sunLight.castShadow = true;
     /* Khung bóng đổ rộng 104 đơn vị. Ở 2048 điểm ảnh thì mỗi texel phủ 5cm —
        đủ để mép bóng của lan can, cột đèn hay tàu lá dừa vỡ thành răng cưa.
@@ -297,9 +304,16 @@ export default function WorldScene({
     /* Ánh trăng là nguồn sáng riêng nên ban đêm vẫn đọc được hình khối. */
     const moonLight = new THREE.DirectionalLight(0x9fc4ff, 0);
     scene.add(moonLight);
-    const rim = new THREE.DirectionalLight(0x5ce8c4, 0.5);
+    const rim = new THREE.DirectionalLight(0x5ce8c4, 0.62);
     rim.position.set(38, 18, 42);
     scene.add(rim);
+    /* Đèn đường ấm quanh quảng trường — ban ngày tắt, ban đêm bật dần. */
+    const lampLights: THREE.PointLight[] = [];
+    for (let i = 0; i < 4; i++) {
+      const pl = new THREE.PointLight(0xffc069, 0, 16, 1.8);
+      scene.add(pl);
+      lampLights.push(pl);
+    }
     /* Chớp giông: đèn bán cầu trắng, bình thường tắt hẳn. */
     const lightning = new THREE.HemisphereLight(0xdbe7ff, 0x7d8fa8, 0);
     scene.add(lightning);
@@ -369,7 +383,7 @@ export default function WorldScene({
       envTarget?.dispose();
       envTarget = target;
       scene.environment = target.texture;
-      scene.environmentIntensity = 0.35 + daylight * 0.45;
+      scene.environmentIntensity = 0.55 + daylight * 0.6;
     }
 
     /* ------------------------------ world ------------------------------ */
@@ -546,11 +560,20 @@ export default function WorldScene({
       sunLight.castShadow = state.sunDir.y > 0.02;
 
       moonLight.position.copy(state.moonDir).multiplyScalar(110);
-      moonLight.intensity = Math.max(0, state.moonDir.y) * (1 - state.daylight) * 0.55 * profile.lightScale;
+      moonLight.intensity = Math.max(0, state.moonDir.y) * (1 - state.daylight) * 0.7 * profile.lightScale;
 
-      hemi.intensity = 0.28 + lit * 0.72;
-      rim.intensity = 0.2 + (1 - state.daylight) * 0.4;
-      renderer.toneMappingExposure = 0.9 + state.daylight * 0.34 + palette.warmth * 0.07;
+      hemi.intensity = 0.32 + lit * 0.78;
+      rim.intensity = 0.28 + (1 - state.daylight) * 0.5;
+      renderer.toneMappingExposure = 0.94 + state.daylight * 0.34 + palette.warmth * 0.07;
+
+      /* Đèn đường: tắt ban ngày, ấm dần về đêm. 4 đèn đặt quanh quảng trường. */
+      const nightK = 1 - THREE.MathUtils.smoothstep(state.daylight, 0.12, 0.45);
+      const lampBase: [number, number][] = [[6.5, 6.5], [-6.5, 6.5], [6.5, -6.5], [-6.5, -6.5]];
+      lampLights.forEach((pl, i) => {
+        const [lx, lz] = lampBase[i % lampBase.length];
+        pl.position.set(lx, 2.6, lz);
+        pl.intensity = nightK * 14 * profile.lightScale;
+      });
 
       /* ---- sương mù và biển ---- */
       /* Sương mù nhạt đi nhiều so với bản trước. Ở mật độ 0,0085 thì ngay cả đảo
@@ -704,7 +727,9 @@ export default function WorldScene({
        công trình chỉ là một mảng màu xanh phẳng. Cây thông và cây dừa vẫn dựng
        từng cây một: mỗi cây có số tầng tán, độ cong thân và độ rủ tàu lá riêng,
        gộp chúng thành một hình dùng chung sẽ đánh mất đúng cái làm chúng đẹp. */
-    grassLayer = makeGrass(reduceMotion ? 0 : compactGpu ? 1600 : 4200);
+    /* Thảm cỏ photoreal: 8000 ngọn desktop / 2600 mobile trong 1 draw call.
+       Mật độ gấp đôi để khoảng giữa công trình không còn mảng phẳng. */
+    grassLayer = makeGrass(reduceMotion ? 0 : compactGpu ? 2600 : 8000);
     if (grassLayer.mesh) {
       scene.add(grassLayer.mesh);
       staticTicks.push(grassLayer.tick);
@@ -1030,10 +1055,12 @@ export default function WorldScene({
        áp cho khung hình vẽ thẳng ra màn hình, nên trước đây hễ bật bloom là mọi
        đường mái, cột buồm và mép lá lại lởm chởm. Đây chính là chỗ chữ "sắc
        nét" bị đánh mất. */
+    /* MSAA 8x trên desktop cho mép mái, cột buồm, tàu lá không còn răng cưa
+       ngay cả khi bloom bật. Mobile giữ 4x — đủ sắc mà không đốt GPU. */
     const composerTarget = new THREE.WebGLRenderTarget(
       Math.max(1, container.clientWidth),
       Math.max(1, container.clientHeight),
-      { type: THREE.HalfFloatType, samples: compactGpu ? 0 : 4 }
+      { type: THREE.HalfFloatType, samples: compactGpu ? 4 : 8 }
     );
     const composer = new EffectComposer(renderer, composerTarget);
     composer.setPixelRatio(renderPixelRatio);
@@ -1058,11 +1085,13 @@ export default function WorldScene({
     });
     composer.addPass(gtaoPass);
 
+    /* Bloom điện ảnh: ngưỡng cao để chỉ đèn, mặt trời, rune mới nở quầng;
+       radius rộng cho halo mềm, strength điều theo ngày/đêm ở renderFrame. */
     const bloomPass = new UnrealBloomPass(
       new THREE.Vector2(container.clientWidth, container.clientHeight),
-      0.62,
-      0.72,
-      0.82
+      0.55,
+      0.85,
+      0.85
     );
     composer.addPass(bloomPass);
     composer.addPass(new OutputPass());
@@ -1143,19 +1172,25 @@ export default function WorldScene({
       flyToPos.copy(pos);
       flyFromTgt.copy(controls.target);
       flyToTgt.copy(target);
-      flyFromFov = camera.fov;
+      /* FOV punch điện ảnh: mở rộng 4,5° lúc cất cánh rồi siết lại khi hạ —
+         cảm giác tốc độ mà không cần tăng thời gian bay.
+         Chỉ punch khi đang đứng yên. Nếu cú bay trước còn dở dang thì `camera.fov`
+         đã mang sẵn phần mở rộng của lần đó; cộng thêm 4,5° nữa là mỗi lần bấm
+         lại nống thêm một nấc, bấm liên tiếp mấy quận là khung hình phình thành
+         mắt cá. Bay tiếp từ đúng tiêu cự hiện tại thì nối liền mạch. */
+      const punch = reduceMotion || flying ? 0 : 4.5;
+      flyFromFov = camera.fov + punch;
+      if (punch > 0) {
+        camera.fov = flyFromFov;
+        camera.updateProjectionMatrix();
+      }
       flyToFov = fov;
       flight.k = 0;
       flying = true;
-      /* Cờ `flying` được hạ trong vòng lặp dựng hình chứ không ở đây.
-         `onComplete` của GSAP chạy trong nhịp rAF của chính nó, có thể rơi vào
-         giữa hai khung hình của cảnh: trên máy chạy 2 khung/giây, lần lấy mẫu
-         cuối cùng của vòng lặp là k ≈ 0,8 và camera đứng lại giữa đường. Để
-         vòng lặp tự thấy k = 1 thì khung cuối luôn đúng đích. */
       flightTween = gsap.to(flight, {
         k: 1,
         duration: reduceMotion ? 0.25 : dur,
-        ease: "power2.inOut",
+        ease: "power3.inOut",
         onComplete: () => {
           flightTween = null;
         },
@@ -1520,18 +1555,30 @@ export default function WorldScene({
          khi bất cứ ai chạm vào vị trí camera trong khung này. */
       rig.beforeControls();
 
+      /* Intro điện ảnh 3.4s: từ cao lao xuống + siết tiêu cự 58→46 cho
+         cảm giác dolly-zoom nhẹ. Dùng ease riêng cho vị trí và FOV để
+         FOV về đích sớm hơn một nhịp — hạ cánh "dính" thay vì trôi. */
       if (!introDone) {
-        const k = Math.min(1, (performance.now() - introStart) / (reduceMotion ? 300 : 2600));
+        const k = Math.min(1, (performance.now() - introStart) / (reduceMotion ? 300 : 3400));
         const e = easeInOutCubic(k);
         camera.position.lerpVectors(introFrom, introPose.pos, e);
         controls.target.lerpVectors(introTargetFrom, introPose.target, e);
+        const introFov = THREE.MathUtils.lerp(58, BASE_FOV, Math.min(1, k * 1.15));
+        if (Math.abs(introFov - camera.fov) > 0.01) {
+          camera.fov = introFov;
+          camera.updateProjectionMatrix();
+        }
         if (k >= 1) introDone = true;
       } else if (flying) {
+        /* easeOutExpo phần đầu cho cú vọt, easeInOut phần cuối để hạ êm:
+           dùng smoothstep trên k của GSAP để FOV siết nhanh hơn vị trí. */
         const e = flight.k;
-        camera.position.lerpVectors(flyFromPos, flyToPos, e);
-        controls.target.lerpVectors(flyFromTgt, flyToTgt, e);
-        const fov = THREE.MathUtils.lerp(flyFromFov, flyToFov, e);
-        if (Math.abs(fov - camera.fov) > 0.01) {
+        const ePos = e < 0.5 ? 4 * e * e * e : 1 - Math.pow(-2 * e + 2, 3) / 2;
+        camera.position.lerpVectors(flyFromPos, flyToPos, ePos);
+        controls.target.lerpVectors(flyFromTgt, flyToTgt, ePos);
+        const eFov = THREE.MathUtils.smoothstep(e, 0, 1);
+        const fov = THREE.MathUtils.lerp(flyFromFov, flyToFov, eFov);
+        if (Math.abs(fov - camera.fov) > 0.005) {
           camera.fov = fov;
           camera.updateProjectionMatrix();
         }
@@ -1651,15 +1698,18 @@ export default function WorldScene({
       }
       bloomPass.enabled = hero ? effects : bloomEnabled();
       gtaoPass.enabled = hero ? effects && !compactGpu : gtaoEnabled();
-      /* Bloom mạnh hơn về đêm: ban ngày ánh mặt trời đã đủ chói, thêm quầng sáng
-         chỉ làm cảnh bệt màu. */
-      bloomPass.strength = 0.34 + (1 - currentDaylight) * 0.62;
+      /* Bloom điện ảnh: ngày giữ halo gọn để không bệt, đêm mở mạnh cho đèn,
+         rune, mặt trăng nở quầng. Radius rộng sẵn nên chỉ cần điều strength. */
+      bloomPass.strength = 0.32 + (1 - currentDaylight) * 0.68;
       const grade = gradePass.material.uniforms;
       grade.uTime.value = t;
-      /* Ban đêm hạt phim và tối góc mạnh tay hơn: đó là lúc một cảm biến thật
-         phải đẩy ISO lên, nên ảnh đêm sạch bong mới là cái phi thực. */
-      grade.uGrain.value = 0.022 + (1 - currentDaylight) * 0.03;
-      grade.uVignette.value = 0.28 + (1 - currentDaylight) * 0.14;
+      grade.uGrain.value = 0.020 + (1 - currentDaylight) * 0.028;
+      grade.uVignette.value = 0.26 + (1 - currentDaylight) * 0.13;
+      /* Nét và split màu thích ứng: ngày nét căng, đêm giảm nét để không
+         khuếch đại noise; teal-orange giữ nguyên để da trời luôn điện ảnh. */
+      if (grade.uSharp) grade.uSharp.value = hero ? 0.5 : 0.38 + currentDaylight * 0.12;
+      if (grade.uTeal) grade.uTeal.value = 0.85;
+      if (grade.uGain) grade.uGain.value = 1.03 + currentDaylight * 0.02;
       composer.render();
     }
     frame();
@@ -1691,7 +1741,10 @@ export default function WorldScene({
         }
         const sprite = o as THREE.Sprite;
         if (sprite.isSprite) {
-          sprite.material.map?.dispose();
+          /* Tấm nào dựng riêng cho cảnh này thì dọn; tấm cache dùng chung
+             (mây) phải để lại cho lần mount sau. */
+          const map = sprite.material.map;
+          if (map && !map.userData.shared) map.dispose();
           sprite.material.dispose();
         }
       });

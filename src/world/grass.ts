@@ -92,18 +92,19 @@ export function makeGrass(count: number): Grass {
   const geometry = bladeGeometry();
   const material = new THREE.MeshStandardMaterial({
     color: 0xffffff,
-    roughness: 1,
+    roughness: 0.92,
     metalness: 0,
     side: THREE.DoubleSide,
     vertexColors: true,
+    /* Translucency giả lập: cỏ ngược sáng vẫn sáng lên thay vì đen sì. */
+    emissive: new THREE.Color(0x1a3d24),
+    emissiveIntensity: 0.35,
   });
 
   /**
-   * Gió thổi trong vertex shader.
-   *
-   * Uốn theo `y` mũ 1,7 nên gốc cỏ đứng yên còn ngọn ngả hẳn — đúng cách một
-   * thân cỏ chịu lực. Pha lấy từ toạ độ thế giới của chính instance đó
-   * (`instanceMatrix[3]`), nên cả thảm cỏ gợn thành sóng chứ không đập cùng nhịp.
+   * Gió 2 tầng trong vertex shader: sóng nền + cơn gust lan theo không gian.
+   * Uốn theo `y` mũ 1,7 nên gốc đứng yên còn ngọn ngả hẳn. Pha lấy từ toạ độ
+   * thế giới của instance nên cả thảm gợn thành sóng chứ không đập cùng nhịp.
    */
   material.onBeforeCompile = (shader) => {
     shader.uniforms.uTime = uniforms.uTime;
@@ -120,9 +121,12 @@ export function makeGrass(count: number): Grass {
         `#include <begin_vertex>
          #ifdef USE_INSTANCING
            float wPhase = instanceMatrix[3].x * 0.62 + instanceMatrix[3].z * 0.47;
-           float wBend = pow(max(transformed.y, 0.0), 1.7) * uWind * 0.34;
+           float gust = 0.6 + 0.4 * sin(uTime * 0.7 + instanceMatrix[3].x * 0.18 + instanceMatrix[3].z * 0.23);
+           gust *= 0.7 + 0.3 * sin(uTime * 1.7 + wPhase * 0.5);
+           float wBend = pow(max(transformed.y, 0.0), 1.7) * uWind * 0.38 * gust;
            transformed.x += sin(uTime * 1.9 + wPhase) * wBend;
-           transformed.z += cos(uTime * 1.4 + wPhase * 1.3) * wBend * 0.55;
+           transformed.z += cos(uTime * 1.4 + wPhase * 1.3) * wBend * 0.6;
+           transformed.y -= wBend * wBend * 0.35;
          #endif`
       );
   };

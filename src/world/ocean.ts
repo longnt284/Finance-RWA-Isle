@@ -154,15 +154,17 @@ export function makeOcean(): Ocean {
         float ring = sin(d * 0.34 - uTime * 1.15) * 0.5 + 0.5;
         float drift = sin(p.x * 0.06 + uTime * 0.35) * sin(p.y * 0.05 - uTime * 0.28);
 
-        /* --- pháp tuyến: sóng lừng + hai lớp gợn cuộn ngược chiều ---
-           Biên độ gợn tắt dần theo khoảng cách. Không tắt thì ở chân trời mỗi
-           điểm ảnh phủ hàng chục bước sóng, sinh ra nhiễu hạt lấp lánh liên tục
-           — đúng kiểu "đồ hoạ rẻ tiền" mà ta đang muốn tránh. */
+        /* --- pháp tuyến: sóng lừng + BA lớp gợn cuộn ngược chiều ---
+           Lớp micro thứ ba chỉ hiện ở tầm gần (dưới 45 đơn vị) cho mặt nước
+           có "hạt" khi dí camera xuống bến câu, nhưng tan hẳn ở xa để không
+           nhiễu lấp lánh ở chân trời. */
         float detail = 1.0 - smoothstep(70.0, 300.0, viewDist);
+        float microDetail = 1.0 - smoothstep(28.0, 85.0, viewDist);
         vec3 n1 = rippleNormal(p * 0.055 + vec2(uTime * 0.010, uTime * 0.0072));
         vec3 n2 = rippleNormal(p * 0.155 - vec2(uTime * 0.019, uTime * 0.0135));
-        vec3 gentle = normalize(n1 + n2 * 0.62);
-        float rippleAmp = mix(0.10, 0.50 + uRain * 0.35, detail);
+        vec3 n3 = rippleNormal(p * 0.42 + vec2(-uTime * 0.026, uTime * 0.021));
+        vec3 gentle = normalize(n1 + n2 * 0.62 + n3 * 0.34 * microDetail);
+        float rippleAmp = mix(0.10, 0.52 + uRain * 0.35, detail);
         vec3 N = normalize(vSwell + vec3(gentle.x, 0.0, gentle.z) * rippleAmp);
         vec3 V = normalize(cameraPosition - vWorld);
 
@@ -185,14 +187,22 @@ export function makeOcean(): Ocean {
         float backlit = pow(max(dot(V, -normalize(vec3(uSunDir.x, -0.2, uSunDir.z))), 0.0), 3.0);
         col += vec3(0.06, 0.30, 0.24) * crest * backlit * uDaylight * 0.45;
 
-        /* --- bọt sóng vỗ bờ đảo chính --- */
+        /* --- bọt sóng vỗ bờ: 2 dải lệch pha + vân 2 tần số --- */
         float surf = (1.0 - smoothstep(uIsland - 2.2, uIsland + 3.4, d)) * smoothstep(uIsland - 6.5, uIsland - 2.0, d);
         float surfPulse = 0.55 + 0.45 * sin(d * 1.5 - uTime * 2.1);
-        /* Vân bọt lấy từ chính tấm nhiễu nên mép bọt lởm chởm, không phải một
-           vòng tròn trơn tru chạy quanh đảo. */
-        float foamGrain = 0.55 + 0.75 * texture2D(uRipple, p * 0.09 + vec2(uTime * 0.02, 0.0)).x;
-        float foam = clamp(surf * surfPulse * foamGrain, 0.0, 1.0);
-        col = mix(col, vec3(0.90, 0.97, 0.96), foam * 0.62);
+        float surfPulse2 = 0.5 + 0.5 * sin(d * 2.6 - uTime * 3.2 + 1.7);
+        float foamGrain = 0.45 + 0.65 * texture2D(uRipple, p * 0.09 + vec2(uTime * 0.02, 0.0)).x;
+        float foamFine = texture2D(uRipple, p * 0.23 - vec2(uTime * 0.015, uTime * 0.008)).y;
+        float foam = clamp(surf * (surfPulse * 0.65 + surfPulse2 * 0.35) * (foamGrain * 0.7 + foamFine * 0.5), 0.0, 1.0);
+        /* Rìa bọt sáng hơn thân bọt — viền trắng ôm sát mép nước. */
+        float foamEdge = smoothstep(0.35, 0.95, foam);
+        col = mix(col, vec3(0.88, 0.96, 0.95), foam * 0.55);
+        col = mix(col, vec3(0.98, 1.0, 0.99), foamEdge * foam * 0.45);
+
+        /* --- bọt đầu sóng ngoài khơi (whitecaps): chỉ ở đỉnh sóng cao --- */
+        float whitecap = smoothstep(0.22, 0.38, vWave) * (0.5 + 0.5 * foamFine);
+        whitecap *= smoothstep(uShelf * 0.7, uShelf + 20.0, d) * uDaylight * 0.55;
+        col = mix(col, vec3(0.85, 0.93, 0.94), whitecap * 0.35);
 
         /* --- vành san hô: ranh giới lãnh thổ, sáng lên bằng bọt trắng --- */
         float reef = exp(-pow((d - uTerritory) * 0.42, 2.0));
@@ -214,13 +224,16 @@ export function makeOcean(): Ocean {
            chiều sâu lẫn màu ngọc lam vốn là bản sắc của vùng nước này. */
         col = mix(col, skyCol, clamp(fresnel, 0.0, 1.0) * 0.72);
 
-        /* --- dải nắng và dải trăng trên sóng --- */
+        /* --- dải nắng / trăng: GGX sắc + sparkle vỡ vụn --- */
         vec3 sunL = normalize(uSunDir);
-        float sunGlitter = ggx(N, V, sunL, 0.07 + uRain * 0.06) * max(sunL.y, 0.0);
-        col += vec3(1.0, 0.86, 0.62) * min(sunGlitter, 14.0) * 0.10 * uDaylight;
+        float sunGlitter = ggx(N, V, sunL, 0.055 + uRain * 0.05) * max(sunL.y, 0.0);
+        /* Sparkle: nhiễu hash theo pixel làm dải nắng đứt thành nghìn đốm. */
+        float sparkle = hash21(floor(p * 7.0) + floor(uTime * 9.0) * 0.13);
+        sparkle = step(0.72, sparkle) * 0.9 + 0.35;
+        col += vec3(1.0, 0.84, 0.58) * min(sunGlitter * sparkle, 18.0) * 0.115 * uDaylight;
         vec3 moonL = normalize(uMoonDir);
-        float moonGlitter = ggx(N, V, moonL, 0.10) * max(moonL.y, 0.0);
-        col += vec3(0.66, 0.78, 1.0) * min(moonGlitter, 10.0) * 0.055 * (1.0 - uDaylight);
+        float moonGlitter = ggx(N, V, moonL, 0.085) * max(moonL.y, 0.0);
+        col += vec3(0.66, 0.78, 1.0) * min(moonGlitter * (0.5 + sparkle * 0.5), 12.0) * 0.06 * (1.0 - uDaylight);
 
         /* --- vòng sóng do mưa rơi --- */
         if (uRain > 0.01) {
