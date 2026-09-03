@@ -1172,11 +1172,18 @@ export default function WorldScene({
       flyToPos.copy(pos);
       flyFromTgt.copy(controls.target);
       flyToTgt.copy(target);
-      /* FOV punch điện ảnh: mở rộng 4° lúc cất cánh rồi siết lại khi hạ —
-         cảm giác tốc độ mà không cần tăng thời gian bay. */
-      flyFromFov = reduceMotion ? camera.fov : camera.fov + 4.5;
-      camera.fov = flyFromFov;
-      camera.updateProjectionMatrix();
+      /* FOV punch điện ảnh: mở rộng 4,5° lúc cất cánh rồi siết lại khi hạ —
+         cảm giác tốc độ mà không cần tăng thời gian bay.
+         Chỉ punch khi đang đứng yên. Nếu cú bay trước còn dở dang thì `camera.fov`
+         đã mang sẵn phần mở rộng của lần đó; cộng thêm 4,5° nữa là mỗi lần bấm
+         lại nống thêm một nấc, bấm liên tiếp mấy quận là khung hình phình thành
+         mắt cá. Bay tiếp từ đúng tiêu cự hiện tại thì nối liền mạch. */
+      const punch = reduceMotion || flying ? 0 : 4.5;
+      flyFromFov = camera.fov + punch;
+      if (punch > 0) {
+        camera.fov = flyFromFov;
+        camera.updateProjectionMatrix();
+      }
       flyToFov = fov;
       flight.k = 0;
       flying = true;
@@ -1734,7 +1741,10 @@ export default function WorldScene({
         }
         const sprite = o as THREE.Sprite;
         if (sprite.isSprite) {
-          sprite.material.map?.dispose();
+          /* Tấm nào dựng riêng cho cảnh này thì dọn; tấm cache dùng chung
+             (mây) phải để lại cho lần mount sau. */
+          const map = sprite.material.map;
+          if (map && !map.userData.shared) map.dispose();
           sprite.material.dispose();
         }
       });

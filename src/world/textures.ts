@@ -273,7 +273,7 @@ export function waterNormalMap(): THREE.DataTexture {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Sprite sinh tại chỗ cho hậu kỳ điện ảnh — glow, mây, hạt           */
+/*  Sprite sinh tại chỗ cho tầng mây billboard                          */
 /* ------------------------------------------------------------------ */
 
 function canvasTexture(size: number, paint: (ctx: CanvasRenderingContext2D, s: number) => void): THREE.CanvasTexture {
@@ -285,27 +285,12 @@ function canvasTexture(size: number, paint: (ctx: CanvasRenderingContext2D, s: n
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.anisotropy = 8;
+  /* Cùng quy ước với vật liệu dùng chung trong `build.ts`: tấm này được cache
+     ở tầng module và sống lâu hơn một lần dựng cảnh, nên vòng dọn dẹp của
+     WorldScene phải bỏ qua nó. Dispose nhầm thì lần mount sau cache vẫn trả về
+     đúng đối tượng ấy nhưng texture trên GPU đã chết — mây ra một mảng trắng. */
+  texture.userData.shared = true;
   return texture;
-}
-
-let glowTex: THREE.CanvasTexture | null = null;
-/** Quầng sáng mềm nhiều tầng: lõi trắng, hào ấm, rìa tàn — dùng cho mặt trời,
- *  hải đăng, rune, bọt phát sáng. 256px đủ vì luôn được blur thêm bởi bloom. */
-export function glowSpriteTexture(): THREE.CanvasTexture {
-  if (glowTex) return glowTex;
-  glowTex = canvasTexture(256, (ctx, s) => {
-    const half = s / 2;
-    const g = ctx.createRadialGradient(half, half, 1, half, half, half);
-    g.addColorStop(0, "rgba(255,255,252,1)");
-    g.addColorStop(0.10, "rgba(255,246,220,0.95)");
-    g.addColorStop(0.24, "rgba(255,214,140,0.42)");
-    g.addColorStop(0.48, "rgba(255,170,90,0.13)");
-    g.addColorStop(0.75, "rgba(255,150,70,0.045)");
-    g.addColorStop(1, "rgba(255,140,60,0)");
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, s, s);
-  });
-  return glowTex;
 }
 
 let puffTex: THREE.CanvasTexture | null = null;
@@ -329,21 +314,4 @@ export function cloudPuffTexture(): THREE.CanvasTexture {
     }
   });
   return puffTex;
-}
-
-let softDot: THREE.CanvasTexture | null = null;
-/** Hạt tròn mềm cho mưa bụi, đom đóm, bọt biển, tia lửa — rìa feather sâu. */
-export function softDotTexture(): THREE.CanvasTexture {
-  if (softDot) return softDot;
-  softDot = canvasTexture(128, (ctx, s) => {
-    const half = s / 2;
-    const g = ctx.createRadialGradient(half, half, 1, half, half, half);
-    g.addColorStop(0, "rgba(255,255,255,1)");
-    g.addColorStop(0.35, "rgba(255,255,255,0.75)");
-    g.addColorStop(0.65, "rgba(255,255,255,0.22)");
-    g.addColorStop(1, "rgba(255,255,255,0)");
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, s, s);
-  });
-  return softDot;
 }

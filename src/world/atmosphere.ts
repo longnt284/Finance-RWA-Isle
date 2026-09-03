@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { phaseForHour } from "../lib/season";
 import type { DayPhase } from "../lib/season";
+import { cloudPuffTexture } from "./textures";
 
 /* ------------------------------------------------------------------ */
 /*  Bầu trời, mặt trời, mặt trăng, sao — tất cả điều khiển bằng uniform */
@@ -522,7 +523,7 @@ export interface CloudLayer {
   setCover(cover: number, tint: THREE.Color): void;
 }
 
-export function makeCloudLayer(count = 12): CloudLayer {
+export function makeCloudLayer(count = 9): CloudLayer {
   const group = new THREE.Group();
   /* Mây billboard xốp: 3 sprite puff chồng lệch nhau cho mỗi cụm, rìa feather
      sâu nên không còn viền cầu cứng như bản sphere. Luôn quay về camera nên
@@ -530,29 +531,13 @@ export function makeCloudLayer(count = 12): CloudLayer {
   const baseColor = new THREE.Color(0xcfdfe0);
   const materials: THREE.SpriteMaterial[] = [];
   const puffs: THREE.Sprite[] = [];
+  const baseWidth: number[] = [];
+  const baseHeight: number[] = [];
+  /* Tấm puff dùng chung từ `textures.ts` — cùng một hình cho mọi cụm mây,
+     vẽ một lần rồi cache, thay vì mỗi lớp mây lại dựng canvas riêng. */
   let puffTexture: THREE.Texture | null = null;
   try {
-    const canvas = document.createElement("canvas");
-    canvas.width = 256;
-    canvas.height = 256;
-    const ctx = canvas.getContext("2d");
-    if (ctx) {
-      ctx.clearRect(0, 0, 256, 256);
-      const blobs: [number, number, number, number][] = [
-        [0.5, 0.56, 0.30, 0.9], [0.36, 0.59, 0.22, 0.72], [0.64, 0.58, 0.24, 0.74],
-        [0.46, 0.46, 0.20, 0.62], [0.58, 0.49, 0.18, 0.56],
-      ];
-      for (const [cx, cy, r, a] of blobs) {
-        const g = ctx.createRadialGradient(cx * 256, cy * 256, 1, cx * 256, cy * 256, r * 256);
-        g.addColorStop(0, `rgba(255,255,255,${a})`);
-        g.addColorStop(0.55, `rgba(255,255,255,${(a * 0.42).toFixed(3)})`);
-        g.addColorStop(1, "rgba(255,255,255,0)");
-        ctx.fillStyle = g;
-        ctx.fillRect(0, 0, 256, 256);
-      }
-    }
-    puffTexture = new THREE.CanvasTexture(canvas);
-    puffTexture.colorSpace = THREE.SRGBColorSpace;
+    puffTexture = cloudPuffTexture();
   } catch {
     puffTexture = null;
   }
@@ -581,26 +566,35 @@ export function makeCloudLayer(count = 12): CloudLayer {
       const w = (22 + Math.random() * 26) * (1 + k * 0.25);
       sprite.scale.set(w, w * 0.42, 1);
       sprite.renderOrder = -50;
+      /* Giữ lại bề rộng và cao độ gốc: nhịp "thở" của mây phải dao động
+         quanh hai số này chứ không được cộng dồn qua từng khung hình. */
+      baseWidth.push(w);
+      baseHeight.push(sprite.position.y);
       group.add(sprite);
       puffs.push(sprite);
     }
   }
 
+  const WHITE = new THREE.Color(0xffffff);
   return {
     group,
     setCover(cover, tint) {
       for (const m of materials) {
         m.opacity = 0.10 + cover * 0.42;
-        m.color.copy(tint).lerp(new THREE.Color(0xffffff), 0.18);
+        m.color.copy(tint).lerp(WHITE, 0.18);
       }
     },
     tick: (t, dt) => {
       puffs.forEach((puff, i) => {
+        /* Trôi ngang là chuyển động thật nên nhân `dt` rồi cộng dồn — đúng.
+           Còn "thở" là dao động quanh một mốc: phải gán tuyệt đối từ mốc gốc.
+           Viết thành `+=` hay `*=` thì biên độ phụ thuộc tốc độ khung hình,
+           và với phép nhân thì sprite teo dần không có đáy — ở 60 khung/giây
+           mây chỉ còn 29% bề rộng sau hai phút, ở 120 khung/giây còn 8%. */
         puff.position.x += dt * (0.55 + (i % 7) * 0.09);
         if (puff.position.x > 200) puff.position.x = -200;
-        puff.position.y += Math.sin(t * 0.24 + i * 1.7) * 0.006;
-        const s = 1 + Math.sin(t * 0.18 + i) * 0.02;
-        puff.scale.x *= 1 + (s - 1) * 0.1;
+        puff.position.y = baseHeight[i] + Math.sin(t * 0.24 + i * 1.7) * 1.4;
+        puff.scale.x = baseWidth[i] * (1 + Math.sin(t * 0.18 + i) * 0.02);
       });
     },
   };
