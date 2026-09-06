@@ -19,6 +19,7 @@ import {
   buildAcademy,
   buildLighthouse,
   buildTerrain,
+  type TerrainPalette,
   buildPaths,
   buildGate,
   buildIsle,
@@ -38,19 +39,23 @@ import {
   DECOR_IDS,
 } from "./build";
 import type { TickFn, Mats, DecorId } from "./build";
-import { makeGrass } from "./grass";
+import { makeGrass, DUNE_BAND } from "./grass";
 import type { Grass } from "./grass";
 import { makeCameraRig, polarBetween, CAMERA_SHOTS, SHOT_BY_ID } from "./camera";
 import type { ShotId } from "./camera";
 import {
   makeProp, placeProp, buildVillage, buildFishingPier, makeWhirlpool,
   propFlowerbed as makeFlowerPatch, PIER_POSITION, PIER_ROTATION,
+  HARBOR_POSITION, HARBOR_ROTATION, buildHarbor, makeWaterfall,
 } from "./props";
+import { COAST_MAX, SHORELINE_U, coastRadius, scatter } from "./shape";
 import { makeSky, makeSun, makeMoon, makeShootingStars, makeCloudLayer, skyStateFor, skyGradient } from "./atmosphere";
-import { makeOcean, makeSandShelf, makeBoundary, ISLAND_RADIUS, TERRITORY_RADIUS, WATER_LEVEL } from "./ocean";
+import { makeOcean, makeSandShelf, makeBoundary, TERRITORY_RADIUS, WATER_LEVEL } from "./ocean";
 import { makeWeather } from "./weather";
 import { makeYacht, YACHT_LENGTH } from "./yacht";
 import { SEASON_PALETTES, WEATHER_PROFILES, seasonForDate, autoWeather, goldenPhase, goldenWeatherOk } from "../lib/season";
+import { weatherBias } from "../lib/barometer";
+import type { BarometerBand } from "../lib/barometer";
 import type { Season, WeatherId, GoldenKind } from "../lib/season";
 import { SHOP_BY_ID } from "../lib/shop";
 import type { GroundPalette } from "../lib/shop";
@@ -96,6 +101,10 @@ interface Props {
   decor: Record<IsleSlot, string[]>;
   /** Người chơi bấm vào bến câu trên đảo. */
   onFish: (zone: "shore" | "vortex") => void;
+  /** Bấm vào bến cảng trong thế giới 3D thì mở bảng viễn dương. */
+  onHarbor: () => void;
+  /** Dải phong vũ biểu thị trường — nghiêng bảng cân thời tiết tự động. */
+  barometer: BarometerBand;
   /** Du thuyền lọt vào một xoáy nước ngoài khơi. */
   onVortex: () => void;
   /** Giờ trong ngày do chế độ ảnh ấn định (0..24), hoặc `null` để bám đồng hồ thật. */
@@ -170,18 +179,18 @@ function viewPose(view: ViewId, activeIsle: DistrictId = "crypto"): { pos: THREE
 
 export default function WorldScene({
   levels, selected, onSelect, handleRef, lang, islands, activeIsle, voyage, helmInput, yachtTier, world, decor,
-  onFish, onVortex, timeOverride, showLabels, onGolden,
+  onFish, onHarbor, barometer, onVortex, timeOverride, showLabels, onGolden,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
   const labelEls = useRef<Record<string, HTMLDivElement | null>>({});
   const propsRef = useRef({
     levels, selected, onSelect, lang, islands, activeIsle, voyage, helmInput, yachtTier, world, decor,
-    onFish, onVortex, timeOverride, showLabels, onGolden,
+    onFish, onHarbor, barometer, onVortex, timeOverride, showLabels, onGolden,
   });
   propsRef.current = {
     levels, selected, onSelect, lang, islands, activeIsle, voyage, helmInput, yachtTier, world, decor,
-    onFish, onVortex, timeOverride, showLabels, onGolden,
+    onFish, onHarbor, barometer, onVortex, timeOverride, showLabels, onGolden,
   };
 
   const sceneApi = useRef<{
@@ -432,43 +441,49 @@ export default function WorldScene({
       return null;
     }
 
-    let terrain: THREE.Mesh | null = null;
     let terrainKey: string | null = null;
     let activeSeason: Season = seasonForDate(new Date());
     /* Thảm cỏ được dựng sau, nhưng `rebuildTerrain` là nơi duy nhất biết bảng
        màu của mùa nên nó vẫn phải là chỗ tô lại cỏ. */
     let grassLayer: Grass | null = null;
+    let duneLayer: Grass | null = null;
+
+    /** Sắc lá của mùa, đã pha sắc nền người chơi mua ở Chợ (nếu có). */
+    function foliageOf(season: Season): TerrainPalette {
+      const ground = groundPaletteOf("main");
+      const palette = SEASON_PALETTES[season];
+      /* Sắc nền mua ở Chợ pha vào màu mùa chứ không thay hẳn — mùa đông vẫn ra
+         mùa đông, chỉ là thảm cỏ mang sắc người chơi chọn. */
+      return {
+        foliage: ground ? new THREE.Color(palette.foliage).lerp(new THREE.Color(ground.top), 0.72).getHex() : palette.foliage,
+        foliageAlt: ground
+          ? new THREE.Color(palette.foliageAlt).lerp(new THREE.Color(ground.rim), 0.55).getHex()
+          : palette.foliageAlt,
+        snow: palette.snow,
+      };
+    }
+
+    /* Lưới địa hình dựng đúng một lần. Sang mùa chỉ ghi lại mảng màu. Bản trước
+       vứt cả khối đi rồi dựng lại, nên danh sách vật cản của camera phải được
+       vá tay mỗi lần — quên một nhịp là camera chui xuống dưới đảo. */
+    const terrain = buildTerrain(foliageOf(activeSeason));
+    scene.add(terrain.mesh);
 
     function rebuildTerrain(season: Season) {
       const ground = groundPaletteOf("main");
       const key = `${season}|${ground ? ground.top.toString(16) : "-"}`;
       const palette = SEASON_PALETTES[season];
-      /* Sắc nền mua ở Chợ pha vào màu mùa chứ không thay hẳn — mùa đông vẫn ra
-         mùa đông, chỉ là thảm cỏ mang sắc người chơi chọn. */
-      const foliage = ground ? new THREE.Color(palette.foliage).lerp(new THREE.Color(ground.top), 0.72).getHex() : palette.foliage;
-      const foliageAlt = ground ? new THREE.Color(palette.foliageAlt).lerp(new THREE.Color(ground.rim), 0.55).getHex() : palette.foliageAlt;
+      const tint = foliageOf(season);
       /* Cây và thảm cỏ dùng vật liệu dùng chung nên chỉ cần đổi màu, không dựng lại. */
       m.leaves1.color.setHex(palette.foliage);
       m.leaves2.color.setHex(palette.foliageAlt);
-      grassLayer?.setPalette(foliage, foliageAlt, palette.snow);
+      grassLayer?.setPalette(tint.foliage, tint.foliageAlt, palette.snow);
+      duneLayer?.setPalette(tint.foliage, tint.foliageAlt, palette.snow);
       if (terrainKey === key) return;
       terrainKey = key;
-      const previousTerrain = terrain;
-      if (terrain) {
-        scene.remove(terrain);
-        terrain.geometry.dispose();
-        (terrain.material as THREE.Material).dispose();
-      }
-      terrain = buildTerrain({ foliage, foliageAlt, snow: palette.snow });
-      scene.add(terrain);
-      /* Địa hình được dựng lại mỗi lần sang mùa, nên danh sách vật cản của
-         camera phải trỏ sang khối mới — nếu không, sau lần đổi mùa đầu tiên
-         camera lại chui xuống được dưới đảo. */
-      const stale = rig.colliders.indexOf(previousTerrain as THREE.Object3D);
-      if (stale >= 0) rig.colliders.splice(stale, 1);
-      if (rig.colliders.length) rig.colliders.push(terrain);
+      terrain.setPalette(tint);
     }
-    rebuildTerrain(seasonForDate(new Date()));
+    rebuildTerrain(activeSeason);
 
     scene.add(buildPaths(m));
     scene.add(buildGate(m));
@@ -536,8 +551,12 @@ export default function WorldScene({
       const season: Season = prefs.mode === "manual" ? prefs.season : seasonForDate(now);
       const state = skyStateFor(now);
       const isNight = state.daylight < 0.28;
-      const chosen: WeatherId = prefs.mode === "manual" ? prefs.weather : autoWeather(now, season, isNight);
-      const key = `${minute}|${season}|${chosen}|${prefs.quality}|${prefs.effects}`;
+      /* Thời tiết tự động nghiêng theo phong vũ biểu thị trường. Ở chế độ tay
+         thì không: người chơi đã tự chọn trời rồi, đừng cãi lại họ. */
+      const band = propsRef.current.barometer;
+      const chosen: WeatherId =
+        prefs.mode === "manual" ? prefs.weather : autoWeather(now, season, isNight, weatherBias(band));
+      const key = `${minute}|${season}|${chosen}|${prefs.quality}|${prefs.effects}|${band}`;
       if (!force && key === lastEnvKey) return;
       lastEnvKey = key;
 
@@ -605,6 +624,11 @@ export default function WorldScene({
       shootingStars.setActive(isNight && profile.overcast < 0.4 && effectStrength() > 0);
       cloudTint.setHex(palette.fog).lerp(new THREE.Color(0xd8e6e2), 0.25 + state.daylight * 0.5);
       cloudLayer.setCover(profile.overcast, cloudTint);
+      /* Bóng mây đậm nhất lúc trời có mây rải rác. Quang hẳn thì không có gì để
+         đổ bóng, mà u ám hẳn thì cả bầu trời là một tấm mây liền — cũng không
+         có bóng, chỉ có ánh sáng bẹt. Cả hai đầu đều về 0. */
+      const scatter = profile.overcast * (1 - profile.overcast) * 4;
+      terrain.setCloudShadow(scatter * state.daylight * 0.9);
 
       /* ---- hạt thời tiết ---- */
       weather.set(chosen, effectStrength());
@@ -614,7 +638,10 @@ export default function WorldScene({
       /* Gió là thứ duy nhất trong khung hình cho biết trời đang lặng hay đang
          giông trước cả khi hạt mưa rơi xuống. Nó chạy trong vertex shader nên
          không tốn gì, và vẫn thổi kể cả khi người chơi tắt hạt hiệu ứng. */
-      grassLayer?.setWind(reduceMotion ? 0 : 0.24 + profile.rain * 0.7 + profile.overcast * 0.35);
+      const wind = reduceMotion ? 0 : 0.24 + profile.rain * 0.7 + profile.overcast * 0.35;
+      grassLayer?.setWind(wind);
+      /* Cỏ đụn cao hơn nên ngả mạnh hơn trong cùng một cơn gió. */
+      duneLayer?.setWind(wind * 1.25);
 
       checkGolden(now, chosen);
     }
@@ -663,63 +690,84 @@ export default function WorldScene({
     }
     for (const d of DISTRICT_IDS) rebuildDistrict(d);
 
-    /* scenery: trees, rocks, lamps */
+    /* ---------------------- cây cối, đá và đèn ----------------------
+       Bản trước là ba mảng toạ độ chép tay: hai mươi bảy cây thông, hai mươi
+       bốn cây dừa, mười bốn hòn đá. Chúng không giãn theo hòn đảo được — nới
+       bán kính lên là cả vành ngoài trống trơn, mà muốn lấp thì phải gõ tay
+       thêm mấy chục dòng toạ độ rồi tự nhẩm xem cái nào rơi xuống biển.
+
+       `scatter` gieo tất định theo hạt giống nên bố cục vẫn cố định qua các
+       lần tải trang, nhưng nó biết đường bờ, biết chỗ nào là lối đi lát đá, và
+       biết chỗ nào là cát. */
     const scenery = new THREE.Group();
-    const treeSpots: [number, number, number][] = [
-      [15.5, 3, 1.2], [-15, 4, 1.05], [14, -12, 0.9], [-14, -12.5, 1.15], [5.5, 14, 1.0],
-      [-5.5, 14.5, 0.85], [17.5, -4, 0.8], [-17.5, -4.5, 0.95], [0.5, -15.5, 1.1], [-8, -16, 0.8],
-      [8.5, -16.5, 0.9], [12, 11.5, 0.95], [-12, 11.5, 1.05], [18, 8, 0.85], [-18, 8.5, 0.9],
-      /* Trồng dày thêm về phía sườn trong: một rừng thông thưa mười lăm cây chỉ
-         đọc ra "vài cái cây", không đọc ra "hòn đảo có rừng". */
-      [10.5, 15.5, 0.86], [-10.2, 15.8, 0.92], [16.4, -8.6, 1.02], [-16.6, -8.4, 0.88],
-      [3.4, -17.4, 0.94], [-3.6, -17.2, 1.06], [19.6, 2.4, 0.8], [-19.8, 2.6, 0.86],
-      [6.8, 17.6, 0.78], [-6.6, 17.4, 0.84], [13.4, -15.2, 0.82], [-13.2, -15.4, 0.9],
+
+    /* Bến câu và bến cảng phải giữ được khoảng trống quanh chúng. */
+    const clearings: [number, number, number][] = [
+      [PIER_POSITION.x, PIER_POSITION.z, 6.5],
+      [HARBOR_POSITION.x, HARBOR_POSITION.z, 8.5],
     ];
-    for (const [x, z, s] of treeSpots) {
-      const tree = makeTree(m, s, Math.random() > 0.5 ? m.leaves1 : m.leaves2);
-      /* Đặt theo cao độ mặt đất thật chứ không phải y = 0: những cây nằm ngoài
-         bán kính 17 đứng trên bãi thoải, để y = 0 là chúng lơ lửng trên cát. */
-      tree.position.set(x, terrainHeightAt(x, z), z);
-      tree.rotation.y = x * z;
+    const nearClearing = (x: number, z: number) =>
+      clearings.some(([cx, cz, r]) => (x - cx) ** 2 + (z - cz) ** 2 < r * r);
+
+    /* Rừng thông trên cao nguyên: tránh vách đá vì thông không mọc trên đá trần. */
+    for (const spot of scatter({
+      count: 74,
+      minU: 0.3,
+      maxU: 0.73,
+      seed: 0x7d3e1,
+      spacing: 2.5,
+      minFlatness: 0.72,
+      maxSand: 0.05,
+      avoidCliff: true,
+      reject: nearClearing,
+    })) {
+      const tree = makeTree(m, 0.78 + spot.roll * 0.5, spot.roll > 0.5 ? m.leaves1 : m.leaves2, spot.roll);
+      tree.position.set(spot.x, spot.y, spot.z);
+      tree.rotation.y = spot.roll * Math.PI * 2;
       scenery.add(tree);
     }
-    /* Đá rải trên bãi cát mới mở rộng, làm mép đảo có nhịp chứ không trống trơn. */
-    const rockSpots: [number, number, number][] = [
-      [21.5, -6, 1.3], [-22, -5, 1.1], [19, 14, 0.9], [-19, 14.5, 1.2], [3, 20.5, 1.0],
-      [-4, 21, 0.8], [23, 2, 0.7], [-23.5, 1, 0.9], [10, -20, 1.1], [-10, -20.5, 0.8],
-      [24.2, -10.5, 0.6], [-24.6, 8.2, 0.65], [13.5, 20.4, 0.55], [-6.5, -22.6, 0.7],
-    ];
-    for (const [x, z, s] of rockSpots) {
-      const rock = makeRock(m, s);
-      rock.position.set(x, 0.1, z);
-      rock.rotation.y = x + z;
+
+    /* Dừa men theo bãi cát — chúng là thứ vẽ ra đường bờ khi nhìn từ xa. */
+    for (const spot of scatter({
+      count: 62,
+      minU: 0.72,
+      maxU: 0.94,
+      seed: 0x2c19f,
+      spacing: 2.3,
+      minSand: 0.25,
+      avoidCliff: true,
+      reject: nearClearing,
+    })) {
+      const palm = makePalm(m);
+      palm.position.set(spot.x, spot.y, spot.z);
+      palm.scale.setScalar((0.82 + spot.roll * 0.4) * 1.25);
+      palm.rotation.y = spot.roll * Math.PI * 2;
+      scenery.add(palm);
+    }
+
+    /* Đá rải ngoài mép nước và trên mũi đá, cho đường bờ có nhịp. */
+    for (const spot of scatter({
+      count: 46,
+      minU: 0.78,
+      maxU: 0.99,
+      seed: 0x5ba07,
+      spacing: 2.0,
+      reject: nearClearing,
+    })) {
+      const rock = makeRock(m, 0.55 + spot.roll * 0.85, spot.roll);
+      rock.position.set(spot.x, spot.y + 0.1, spot.z);
+      rock.rotation.y = spot.roll * 7.3;
       scenery.add(rock);
     }
+
     for (const d of DISTRICT_IDS) {
       const a = DISTRICT_POS[d];
       const len = Math.sqrt(a.x * a.x + a.z * a.z);
       const px = a.x * 0.72 + (-a.z / len) * 1.6;
       const pz = a.z * 0.72 + (a.x / len) * 1.6;
       const lamp = makeLamp(m);
-      lamp.position.set(px, 0, pz);
+      lamp.position.set(px, terrainHeightAt(px, pz), pz);
       scenery.add(lamp);
-    }
-
-    /* Dừa và luống hoa men theo bãi cát. Ảnh tham chiếu của hòn đảo dày đặc cây
-       cối; bản cũ chỉ có 15 cây thông nên mép đảo trông trơ trọi. */
-    const palmSpots: [number, number, number][] = [
-      [20.5, 4.5, 1.0], [21.8, -1.5, 0.9], [19.6, 9.4, 1.05], [16.8, 15.2, 0.95], [11.5, 19.4, 1.0],
-      [5.4, 21.6, 0.88], [-1.5, 22.2, 1.0], [-8.2, 21.0, 0.92], [-14.4, 18.2, 1.0], [-19.2, 12.6, 0.95],
-      [-21.6, 6.2, 1.05], [-22.2, -0.8, 0.9], [-20.8, -7.4, 1.0], [-17.4, -13.6, 0.95], [-12.2, -17.8, 1.0],
-      [-5.6, -20.6, 0.88], [1.8, -21.4, 1.02], [8.6, -20.2, 0.94], [14.8, -16.8, 1.0], [19.2, -11.4, 0.92],
-      [9.2, 8.6, 0.8], [-9.4, 8.2, 0.85], [9.0, -6.8, 0.8], [-8.8, -6.4, 0.85],
-    ];
-    for (const [x, z, s] of palmSpots) {
-      const palm = makePalm(m);
-      palm.position.set(x, terrainHeightAt(x, z), z);
-      palm.scale.setScalar(s * 1.25);
-      palm.rotation.y = x * z;
-      scenery.add(palm);
     }
 
     /* ---------------------- thảm cỏ dựng bằng instancing ----------------------
@@ -727,24 +775,42 @@ export default function WorldScene({
        công trình chỉ là một mảng màu xanh phẳng. Cây thông và cây dừa vẫn dựng
        từng cây một: mỗi cây có số tầng tán, độ cong thân và độ rủ tàu lá riêng,
        gộp chúng thành một hình dùng chung sẽ đánh mất đúng cái làm chúng đẹp. */
-    /* Thảm cỏ photoreal: 8000 ngọn desktop / 2600 mobile trong 1 draw call.
-       Mật độ gấp đôi để khoảng giữa công trình không còn mảng phẳng. */
-    grassLayer = makeGrass(reduceMotion ? 0 : compactGpu ? 2600 : 8000);
+    /* 15.000 ngọn desktop / 3.200 mobile, vẫn trong đúng một lệnh vẽ.
+
+       Con số này không phải chọn cho đẹp: vùng cỏ nở từ bán kính 17,4 lên 23,2
+       nên diện tích tăng 1,78 lần. Giữ nguyên 8.000 ngọn là mật độ tụt đi gần
+       một nửa, và khoảng giữa các công trình lại thành mảng phẳng — đúng thứ mà
+       thảm cỏ sinh ra để xoá. */
+    grassLayer = makeGrass(reduceMotion ? 0 : compactGpu ? 3200 : 15000);
     if (grassLayer.mesh) {
       scene.add(grassLayer.mesh);
       staticTicks.push(grassLayer.tick);
     }
+    /* Dải cỏ đụn chờm qua ranh giới cỏ–cát và thò tiếp ra bãi. Không có nó thì
+       chỗ cỏ gặp cát là một đường màu cắt ngang — hai mảng dán cạnh nhau chứ
+       không phải một bãi biển. Một lệnh vẽ nữa, mật độ bằng một phần tư. */
+    duneLayer = makeGrass(reduceMotion ? 0 : compactGpu ? 900 : 4200, DUNE_BAND);
+    if (duneLayer.mesh) {
+      scene.add(duneLayer.mesh);
+      staticTicks.push(duneLayer.tick);
+    }
     /* Dựng xong mới có gì để tô: gọi lại để thảm cỏ nhận bảng màu của mùa. */
     rebuildTerrain(activeSeason);
-    const flowerSpots: [number, number, number][] = [
-      [6.4, 6.2, 0xb79cff], [-6.6, 6.0, 0xff9ac1], [6.2, -4.4, 0xf0c268], [-6.4, -4.2, 0x5ce8c4],
-      [13.8, 6.8, 0xff9ac1], [-13.6, 6.6, 0xb79cff], [3.2, 11.4, 0xf0c268], [-3.4, 11.2, 0xe9f3f0],
-      [15.4, -8.2, 0xb79cff], [-15.2, -8.0, 0xff9ac1],
-    ];
-    for (const [x, z, color] of flowerSpots) {
-      const bed = makeFlowerPatch(color);
-      bed.position.set(x, 0, z);
-      bed.rotation.y = x + z;
+    const FLOWER_COLORS = [0xb79cff, 0xff9ac1, 0xf0c268, 0x5ce8c4, 0xe9f3f0];
+    for (const spot of scatter({
+      count: 24,
+      minU: 0.2,
+      maxU: 0.68,
+      seed: 0x9f4d2,
+      spacing: 3.4,
+      minFlatness: 0.85,
+      maxSand: 0.02,
+      avoidCliff: true,
+      reject: nearClearing,
+    })) {
+      const bed = makeFlowerPatch(FLOWER_COLORS[Math.floor(spot.roll * FLOWER_COLORS.length) % FLOWER_COLORS.length]);
+      bed.position.set(spot.x, spot.y, spot.z);
+      bed.rotation.y = spot.roll * 6.3;
       scenery.add(bed);
     }
     scene.add(scenery);
@@ -758,6 +824,16 @@ export default function WorldScene({
     pier.rotation.y = PIER_ROTATION;
     pier.userData.tag = "fishing";
     scene.add(pier);
+
+    const falls = makeWaterfall();
+    scene.add(falls.group);
+    staticTicks.push(falls.tick);
+
+    const harbor = buildHarbor(m, staticTicks);
+    harbor.position.copy(HARBOR_POSITION);
+    harbor.rotation.y = HARBOR_ROTATION;
+    harbor.userData.tag = "harbor";
+    scene.add(harbor);
 
     /* --------------------------- living world --------------------------- */
     const shirtColors = [0x5ce8c4, 0xe0aa50, 0xff7f6e, 0x9fd0ff, 0xdde9e4, 0xf0c268, 0x7fe8bb, 0xd9a066, 0x8ba4a7, 0xffd88a];
@@ -793,9 +869,9 @@ export default function WorldScene({
     });
 
     const boats = [
-      { g: makeBoat(m), r: 52, speed: 0.04, phase: 0.8 },
-      { g: makeBoat(m), r: 68, speed: -0.028, phase: 3.6 },
-      { g: makeBoat(m), r: 88, speed: 0.021, phase: 5.1 },
+      { g: makeBoat(m), r: 62, speed: 0.04, phase: 0.8 },
+      { g: makeBoat(m), r: 78, speed: -0.028, phase: 3.6 },
+      { g: makeBoat(m), r: 96, speed: 0.021, phase: 5.1 },
     ];
     boats.forEach((b) => scene.add(b.g));
 
@@ -803,7 +879,7 @@ export default function WorldScene({
     for (let i = 0; i < 5; i++) {
       const b = makeBird();
       scene.add(b.group);
-      birds.push({ ...b, r: 17 + Math.random() * 10, h: 10 + Math.random() * 6, speed: 0.22 + Math.random() * 0.16, phase: Math.random() * Math.PI * 2 });
+      birds.push({ ...b, r: 24 + Math.random() * 14, h: 11 + Math.random() * 7, speed: 0.22 + Math.random() * 0.16, phase: Math.random() * Math.PI * 2 });
     }
 
     staticTicks.push((t) => {
@@ -942,7 +1018,7 @@ export default function WorldScene({
          nước tính theo gốc của nhóm chứa — đảo riêng nằm cao hơn đảo chính. */
       const layout =
         slot === "main"
-          ? { radius: 20.5, seaRadius: ISLAND_RADIUS + 2.6, seaY: WATER_LEVEL }
+          ? { radius: 25.5, seaRadius: COAST_MAX + 2.6, seaY: WATER_LEVEL }
           : { radius: ISLE_RADIUS - 1.4, seaRadius: ISLE_RADIUS + 1.6, seaY: WATER_LEVEL - 0.2 };
       const ids = propsRef.current.decor[slot] ?? [];
       ids.forEach((id, index) => {
@@ -967,7 +1043,7 @@ export default function WorldScene({
     function randomVortexSpot(target: THREE.Vector3) {
       for (let attempt = 0; attempt < 24; attempt++) {
         const angle = Math.random() * Math.PI * 2;
-        const radius = 46 + Math.random() * (SAIL_LIMIT - 56);
+        const radius = COAST_MAX + 22 + Math.random() * (SAIL_LIMIT - COAST_MAX - 32);
         /* Đỉnh sóng cao tới 0,34 so với mực nước trung bình; đặt vòng xoáy thấp
            hơn thế thì nó lúc ẩn lúc hiện sau từng con sóng. */
         target.set(Math.cos(angle) * radius, WATER_LEVEL + 0.42, Math.sin(angle) * radius);
@@ -1309,6 +1385,7 @@ export default function WorldScene({
       if (tag) {
         sound.tick();
         if (tag === "fishing") propsRef.current.onFish("shore");
+        else if (tag === "harbor") propsRef.current.onHarbor();
         else if (tag.startsWith("isle:")) propsRef.current.onSelect("isle", tag.slice(5) as DistrictId);
         else propsRef.current.onSelect(tag as ViewId);
       }
@@ -1460,10 +1537,12 @@ export default function WorldScene({
       lighthouse,
       village,
       pier,
+      harbor,
       ...DISTRICT_IDS.map((d) => districtGroups[d] as THREE.Object3D),
       ...DISTRICT_IDS.map((d) => isleGroups[d] as THREE.Object3D),
     ];
-    if (terrain) rig.colliders.push(terrain);
+    rig.colliders.push(terrain.mesh);
+    staticTicks.push((t) => terrain.tick(t));
 
     /* ------------------------------ API ------------------------------ */
     sceneApi.current = {
@@ -1510,11 +1589,14 @@ export default function WorldScene({
     const nextYachtPosition = new THREE.Vector3();
 
     function yachtPositionAllowed(position: THREE.Vector3): boolean {
-      if (Math.hypot(position.x, position.z) < 29.2) return false;
+      /* Bờ không còn là đường tròn: một hằng số duy nhất thì hoặc du thuyền
+         húc vào mũi đất, hoặc không vào nổi vịnh. */
+      const radial = Math.hypot(position.x, position.z);
+      if (radial < coastRadius(Math.atan2(position.z, position.x)) * SHORELINE_U + 2.4) return false;
       for (const district of DISTRICT_IDS) {
         if (position.distanceToSquared(ISLE_POSITIONS[district]) < Math.pow(ISLE_RADIUS + 2.1, 2)) return false;
       }
-      return Math.hypot(position.x, position.z) < SAIL_LIMIT;
+      return radial < SAIL_LIMIT;
     }
 
     function frame() {
@@ -1730,6 +1812,7 @@ export default function WorldScene({
       flightTween?.kill();
       gtaoPass.dispose();
       grassLayer?.dispose();
+      duneLayer?.dispose();
       controls.dispose();
       scene.traverse((o) => {
         const mesh = o as THREE.Mesh;

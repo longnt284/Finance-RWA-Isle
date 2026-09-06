@@ -25,16 +25,31 @@ Kiểm thử không cần trình duyệt (chạy được ở mọi môi trườ
 các nguồn giá):
 
 ```bash
-npm test                # typecheck + i18n + giá + bảng tin + câu cá + Chợ
+npm test                # typecheck + i18n + hình đảo + cơ chế + giá + tin + cá + Chợ
 npm run test:i18n       # mọi khoá i18n mà mã nguồn yêu cầu đều có đủ vi lẫn en
+npm run test:shape      # hình học đảo: đường bờ, mép nước, hướng pháp tuyến, gieo hạt
+npm run test:mechanics  # viễn dương, phong vũ biểu, mồi câu, chuỗi nhiệm vụ tuần
 npm run test:prices     # thứ tự xoay vòng nguồn giá, có stub fetch
 npm run test:news       # bóc tách RSS, khử trùng lặp, chịu được nguồn 403
 npm run test:fishing    # điều kiện xuất hiện, giá theo cân nặng, bậc cần câu
 npm run test:shop       # 100 hạng mục và mọi `kind` đều dựng được hình
 ```
 
-`test:fishing` và `test:shop` biên dịch `src/lib/*.ts` tại chỗ nên kiểm đúng bộ
-luật ứng dụng dùng. `test:shop` còn đối chiếu mọi `kind` trong danh mục với các
+`test:shape`, `test:mechanics`, `test:fishing` và `test:shop` biên dịch
+`src/lib/*.ts` và `src/world/shape.ts` tại chỗ nên kiểm đúng bộ luật ứng dụng dùng.
+
+`test:shape` tồn tại vì hai lỗi thật, cả hai đều thuộc loại "mã chạy, không báo
+gì, chỉ có khung hình sai". Thứ nhất: mặt trên của đảo từng là nắp hình quạt của
+`CylinderGeometry` — chỉ có đỉnh ở bán kính 0 và ở vành, không vòng nào ở giữa —
+nên toàn bộ hàm nhiễu địa hình không có đỉnh nào để bám, còn cây và nhà lại đặt
+theo `terrainHeightAt`; đo được là nhà trong xóm làng lơ lửng 1,16 đơn vị trên
+mặt đất của chính nó. Thứ hai: khi dựng lại bằng lưới toạ độ cực, thứ tự đỉnh
+tam giác bị ngược nên pháp tuyến chúc xuống và cả mặt đảo bị cull — mặt biển phủ
+lên đúng chỗ nó vừa đứng.
+
+`test:mechanics` đo bằng số chứ không đọc bằng mắt: tỷ lệ ra hàng lạ của mỗi
+tuyến viễn dương trên 4.000 lần quay, và mồi câu có thật sự kéo cá hiếm lên hay
+không trên 10.000 lần thả cần. `test:shop` còn đối chiếu mọi `kind` trong danh mục với các
 nhánh `case` trong `world/props.ts`: thêm hạng mục mà quên viết bộ dựng thì món
 đó vẫn mua và "đặt lên đảo" được nhưng không hiện ra gì — lỗi im lặng khó thấy
 nhất trong cả tính năng này.
@@ -65,6 +80,30 @@ seed mà ứng dụng dùng, nên nó bấm trúng chứ không đoán.
 
 ## Thế giới 3D
 
+- **Hình dáng hòn đảo** nằm gọn trong `src/world/shape.ts` — một nguồn sự thật
+  duy nhất mà mặt đất, mặt nước, thảm cỏ, xóm làng và camera đều đọc. Đường bờ
+  không phải đường tròn: nó là một hàm theo phương vị gồm hai tầng hài (ba mũi
+  đất) trừ đi một vùng lõm (Vịnh Thương Cảng), nên bán kính chạy từ 24 tới 36,5
+  quanh giá trị danh nghĩa 32. Mọi ngưỡng địa hình tính theo `u` — bán kính chia
+  cho bán kính bờ tại chính phương vị đó — nên bãi cát tự nở ra ở mũi đất và co
+  lại trong vịnh, không cần một bảng ngoại lệ nào. Hàm bờ có kèm một bản GLSL
+  dựng từ chính các hằng số ấy, để mặt nước đặt dải bọt đúng chỗ có bờ.
+- **Mặt đảo là lưới toạ độ cực** 256 nan quạt × 72 vòng, cộng một váy đá dựng
+  đứng tụt xuống dưới mực nước, dựng bằng đúng `terrainHeightAt` mà mọi thứ khác
+  dùng để đặt vật thể. Bản trước dùng nắp `CylinderGeometry`, vốn là một hình
+  quạt chỉ có đỉnh ở tâm và ở vành: mặt đảo thật sự là một hình nón trơn trong
+  khi cây và nhà lại được đặt theo hàm nhiễu, lệch nhau tới 1,16 đơn vị ngay tại
+  vành đai xóm làng. `npm run test:shape` chặn cả lỗi đó lẫn lỗi thứ tự đỉnh làm
+  pháp tuyến chúc xuống.
+- **Mũi đá và thác nước**: một mũi đất hướng bắc dâng lên 7,2 đơn vị với mặt bàn
+  phẳng, sườn cắt gấp và vài tầng đá; váy đá bên dưới gần như dựng đứng nên mặt
+  nhìn ra biển đọc ra vách chứ không đọc ra đồi. Thác đổ từ giữa mặt vách xuống
+  biển: rèm nước là lưới riêng có alpha theo đỉnh nên bốn cạnh tan dần vào đá và
+  vào bụi nước — một tấm phẳng đục thì mắt đọc ra tờ bìa trắng dán lên vách.
+- **Bóng mây trôi** chạy trong shader của chính mặt đất, không phải một tấm phẳng
+  phủ lên: tấm phẳng sẽ xén ngang chân nhà, gốc cây và bậc thềm. Bóng đậm nhất
+  lúc trời có mây rải rác và về 0 ở cả hai đầu — quang hẳn thì không có gì đổ
+  bóng, u ám hẳn thì cả bầu trời là một tấm mây liền.
 - **Chu kỳ ngày** bám đồng hồ thật: bình minh, buổi sáng, chính ngọ, xế chiều,
   hoàng hôn, đêm. Mặt trời phình và ngả đỏ khi sát chân trời; mặt trăng có miệng
   hố và pha khuyết tính theo chu kỳ giao hội 29,53 ngày; sao chỉ hiện khi trời đủ
@@ -102,30 +141,44 @@ seed mà ứng dụng dùng, nên nó bấm trúng chứ không đoán.
   (20ms thay vì 26ms) và máy yếu bị loại thẳng. Cận cảnh camera nâng từ 0,1 lên
   0,6 và viễn cảnh hạ từ 1400 xuống 950: tỉ lệ xa/gần 14.000 lần của bản trước
   làm depth texture vỡ vụn, bóng tiếp xúc biến thành những vệt sọc.
-- **Thảm cỏ dựng bằng instancing**: **4.200 ngọn cỏ** trong đúng một lệnh vẽ.
-  Không có nó, khoảng giữa những công trình chỉ là một mảng màu xanh phẳng. Ngọn
-  cỏ ngả theo gió trong vertex shader (uốn theo `y` mũ 1,7 nên gốc đứng yên còn
-  ngọn ngả hẳn, pha lấy từ toạ độ thế giới của chính nó nên cả thảm gợn thành
-  sóng); gió mạnh dần theo mưa và mây. Sắc cỏ đổi theo mùa qua `instanceColor`
-  nên sang mùa chỉ là ghi lại một mảng nhỏ, không dựng lại hình. Máy yếu hạ xuống
-  1.600 ngọn, `prefers-reduced-motion` tắt hẳn thảm cỏ. Cây thông và cây dừa vẫn
-  dựng từng cây một: mỗi cây có số tầng tán, độ cong thân và độ rủ tàu lá riêng
-  theo hạt giống, gộp chúng thành một hình dùng chung sẽ đánh mất đúng cái làm
-  chúng đẹp. Cây được đặt theo cao độ mặt đất thật, nên những cây ngoài bán kính
-  17 đứng trên bãi thoải chứ không lơ lửng trên cát.
+- **Thảm cỏ dựng bằng instancing**, hai dải, mỗi dải một lệnh vẽ. Dải đồng cỏ
+  **15.000 ngọn** phủ cao nguyên; dải **cỏ đụn 4.200 ngọn** cao hơn, thưa hơn,
+  ngả vàng, mọc chờm qua ranh giới cỏ–cát rồi thò tiếp ra bãi. Thiếu dải thứ hai
+  thì chỗ cỏ gặp cát là một đường màu cắt ngang, và mắt đọc ra hai mảng dán cạnh
+  nhau chứ không đọc ra một bãi biển. Ngọn cỏ ngả theo gió trong vertex shader
+  (uốn theo `y` mũ 1,7 nên gốc đứng yên còn ngọn ngả hẳn, pha lấy từ toạ độ thế
+  giới của chính nó nên cả thảm gợn thành sóng); gió mạnh dần theo mưa và mây, và
+  cỏ đụn cao hơn nên ngả mạnh hơn trong cùng một cơn gió. Sắc cỏ đổi theo mùa qua
+  `instanceColor` nên sang mùa chỉ là ghi lại một mảng nhỏ, không dựng lại hình.
+  Máy yếu hạ xuống 3.200 + 900 ngọn, `prefers-reduced-motion` tắt hẳn.
+- **Cây, đá và luống hoa được gieo tất định** bằng `scatter` trong `shape.ts`, chứ
+  không phải mảng toạ độ chép tay. Mảng chép tay đúng với hòn đảo bán kính 26 và
+  chỉ đúng với nó: nới đảo ra là cả vành ngoài trống trơn, mà muốn lấp thì phải
+  gõ tay mấy chục dòng toạ độ rồi tự nhẩm xem cái nào rơi xuống biển. Bộ gieo
+  biết đường bờ, biết chỗ nào là lối đi lát đá, chỗ nào là cát, chỗ nào là vách
+  đá — và cùng một hạt giống luôn ra cùng một bố cục. Cây thông và cây dừa vẫn
+  dựng từng cây một: mỗi cây có số tầng tán, độ cong thân và độ rủ tàu lá riêng,
+  gộp chúng thành một hình dùng chung sẽ đánh mất đúng cái làm chúng đẹp.
 - **Bản đồ môi trường** nướng bằng PMREM từ một dải gradient trời–chân trời–biển
   96×48 pixel có nướng sẵn cả đĩa mặt trời (không thêm request nào): vàng, mái
   kính và đá bóng nhận về một điểm chói thật thay vì một mảng sáng đều.
 - **Bóng đổ** dùng `normalBias` để khử vệt sọc tự đổ bóng trên mặt cong mà không
   làm bóng bay khỏi chân vật thể; tấm bóng đổ đổi kích thước theo mức chất lượng
   (1024 trên máy yếu → 4096 ở mức "cao").
-- **Xóm làng** 21 công trình — nhà gỗ, quầy chợ, lều trại, vọng lâu, cối xay
-  gió, tháp canh, nhà kính — cùng 24 cây dừa và 10 luống hoa ven bãi cát. Quảng
+- **Xóm làng** 36 công trình — nhà gỗ, quầy chợ, lều trại, vọng lâu, cối xay
+  gió, tháp canh, nhà kính — gieo trong vành đất giữa quảng trường và bãi cát,
+  quay mặt ra biển. Nhà ở có khói bếp bốc lên: nhà có cửa sổ sáng vẫn có thể là
+  mô hình kiến trúc, nhà có khói bếp thì bên trong đang có người nấu cơm. Quảng
   trường hải đăng là sân tròn nhiều bậc có lan can, chậu lửa và nan hoa lát đá.
-- **Lãnh hải hình tròn**: bãi cát mở rộng và thoải dần xuống thềm nông ngọc lam,
-  ngoài xa là vành san hô phát sáng đánh dấu ranh giới. Mặt nước là một đĩa tròn
-  nên đường chân trời không bao giờ lộ góc vuông. Lái du thuyền tới gần rìa, một
-  vách sáng hiện dần để bạn biết đã tới giới hạn.
+- **Bến cảng** nằm trong Vịnh Thương Cảng, chỗ đường bờ lõm sâu nhất — đúng nơi
+  một cảng thật sẽ chọn: kín gió và nước sâu sát bờ. Kè đá, nhà kho, cần cẩu
+  quay chậm và đèn hiệu nhấp nháy. Mỗi món tự tìm cao độ mặt đất dưới chân mình
+  thay vì chép tay theo một mặt cát đã nghiêng, nên bậc kè không lún vào cát mà
+  cũng không treo trên nước.
+- **Lãnh hải**: bãi cát thoải dần xuống thềm nông ngọc lam bám theo đúng đường
+  bờ, ngoài xa là vành san hô phát sáng đánh dấu ranh giới. Mặt nước là một đĩa
+  tròn nên đường chân trời không bao giờ lộ góc vuông. Lái du thuyền tới gần rìa,
+  một vách sáng hiện dần để bạn biết đã tới giới hạn.
 - **Mặt nước** dựng trên pháp tuyến ba lớp: sóng lừng lấy đạo hàm giải tích của
   chính ba hàm sin dịch chuyển đỉnh (lưới thưa hơn bước sóng nên
   `computeVertexNormals` sẽ ra pháp tuyến sai), cộng hai lớp gợn cuộn ngược
@@ -154,8 +207,11 @@ seed mà ứng dụng dùng, nên nó bấm trúng chứ không đoán.
   thứ đang được lấy làm mẫu không đẩy camera vào; mặt sau bị loại theo `side` của
   vật liệu nên tia xuất phát từ trong lòng một khối kín vẫn đi thẳng ra ngoài. Một
   sàn cứng chặn camera rơi xuống dưới mặt cỏ hay chìm dưới mặt biển.
-- **Sáu góc máy đã ngắm sẵn**: cổng đảo từ biển, chân hải đăng, hàng chân trời,
-  bến câu sát nước, vành san hô, flycam toàn đảo. Mỗi khung có tiêu cự riêng
+- **Tám góc máy đã ngắm sẵn**: cổng đảo từ biển, chân hải đăng, hàng chân trời,
+  bến câu sát nước, vành san hô, mũi đá và thác nước, Vịnh Thương Cảng, flycam
+  toàn đảo. Khung "Vịnh Thương Cảng" đặt lệch sang một bên chứ không thẳng trục
+  cầu tàu: nhìn dọc trục thì chính cầu tàu chắn tia va chạm và camera bị kéo dí
+  vào mặt kè. Mỗi khung có tiêu cự riêng
   (30–52mm) và đặt một tiền cảnh cụ thể vào một phần ba khung, nên bấm một nút là
   có ảnh thay vì phải tự xoay tìm. Bốn trong sáu khung đặt máy thấp hơn điểm ngắm
   và ngước lên — đó là toàn bộ lý do chúng đẹp — nên chúng được quyền nới trần góc
@@ -218,6 +274,18 @@ một lần cho mỗi buổi mỗi ngày. Không được đáp lại thì nó t
   **Giỏ cá** là phần chưa bán; bán lấy **xu**, giá theo cân nặng thật của con cá.
 - **Cần câu lên cấp** theo tổng số cá đã bắt (15 · 45 · 110 · 240 con): khung
   rộng ra và tiến trình nạp nhanh hơn.
+- **Mồi câu** mua bằng xu ở tab *Quầy mồi*: bốn loại từ giun biển tới mồi tanh,
+  cộng thẳng vào `luck` của xổ số cắn câu. Một hộp chỉ trừ lượt khi cá THẬT SỰ
+  cắn câu, nên thả cần rồi đổi ý đóng bảng thì không mất mồi. Mua thêm khi hộp cũ
+  chưa hết thì số lượt cộng dồn.
+- **Giải trong ngày** chấm theo con cá nặng nhất bắt được hôm nay, năm bậc từ
+  1kg tới 150kg. Bắt con to hơn thì lên bậc và nhận thêm **phần chênh**, không
+  trả trùng phần đã lĩnh. Bộ sưu tập thưởng cho việc gặp đủ loài còn giải này
+  thưởng cho con to nhất — hai mục tiêu kéo về hai hướng nên chúng không nuốt
+  lẫn nhau.
+- **May mắn cộng từ ba nguồn**: vùng nước, hộp mồi, và phong vũ biểu thị trường.
+  Tổng bị kẹp trần 0,95 — `luck` bằng 1 thì cá thường gần như biến mất và cả
+  bảng độ hiếm mất luôn ý nghĩa.
 
 ## Chợ Trang Trí
 
@@ -232,6 +300,47 @@ một lần cho mỗi buổi mỗi ngày. Không được đáp lại thì nó t
 - **Sắc nền** là loại một-chọn-một: đặt nền mới thì nền cũ tự nhường chỗ. Trên
   đảo chính, sắc nền pha vào bảng màu mùa chứ không thay hẳn, nên mùa đông vẫn
   ra mùa đông.
+
+## Bến cảng viễn dương
+
+Trước tính năng này, xu chỉ đến từ một nguồn — bán cá — và câu cá thì đòi người
+chơi phải ngồi trước màn hình. Nghĩa là đóng tab lại thì hòn đảo đứng im hoàn
+toàn.
+
+- **Năm tuyến** từ 20 phút tới 12 giờ, mở dần theo hạng du thuyền. Xu mỗi giờ
+  tăng dần theo tuyến nhưng không tuyến nào bỏ xa tuyến khác: tuyến dài thắng ở
+  chỗ ít phải quay lại bấm, không ở chỗ trả gấp mấy lần.
+- Tính hoàn toàn bằng **dấu thời gian**, không cần một vòng lặp nền nào — chuyến
+  vẫn chạy khi bạn đóng tab. Chấm trên biểu tượng mỏ neo bật lên đúng lúc tàu cập
+  bến.
+- Phần thưởng **rút tất định từ lúc khởi hành**. Quay ngẫu nhiên lúc nhận hàng
+  thì tải lại trang trước khi bấm là quay lại được, và người chơi nào cũng sẽ tìm
+  ra chuyện đó.
+- Ngoài xu, mỗi tuyến có một tỷ lệ mang về **một món trong Chợ** mà bạn chưa có,
+  giá không vượt trần của tuyến. Dùng lại danh mục 100 hạng mục thay vì dựng một
+  danh mục riêng: danh mục riêng nghĩa là thêm hình khối phải dựng, thêm tên phải
+  dịch, và thêm một đường nữa mà `test:shop` không phủ tới.
+
+Bấm vào bến cảng trong thế giới 3D, hoặc biểu tượng mỏ neo trên thanh công cụ.
+
+## Phong vũ biểu thị trường
+
+Trò này kéo giá thật của 250 mã theo thời gian thực rồi dùng chúng làm đúng một
+việc: chạy chữ dưới chân màn hình. Phong vũ biểu nối dữ liệu đó vào thế giới 3D.
+
+- Đọc **trung vị** phần trăm thay đổi trong ngày của chính rổ theo dõi của bạn —
+  không phải cả 250 mã, và không phải trung bình. Rổ theo dõi hay có một mã nhảy
+  40% trong ngày; lấy trung bình thì một mã đó điều khiển cả bầu trời, còn trung
+  vị thì nó chỉ là một phiếu.
+- Năm dải: **Bão · Âm u · Bình lặng · Quang · Rực rỡ**, hiện ở cuối băng giá.
+  Giá tham chiếu (khi mạng chặn nguồn thật) bị loại khỏi phép tính, nên phong vũ
+  biểu không bao giờ báo một thị trường không tồn tại.
+- Nó **nghiêng bảng cân thời tiết**, không thay bảng: mùa đông vẫn ra mùa đông,
+  và một ngày đỏ giữa mùa xuân phải ra giông chứ không ra tuyết. Chế độ thời tiết
+  tay thì không đụng tới — bạn đã tự chọn trời rồi.
+- Nó **đổi tỷ lệ cắn câu ngược chiều thị trường**: biển động thì cá hiếm nổi lên.
+  Thuận chiều thì ngày đỏ vừa mất tiền thật vừa mất luôn cả trò chơi, mà ngày
+  xanh thì chẳng còn lý do gì để ra biển.
 
 ## Bảng tin
 
@@ -267,6 +376,24 @@ một lần cho mỗi buổi mỗi ngày. Không được đáp lại thì nó t
   chú, ghé thăm các quận, ra khơi, vượt khảo thí, chỉnh trang đảo, câu cá, đọc
   bảng tin, sắm đồ ở Chợ. Cùng một ngày luôn ra cùng bộ nhiệm vụ; XP nhận được
   nhân theo chuỗi ngày.
+
+## Chuỗi nhiệm vụ tuần
+
+Nhiệm vụ ngày đo một việc trong một hôm. Chuỗi tuần đo một thói quen.
+
+- **Bốn chuỗi**, mỗi tuần ra một chuỗi, đổi vào **thứ Hai** theo chuẩn ISO. Không
+  dùng `Math.floor(mốc thời gian / 7 ngày)`: mốc đó trôi dần so với ngày trong
+  tuần, nên chuỗi sẽ đổi vào thứ Tư tuần này rồi thứ Bảy tuần sau.
+- Mỗi chuỗi **bốn chặng làm theo đúng thứ tự**, và chỉ chặng đang làm mới nhận
+  tiến độ. Cho cả bốn chặng cùng chạy thì "chuỗi" chỉ còn là bốn nhiệm vụ rời rạc
+  dán chung một cái tên.
+- Không chặng nào trong cùng một chuỗi đo trùng chỉ số — lặp lại thì chặng thứ
+  hai chỉ là chặng thứ nhất kéo dài.
+- Xong cả bốn chặng thì nhận xu cộng **một món trong Chợ đắt nhất còn thiếu**
+  trong tầm giá của chuỗi: phần thưởng cuối chuỗi phải là thứ để dành cả tuần mới
+  mua nổi, không phải một bụi cỏ giá bốn mươi xu.
+
+Bảng chuỗi nằm ngay dưới nhiệm vụ ngày trong *Điểm danh*.
 
 ## Du thuyền
 
@@ -375,8 +502,13 @@ ghi đè ngầm là cách nhanh nhất để người dùng mất tiến độ.
 
 ## Hiệu năng
 
-- Thảm cỏ 4.200 ngọn nằm gọn trong một `InstancedMesh` (xem *Thế giới 3D*), nên
-  nó tốn đúng một lệnh vẽ.
+- Hai dải cỏ 15.000 + 4.200 ngọn nằm gọn trong hai `InstancedMesh` (xem *Thế giới
+  3D*), nên cả thảm tốn đúng hai lệnh vẽ.
+- Mặt đảo là một lưới 19.000 đỉnh dựng **đúng một lần**. Sang mùa chỉ ghi lại
+  mảng màu. Bản trước vứt cả khối đi rồi dựng lại, nên danh sách vật cản của
+  camera phải được vá tay mỗi lần — quên một nhịp là camera chui xuống dưới đảo.
+- Bóng mây chạy trong shader của mặt đất, tốn thêm chừng mười phép tính cho mỗi
+  điểm ảnh và không thêm một lượt vẽ nào.
 - Renderer tự hạ/tăng pixel ratio theo frame time, giảm shadow map và mật độ hạt
   trên thiết bị yếu, và tôn trọng `prefers-reduced-motion`.
 - Ba mức chất lượng (tự động / cao / cân bằng) cùng công tắc tắt hẳn hiệu ứng hạt
@@ -398,17 +530,27 @@ ghi đè ngầm là cách nhanh nhất để người dùng mất tiến độ.
 - `src/world/textures.ts` — bộ sinh vân bề mặt (pháp tuyến + độ nhám) bằng nhiễu
   lặp liền mạch, không tải file.
 - `src/world/grade.ts` — lớp chỉnh màu hậu kỳ: tối góc, tán sắc, tương phản, hạt phim.
-- `src/world/ocean.ts` — đại dương tròn, thềm cát nông, vành san hô ranh giới.
+- `src/world/shape.ts` — **nguồn sự thật duy nhất cho hình học đảo**: đường bờ
+  theo phương vị, cao độ, độ phẳng, mép nước, mặt nạ mũi đá, và bộ gieo hạt tất
+  định. Kèm bản GLSL của hàm bờ, dựng từ chính các hằng số ấy.
+- `src/world/ocean.ts` — đại dương, thềm cát bám đường bờ, vành san hô ranh giới.
 - `src/world/weather.ts` — hệ hạt mưa, tuyết, cánh hoa, lá, sương, đom đóm.
 - `src/world/yacht.ts` — du thuyền 5 hạng.
 - `src/world/build.ts` — địa hình, công trình bốn lĩnh vực, đảo riêng, trang trí.
-- `src/world/props.ts` — 40 kiểu vật phẩm của Chợ, xóm làng, bến câu, xoáy nước.
-- `src/world/camera.ts` — giá máy: giới hạn góc theo ngữ cảnh, va chạm, sáu góc máy đẹp.
-- `src/world/grass.ts` — thảm cỏ dựng bằng instancing, ngả theo gió trong shader.
+- `src/world/props.ts` — 40 kiểu vật phẩm của Chợ, xóm làng, bến câu, bến cảng,
+  thác nước, khói bếp, xoáy nước.
+- `src/world/camera.ts` — giá máy: giới hạn góc theo ngữ cảnh, va chạm, tám góc máy đẹp.
+- `src/world/grass.ts` — hai dải cỏ dựng bằng instancing, ngả theo gió trong shader.
 - `src/components/Photo.tsx` — chế độ ảnh: giờ, mùa, thời tiết, khung hình, xuất PNG.
 - `src/components/FishArt.tsx` — bộ dựng hình SVG cho 35 loài cá.
 - `src/lib/fishArt.ts` — dáng thân và bảng màu của từng loài.
-- `src/lib/fishing.ts` — danh mục cá, xổ số cắn câu và hằng số minigame.
+- `src/lib/fishing.ts` — danh mục cá, xổ số cắn câu, mồi câu, giải trong ngày và
+  hằng số minigame.
+- `src/lib/expedition.ts` — năm tuyến viễn dương, đồng hồ đếm ngược và bộ rút
+  phần thưởng tất định.
+- `src/lib/barometer.ts` — phong vũ biểu thị trường: trung vị, năm dải, và ba
+  bảng hệ số (thời tiết, may mắn câu cá, xu viễn dương).
+- `src/lib/chain.ts` — bốn chuỗi nhiệm vụ tuần, khoá tuần ISO và luật lên chặng.
 - `src/lib/shop.ts` — 100 hạng mục trang trí, tên song ngữ nằm trong dữ liệu.
 - `src/lib/news.ts` — client bảng tin, bộ nhớ dùng chung và dấu "đã đọc".
 - `api/news.js` — gom RSS nhiều nguồn, parse không cần dependency.

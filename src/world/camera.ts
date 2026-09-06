@@ -9,15 +9,16 @@
 
 import * as THREE from "three";
 import type { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { ISLE_POSITIONS, terrainHeightAt } from "./build";
-import { ISLAND_RADIUS, WATER_LEVEL } from "./ocean";
-import { PIER_POSITION } from "./props";
+import { ISLE_POSITIONS } from "./build";
+import { BAY_ANGLE, COAST_MAX, CLIFF_ANGLE, coastRadius, terrainHeightAt } from "./shape";
+import { WATER_LEVEL } from "./ocean";
+import { HARBOR_POSITION, PIER_POSITION } from "./props";
 
 /* ------------------------------------------------------------------ */
 /*  Góc máy đẹp                                                        */
 /* ------------------------------------------------------------------ */
 
-export type ShotId = "harbor" | "lighthouse" | "skyline" | "pier" | "lagoon" | "drone";
+export type ShotId = "harbor" | "lighthouse" | "skyline" | "pier" | "lagoon" | "cliff" | "bay" | "drone";
 
 export interface CameraShot {
   id: ShotId;
@@ -28,7 +29,7 @@ export interface CameraShot {
 }
 
 /**
- * Sáu khung hình đã ngắm sẵn.
+ * Tám khung hình đã ngắm sẵn.
  *
  * Chúng không phải "vị trí camera ngẫu nhiên nhìn cũng được": mỗi cái đặt một
  * tiền cảnh cụ thể vào một phần ba khung — cổng đảo, chân hải đăng, hàng công
@@ -40,8 +41,8 @@ export const CAMERA_SHOTS: CameraShot[] = [
     /* Từ ngoài biển nhìn vào cổng đảo: cổng vàng làm tiền cảnh, hải đăng lùi
        về sau và cao hơn — bố cục ba lớp cổ điển. */
     id: "harbor",
-    pos: new THREE.Vector3(1.5, 4.2, ISLAND_RADIUS + 17),
-    target: new THREE.Vector3(0, 4.4, ISLAND_RADIUS - 6),
+    pos: new THREE.Vector3(1.5, 4.2, coastRadius(Math.PI / 2) + 19),
+    target: new THREE.Vector3(0, 4.4, coastRadius(Math.PI / 2) - 8),
     fov: 40,
   },
   {
@@ -58,8 +59,8 @@ export const CAMERA_SHOTS: CameraShot[] = [
        rạc. Điểm ngắm nằm trước dãy nhà chứ không sau, để tia va chạm không bao
        giờ xuyên qua chính thứ đang được lấy làm mẫu. */
     id: "skyline",
-    pos: new THREE.Vector3(0, 5.8, 40),
-    target: new THREE.Vector3(0, 4.6, 12),
+    pos: new THREE.Vector3(0, 5.8, 47),
+    target: new THREE.Vector3(0, 4.6, 14),
     fov: 30,
   },
   {
@@ -79,9 +80,35 @@ export const CAMERA_SHOTS: CameraShot[] = [
     fov: 38,
   },
   {
+    /* Mũi đá nhìn từ ngoài khơi, máy đặt sát mặt nước và ngước lên: vách đá
+       dựng đứng chỉ đọc ra "cao" khi có đường chân trời thấp hơn nó. */
+    id: "cliff",
+    pos: new THREE.Vector3(
+      Math.cos(CLIFF_ANGLE - 0.42) * (COAST_MAX + 17),
+      WATER_LEVEL + 3.4,
+      Math.sin(CLIFF_ANGLE - 0.42) * (COAST_MAX + 17)
+    ),
+    target: new THREE.Vector3(Math.cos(CLIFF_ANGLE) * COAST_MAX * 0.9, 3.4, Math.sin(CLIFF_ANGLE) * COAST_MAX * 0.9),
+    fov: 44,
+  },
+  {
+    /* Trong lòng Vịnh Thương Cảng nhìn vào bến cảng: cần cẩu và đèn hiệu làm
+       tiền cảnh, hai mũi đất hai bên khép khung lại. */
+    id: "bay",
+    /* Đặt lệch sang một bên chứ không thẳng trục cầu tàu: nhìn dọc trục thì
+       chính cầu tàu chắn tia va chạm và camera bị kéo dí vào mặt kè. */
+    pos: new THREE.Vector3(
+      Math.cos(BAY_ANGLE - 0.62) * (COAST_MAX * 0.98),
+      WATER_LEVEL + 6.4,
+      Math.sin(BAY_ANGLE - 0.62) * (COAST_MAX * 0.98)
+    ),
+    target: new THREE.Vector3(HARBOR_POSITION.x, 1.2, HARBOR_POSITION.z),
+    fov: 40,
+  },
+  {
     /* Flycam: nhìn xuống toàn đảo, đủ cao để thấy cả bốn quận lẫn vành cát. */
     id: "drone",
-    pos: new THREE.Vector3(-26, 46, 30),
+    pos: new THREE.Vector3(-31, 55, 36),
     target: new THREE.Vector3(0, 1.5, 0),
     fov: 48,
   },
@@ -92,7 +119,7 @@ export const CAMERA_SHOTS: CameraShot[] = [
  * nó đọc thẳng mảng này từ mã nguồn để biết cần những khoá `shot.*` nào. Kiểu
  * `ShotId` giữ cho hai danh sách không lệch nhau.
  */
-export const SHOT_IDS: ShotId[] = ["harbor", "lighthouse", "skyline", "pier", "lagoon", "drone"];
+export const SHOT_IDS: ShotId[] = ["harbor", "lighthouse", "skyline", "pier", "lagoon", "cliff", "bay", "drone"];
 export const SHOT_BY_ID = new Map(CAMERA_SHOTS.map((shot) => [shot.id, shot]));
 
 /* ------------------------------------------------------------------ */
@@ -223,7 +250,7 @@ export function makeCameraRig(camera: THREE.PerspectiveCamera, controls: OrbitCo
          camera xuống dưới sóng. */
       const floor = Math.max(
         WATER_LEVEL + 1.0,
-        radial < ISLAND_RADIUS + 2 ? terrainHeightAt(camera.position.x, camera.position.z) + 1.15 : -Infinity
+        radial < COAST_MAX + 2 ? terrainHeightAt(camera.position.x, camera.position.z) + 1.15 : -Infinity
       );
       if (camera.position.y < floor) camera.position.y = floor;
 

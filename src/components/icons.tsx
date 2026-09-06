@@ -394,3 +394,43 @@ export const IconEyeOff = ({ className }: P) => (
     <path d="M9.9 10a3 3 0 0 0 4.2 4.2" />
   </svg>
 );
+
+/* Chuỗi nhiệm vụ tuần — hai mắt xích móc vào nhau. */
+export const IconChain = ({ className }: P) => (
+  <svg {...base(className)}>
+    <path d="M9.5 14.5a3.5 3.5 0 0 1 0-5l2-2a3.5 3.5 0 0 1 5 5l-1 1" />
+    <path d="M14.5 9.5a3.5 3.5 0 0 1 0 5l-2 2a3.5 3.5 0 0 1-5-5l1-1" />
+  </svg>
+);
+
+/* Phong vũ biểu thị trường — kim đồng hồ đo áp suất. */
+export const IconBarometer = ({ className }: P) => (
+  <svg {...base(className)}>
+    <path d="M4 16a8 8 0 0 1 16 0" />
+    <path d="M12 16l4.2-4.6" />
+    <circle cx="12" cy="16" r="1.2" />
+    <path d="M4 19h16" />
+  </svg>
+);
+
+/* Mồi câu — con giun trên lưỡi câu. */
+export const IconBait = ({ className }: P) => (
+  <svg {...base(className)}>
+    <path d="M12 3v8" />
+    <path d="M12 11a3.4 3.4 0 0 1-6.6 1.2c0-2.4 2.6-3.4 4.6-1.8" />
+    <path d="M15 5.5h-3" />
+    <path d="M16.5 15.5c1.6 1.2 1.6 3.4 0 4.6-1.7 1.2-4.2.4-4.2-1.6 0-2.2 2.6-2.6 4.2-3z" />
+  </svg>
+);
+
+/* Giải câu cá trong ngày — chiếc cúp. */
+export const IconTrophy = ({ className }: P) => (
+  <svg {...base(className)}>
+    <path d="M8 4h8v5a4 4 0 0 1-8 0V4z" />
+    <path d="M8 6H5.5a2.5 2.5 0 0 0 2.5 4.5" />
+    <path d="M16 6h2.5a2.5 2.5 0 0 1-2.5 4.5" />
+    <path d="M12 13v4" />
+    <path d="M9 20h6" />
+    <path d="M10 17h4l.6 3h-5.2z" />
+  </svg>
+);

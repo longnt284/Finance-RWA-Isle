@@ -15,7 +15,7 @@
 
 import * as THREE from "three";
 import type { TickFn } from "./build";
-import { terrainHeightAt, terrainFlatness } from "./build";
+import { GRASS_U, PLAZA_RADIUS, WATER_LEVEL, coastRadius, mulberry32, sandiness, terrainFlatness, terrainHeightAt } from "./shape";
 
 export interface Grass {
   mesh: THREE.InstancedMesh | null;
@@ -63,22 +63,37 @@ function bladeGeometry(): THREE.BufferGeometry {
   return geo;
 }
 
-/** Bộ sinh số giả ngẫu nhiên có hạt giống: mỗi lần tải trang ra đúng một đảo. */
-function mulberry32(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
+/**
+ * Một dải cỏ: gieo ở đâu, cao bao nhiêu, ngả sang sắc gì.
+ *
+ * Có hai dải. Dải đồng cỏ phủ cao nguyên. Dải cỏ đụn mọc chờm qua ranh giới
+ * cỏ–cát và thò tiếp ra bãi: thiếu nó thì chỗ cỏ gặp cát là một đường màu cắt
+ * ngang, và mắt đọc ra hai mảng dán cạnh nhau chứ không đọc ra một bãi biển.
+ */
+export interface GrassBand {
+  innerU: number;
+  outerU: number;
+  /** Mọc được trên cát tới mức nào, 0..1. */
+  maxSand: number;
+  /** Hệ số chiều cao so với cỏ đồng. */
+  height: number;
+  /** Sắc mà bảng màu mùa được kéo về, và kéo bao nhiêu. */
+  tint?: number;
+  tintAmount?: number;
 }
 
-/** Bán kính vùng cỏ mọc — trong là quảng trường, ngoài là bãi cát. */
-const GRASS_INNER = 4.2;
-const GRASS_OUTER = 17.4;
+export const MEADOW_BAND: GrassBand = { innerU: 0, outerU: GRASS_U, maxSand: 0.08, height: 1 };
+/* Cỏ đụn cao hơn, thưa hơn, ngả vàng — và được phép mọc hẳn ra cát. */
+export const DUNE_BAND: GrassBand = {
+  innerU: GRASS_U - 0.05,
+  outerU: 0.9,
+  maxSand: 1,
+  height: 1.45,
+  tint: 0xcbbd7e,
+  tintAmount: 0.55,
+};
 
-export function makeGrass(count: number): Grass {
+export function makeGrass(count: number, band: GrassBand = MEADOW_BAND): Grass {
   const uniforms = { uTime: { value: 0 }, uWind: { value: 0.5 } };
   const noop: Grass = {
     mesh: null,
@@ -136,19 +151,29 @@ export function makeGrass(count: number): Grass {
      bản đồ mặt nạ riêng, mà lại luôn khớp với địa hình thật. */
   const random = mulberry32(0x15ecd);
   const placed: { x: number; z: number; y: number; scale: number; yaw: number; tone: number }[] = [];
+  /* Vùng cỏ tính theo `u` chứ không theo bán kính tuyệt đối, nên nó nở ra ở mũi
+     đất và co lại trong vịnh y như bãi cát. Bản trước là hằng số 17,4 chép tay,
+     lệch hẳn so với mốc bãi cát 17 mà địa hình dùng. */
+  const innerU = Math.max(band.innerU, (PLAZA_RADIUS - 5.6) / coastRadius(0));
+  const outerU = band.outerU;
   let attempts = 0;
   while (placed.length < count && attempts < count * 12) {
     attempts++;
     const angle = random() * Math.PI * 2;
-    const radius = Math.sqrt(GRASS_INNER * GRASS_INNER + random() * (GRASS_OUTER * GRASS_OUTER - GRASS_INNER * GRASS_INNER));
+    const u = Math.sqrt(innerU * innerU + random() * (outerU * outerU - innerU * innerU));
+    const radius = u * coastRadius(angle);
     const x = Math.cos(angle) * radius;
     const z = Math.sin(angle) * radius;
     if (terrainFlatness(x, z) < 0.55) continue;
+    /* Cỏ đồng không mọc trên cát ướt lẫn trên vách đá; cỏ đụn thì được. */
+    if (sandiness(x, z) > band.maxSand) continue;
+    /* Không dải nào mọc dưới mực nước. */
+    if (terrainHeightAt(x, z) < WATER_LEVEL + 0.25) continue;
     placed.push({
       x,
       z,
       y: terrainHeightAt(x, z),
-      scale: 0.34 + random() * 0.34,
+      scale: (0.34 + random() * 0.34) * band.height,
       yaw: random() * Math.PI,
       tone: random(),
     });
@@ -175,6 +200,7 @@ export function makeGrass(count: number): Grass {
 
   const tint = new THREE.Color();
   const snowTint = new THREE.Color(0xdfe9ec);
+  const bandTint = band.tint !== undefined ? new THREE.Color(band.tint) : null;
 
   return {
     mesh,
@@ -189,6 +215,7 @@ export function makeGrass(count: number): Grass {
         tint.copy(a).lerp(b, tone);
         /* Mỗi ngọn lệch sáng một chút, nếu không thảm cỏ lại thành mảng bệt. */
         tint.multiplyScalar(0.82 + tone * 0.4);
+        if (bandTint) tint.lerp(bandTint, (band.tintAmount ?? 0.5) * (0.6 + tone * 0.6));
         if (snow > 0) tint.lerp(snowTint, snow * 0.6);
         mesh.setColorAt(i, tint);
       }

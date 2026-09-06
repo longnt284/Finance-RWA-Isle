@@ -6,16 +6,19 @@ import { fmt } from "../lib/format";
 import { sound } from "../lib/audio";
 import { seasonForDate, phaseForHour } from "../lib/season";
 import {
-  FISH, FISH_BY_ID, FISH_COUNT, RARITY_META, RARITY_ORDER,
-  biteDelay, fishName, fishValue, fishingConfig, nextFishTarget, rodProgress, rollFish, rollWeight,
+  BAITS, FISH, FISH_BY_ID, FISH_COUNT, RARITY_META, RARITY_ORDER, TOURNAMENT_TIERS,
+  baitLuck, biteDelay, fishName, fishValue, fishingConfig, nextFishTarget, rodProgress, rollFish, rollWeight,
+  tournamentReward, tournamentTier,
 } from "../lib/fishing";
 import type { FishDef } from "../lib/fishing";
+import { useBarometer } from "../lib/market";
+import { luckBias } from "../lib/barometer";
 import FishArt from "./FishArt";
-import { IconClose, IconFish, IconCoinPurse, IconCheck } from "./icons";
+import { IconClose, IconFish, IconCoinPurse, IconCheck, IconBait, IconTrophy } from "./icons";
 
 export type FishingZone = "shore" | "vortex";
 type Phase = "idle" | "casting" | "hooked" | "caught" | "escaped";
-type Tab = "game" | "basket" | "book";
+type Tab = "game" | "basket" | "shop" | "book";
 
 /** Xoáy nước ngoài khơi mới là nơi cá hiếm sống — đó là lý do phải ra khơi. */
 const ZONE_LUCK: Record<FishingZone, number> = { shore: 0.12, vortex: 0.8 };
@@ -51,8 +54,9 @@ function rarityChip(rarity: FishDef["rarity"], label: string) {
 /* ================================================================== */
 
 function Rod({ zone, onLanded }: { zone: FishingZone; onLanded: (fish: FishDef, weight: number, value: number) => void }) {
-  const { state } = useStore();
+  const { state, api } = useStore();
   const t = makeT(state.lang);
+  const barometer = useBarometer(state.watchlist);
   const [phase, setPhase] = useState<Phase>("idle");
   const [hooked, setHooked] = useState<FishDef | null>(null);
   const [result, setResult] = useState<{ fish: FishDef; weight: number; value: number; fresh: boolean } | null>(null);
@@ -103,7 +107,14 @@ function Rod({ zone, onLanded }: { zone: FishingZone; onLanded: (fish: FishDef, 
     const timer = window.setTimeout(() => {
       const now = new Date();
       const night = phaseForHour(now.getHours() + now.getMinutes() / 60) === "night";
-      const fish = rollFish(zone, seasonForDate(now), night, ZONE_LUCK[zone]);
+      /* Ba nguồn may mắn cộng dồn: vùng nước, hộp mồi, và phong vũ biểu thị
+         trường. Kẹp trần 0,95 — luck bằng 1 thì cá thường gần như biến mất và
+         cả bảng độ hiếm mất luôn ý nghĩa. */
+      const luck = Math.min(0.95, ZONE_LUCK[zone] * luckBias(barometer.band) + baitLuck(state.bait));
+      const fish = rollFish(zone, seasonForDate(now), night, luck);
+      /* Trừ mồi ngay lúc cá cắn câu, không trừ lúc thả cần: thả cần rồi đổi ý
+         đóng bảng thì không mất mồi. */
+      if (state.bait) api.spendBait();
       const config = fishingConfig(fish, rod.level);
       run.current = {
         barY: 0.4,
@@ -125,7 +136,7 @@ function Rod({ zone, onLanded }: { zone: FishingZone; onLanded: (fish: FishDef, 
       sound.chime();
     }, delay * 1000);
     return () => window.clearTimeout(timer);
-  }, [zone, rod.level, paint]);
+  }, [zone, rod.level, paint, state.bait, api, barometer.band]);
 
   /* Ván đầu tự thả cần để người chơi không phải bấm hai lần mới thấy gì. */
   useEffect(() => {
@@ -489,6 +500,111 @@ function Collection() {
 /*  Bảng câu cá                                                       */
 /* ================================================================== */
 
+/* ================================================================== */
+/*  Quầy mồi và giải trong ngày                                        */
+/* ================================================================== */
+
+function BaitShop() {
+  const { state, api } = useStore();
+  const t = makeT(state.lang);
+  const tier = tournamentTier(state.tournament.bestKg);
+  const pending = tier > state.tournament.claimedTier;
+  const reward = tournamentReward(state.tournament.bestKg);
+  const already = state.tournament.claimedTier > 0 ? TOURNAMENT_TIERS[state.tournament.claimedTier - 1].coins : 0;
+
+  return (
+    <div className="space-y-5">
+      {/* ------------------------------ mồi câu ------------------------------ */}
+      <section>
+        <h3 className="flex items-center gap-1.5 font-display text-[10px] tracking-[0.22em] text-mist-400">
+          <IconBait className="h-3.5 w-3.5 text-gold-400" />
+          {t("bait.title")}
+        </h3>
+        <p className="mt-1 text-[11px] leading-relaxed text-mist-500">{t("bait.sub")}</p>
+
+        {state.bait && (
+          <div className="mt-3 rounded-lg border border-jade-500/35 bg-jade-500/8 px-3 py-2 text-[11.5px] text-jade-300">
+            {t("bait.active", { n: t(`bait.${state.bait.id}`), c: state.bait.left })}
+          </div>
+        )}
+
+        <div className="mt-3 space-y-2">
+          {BAITS.map((bait) => {
+            const affordable = state.coins >= bait.price;
+            return (
+              <div key={bait.id} className="flex items-center gap-2.5 rounded-xl border border-mist-500/12 bg-ink-850/55 p-3">
+                <div className="min-w-0 flex-1">
+                  <div className="text-[13px] font-semibold text-mist-100">{t(`bait.${bait.id}`)}</div>
+                  <div className="mt-0.5 font-mono text-[10px] text-mist-500">
+                    {t("bait.stats", { n: bait.casts, p: Math.round(bait.luck * 100) })}
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    api.buyBait(bait.id);
+                    sound.coin();
+                  }}
+                  disabled={!affordable}
+                  className={`shrink-0 rounded-md px-2.5 py-1.5 font-mono text-[10px] transition-all ${
+                    affordable ? "btn-gold" : "cursor-not-allowed border border-mist-500/25 text-mist-500"
+                  }`}
+                >
+                  {fmt(bait.price)}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* ------------------------------ giải trong ngày ------------------------------ */}
+      <section className="border-t border-mist-500/12 pt-4">
+        <h3 className="flex items-center gap-1.5 font-display text-[10px] tracking-[0.22em] text-mist-400">
+          <IconTrophy className="h-3.5 w-3.5 text-gold-400" />
+          {t("tn.title")}
+        </h3>
+        <p className="mt-1 text-[11px] leading-relaxed text-mist-500">{t("tn.sub")}</p>
+
+        <div className="mt-3 rounded-xl border border-mist-500/12 bg-ink-850/55 p-3.5">
+          <div className="flex items-baseline justify-between">
+            <span className="text-[11px] text-mist-400">{t("tn.best")}</span>
+            <span className="font-mono text-[15px] text-gold-300">{state.tournament.bestKg.toFixed(2)} kg</span>
+          </div>
+          <div className="mt-3 space-y-1">
+            {TOURNAMENT_TIERS.map((step, index) => {
+              const reached = tier > index;
+              return (
+                <div key={step.kg} className="flex items-center gap-2 text-[11px]">
+                  {reached ? (
+                    <IconCheck className="h-3 w-3 shrink-0 text-jade-400" />
+                  ) : (
+                    <span className="h-3 w-3 shrink-0 rounded-full border border-mist-500/30" />
+                  )}
+                  <span className={reached ? "text-jade-300" : "text-mist-500"}>{step.kg} kg</span>
+                  <span className="ml-auto font-mono text-[10px] text-mist-500">{fmt(step.coins)}</span>
+                </div>
+              );
+            })}
+          </div>
+          <button
+            onClick={() => {
+              api.claimTournament();
+              sound.chime();
+            }}
+            disabled={!pending}
+            className={`mt-3 flex w-full items-center justify-center gap-2 rounded-xl py-2.5 font-display text-[11px] tracking-[0.14em] transition-all ${
+              pending ? "btn-gold glow-pulse" : "cursor-not-allowed border border-mist-500/20 text-mist-500"
+            }`}
+          >
+            {pending ? t("tn.claim", { c: reward - already }) : tier > 0 ? t("tn.claimed") : t("tn.none")}
+          </button>
+        </div>
+        <p className="mt-2 text-center font-mono text-[9.5px] text-mist-500">{t("tn.resetAt")}</p>
+      </section>
+    </div>
+  );
+}
+
 export default function FishingPanel({ zone, onClose }: { zone: FishingZone; onClose: () => void }) {
   const { state, api } = useStore();
   const t = makeT(state.lang);
@@ -537,6 +653,7 @@ export default function FishingPanel({ zone, onClose }: { zone: FishingZone; onC
           {([
             ["game", t("fs.tabGame")],
             ["basket", `${t("fs.tabBasket")}${basketSize ? ` · ${basketSize}` : ""}`],
+            ["shop", t("fs.tabShop")],
             ["book", t("fs.tabBook")],
           ] as [Tab, string][]).map(([id, label]) => (
             <button
@@ -558,6 +675,7 @@ export default function FishingPanel({ zone, onClose }: { zone: FishingZone; onC
       <div className="min-h-0 flex-1 overflow-y-auto p-5">
         {tab === "game" && <Rod zone={zone} onLanded={onLanded} />}
         {tab === "basket" && <Basket />}
+        {tab === "shop" && <BaitShop />}
         {tab === "book" && <Collection />}
       </div>
 

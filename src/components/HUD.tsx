@@ -16,9 +16,14 @@ import {
   IconBolt, IconGift, IconSound, IconSoundOff, IconCoins, IconCalc, IconNote, IconHelp,
   IconClose, IconTrendUp, IconTrendDown, IconChevD, IconCalendar, IconSliders, IconUser,
   IconBrain, IconNews, IconStore, IconFish, IconCoinPurse, IconCamera, IconEyeOff,
+  IconAnchor, IconBarometer,
 } from "./icons";
+import { useBarometer } from "../lib/market";
+import type { BarometerBand } from "../lib/barometer";
+import { expeditionRemaining } from "../lib/expedition";
+import type { ExpeditionState } from "../lib/expedition";
 
-export type DrawerId = "market" | "tools" | "notes" | "tutorial" | "quests" | "world" | "account" | "news" | "shop" | null;
+export type DrawerId = "market" | "tools" | "notes" | "tutorial" | "quests" | "world" | "account" | "news" | "shop" | "harbor" | null;
 
 interface Props {
   selected: ViewId;
@@ -39,6 +44,25 @@ interface Props {
   onClean: () => void;
   /** Bay tới một góc máy đã ngắm sẵn. */
   onShot: (id: ShotId) => void;
+}
+
+/**
+ * `true` khi chuyến viễn dương đã cập bến.
+ *
+ * Kiểm mỗi mười lăm giây thay vì mỗi khung hình: sai số tối đa mười lăm giây
+ * trên một chuyến hai mươi phút là không ai nhận ra, còn bắt HUD dựng lại sáu
+ * mươi lần một giây thì cả thanh công cụ giật theo.
+ */
+function useExpeditionLanded(expedition: ExpeditionState | null): boolean {
+  const [landed, setLanded] = useState(() => !!expedition && expeditionRemaining(expedition, Date.now()) <= 0);
+  useEffect(() => {
+    const read = () => setLanded(!!expedition && expeditionRemaining(expedition, Date.now()) <= 0);
+    read();
+    if (!expedition) return;
+    const timer = window.setInterval(read, 15_000);
+    return () => window.clearInterval(timer);
+  }, [expedition]);
+  return landed;
 }
 
 const NAV_ICONS: Record<string, (p: { className?: string }) => React.ReactElement> = {
@@ -139,8 +163,42 @@ function Ticker() {
             {row("b")}
           </div>
         </div>
+        <BarometerChip />
       </div>
     </div>
+  );
+}
+
+/* Bảng màu của năm dải phong vũ biểu. Cùng thứ tự với `BarometerBand`. */
+const BAND_TONE: Record<BarometerBand, string> = {
+  storm: "text-coral-300 border-coral-400/45",
+  gloom: "text-coral-200/85 border-coral-400/30",
+  calm: "text-mist-400 border-mist-500/25",
+  fair: "text-jade-300 border-jade-500/35",
+  radiant: "text-jade-200 border-jade-400/50",
+};
+
+/**
+ * Phong vũ biểu thị trường ở cuối băng chạy.
+ *
+ * Nó phải nói được VÌ SAO trời hôm nay như thế. Một chấm màu không có chú thích
+ * thì người chơi chỉ thấy bầu trời đổi thất thường và kết luận là game bị lỗi.
+ */
+function BarometerChip() {
+  const { state } = useStore();
+  const t = makeT(state.lang);
+  const barometer = useBarometer(state.watchlist);
+  if (!barometer.sampled) return null;
+  const sign = barometer.medianPct >= 0 ? "+" : "";
+  return (
+    <span
+      title={t("baro.tip", { n: barometer.sampled })}
+      className={`z-10 flex shrink-0 items-center gap-1.5 border-l border-gold-500/15 bg-ink-900 px-3 font-mono text-[9.5px] ${BAND_TONE[barometer.band]}`}
+    >
+      <IconBarometer className="h-3.5 w-3.5" />
+      <span className="hidden lg:inline font-display tracking-[0.14em]">{t(`baro.${barometer.band}`)}</span>
+      <span>{sign}{barometer.medianPct.toFixed(2)}%</span>
+    </span>
   );
 }
 
@@ -227,6 +285,9 @@ export default function HUD({
   /* Ô sắp nhận trong chu kỳ 7 ngày — cũng là số XP hiển thị trên nút. */
   const claimAmount = Math.round(checkinReward(checkinIndex(state)) * xpMult(state.streak));
   const claimableQuests = state.quests.ids.filter((id) => questClaimable(state, id)).length;
+  /* Dùng `useSyncExternalStore`-style tick: chuyến về là một mốc thời gian, nên
+     phù hiệu phải tự bật lên chứ không chờ người chơi bấm gì đó. */
+  const expeditionLanded = useExpeditionLanded(state.expedition);
   const pendingExams = DISTRICT_IDS.filter((district) => pendingExamLevel(state, district) !== null).length;
   /* Huy hiệu tin mới chỉ có nghĩa khi bảng tin đã tải được thứ gì đó. */
   const unread = feed.status === "ready" ? Math.min(9, unreadCount()) : 0;
@@ -364,6 +425,9 @@ export default function HUD({
           </button>
           {([
             ["quests", IconCalendar, t("ci.title"), claimableQuests + (canClaim ? 1 : 0)],
+            /* Chấm trên mỏ neo bật lên đúng lúc tàu cập bến — người chơi đóng
+               tab hai tiếng quay lại phải thấy ngay là có hàng để nhận. */
+            ["harbor", IconAnchor, t("exp.title"), expeditionLanded ? 1 : 0],
             ["news", IconNews, t("hud.news"), unread],
             ["shop", IconStore, t("hud.shop"), 0],
             ["market", IconCoins, t("hud.market"), 0],
