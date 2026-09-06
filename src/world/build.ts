@@ -923,6 +923,10 @@ export interface Terrain {
   mesh: THREE.Mesh;
   /** Sang mùa chỉ ghi lại mảng màu — không dựng lại 19.000 đỉnh. */
   setPalette(palette: TerrainPalette): void;
+  /** Đồng hồ của bóng mây trôi qua mặt đảo. */
+  tick(t: number): void;
+  /** Độ đậm của bóng mây, 0..1. Trời quang hẳn hay u ám hẳn đều không có bóng. */
+  setCloudShadow(strength: number): void;
   dispose(): void;
 }
 
@@ -1063,6 +1067,57 @@ export function buildTerrain(palette: TerrainPalette): Terrain {
     roughnessMap: grain.roughnessMap,
   });
   material.normalScale.set(0.42, 0.42);
+
+  /* Bóng mây trôi qua mặt đảo.
+
+     Làm trong shader của chính mặt đất chứ không bằng một tấm phẳng phủ lên:
+     tấm phẳng sẽ cắt ngang chân nhà, gốc cây và bậc thềm — mọi thứ đứng trên
+     mặt đất đều bị nó xén một đường ngang. Ở đây nó chỉ tối mặt đất, đúng như
+     bóng thật, và tốn thêm chừng mười phép tính cho mỗi điểm ảnh.
+
+     Nhiễu hai tầng trôi lệch hướng nhau; nhân hai tầng lại nên bóng ra từng
+     mảng tách rời chứ không thành một tấm lưới đều. */
+  const cloudUniforms = { uCloudTime: { value: 0 }, uCloudStrength: { value: 0 } };
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.uCloudTime = cloudUniforms.uCloudTime;
+    shader.uniforms.uCloudStrength = cloudUniforms.uCloudStrength;
+    shader.vertexShader = shader.vertexShader
+      .replace("#include <common>", "#include <common>\n varying vec3 vIsleWorld;")
+      .replace(
+        "#include <worldpos_vertex>",
+        "#include <worldpos_vertex>\n vIsleWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;"
+      );
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        "#include <common>",
+        `#include <common>
+         varying vec3 vIsleWorld;
+         uniform float uCloudTime;
+         uniform float uCloudStrength;
+         float isleHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+         float isleNoise(vec2 p) {
+           vec2 i = floor(p);
+           vec2 f = fract(p);
+           f = f * f * (3.0 - 2.0 * f);
+           return mix(
+             mix(isleHash(i), isleHash(i + vec2(1.0, 0.0)), f.x),
+             mix(isleHash(i + vec2(0.0, 1.0)), isleHash(i + vec2(1.0, 1.0)), f.x),
+             f.y);
+         }`
+      )
+      .replace(
+        "#include <dithering_fragment>",
+        `#include <dithering_fragment>
+         if (uCloudStrength > 0.001) {
+           vec2 drift = vIsleWorld.xz * 0.028;
+           float a = isleNoise(drift + vec2(uCloudTime * 0.011, uCloudTime * 0.007));
+           float b = isleNoise(drift * 2.3 - vec2(uCloudTime * 0.016, uCloudTime * 0.005));
+           float shade = smoothstep(0.42, 0.78, a * 0.65 + b * 0.35);
+           gl_FragColor.rgb *= 1.0 - shade * uCloudStrength * 0.34;
+         }`
+      );
+  };
+
   const mesh = new THREE.Mesh(geo, material);
   mesh.receiveShadow = true;
   mesh.castShadow = true;
@@ -1107,6 +1162,12 @@ export function buildTerrain(palette: TerrainPalette): Terrain {
   return {
     mesh,
     setPalette,
+    tick(t) {
+      cloudUniforms.uCloudTime.value = t;
+    },
+    setCloudShadow(strength) {
+      cloudUniforms.uCloudStrength.value = THREE.MathUtils.clamp(strength, 0, 1);
+    },
     dispose() {
       geo.dispose();
       material.dispose();

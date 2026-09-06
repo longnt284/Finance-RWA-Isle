@@ -1289,6 +1289,13 @@ export function buildVillage(m: Mats, ticks: TickFn[]): THREE.Group {
 
     /* Một cây và một đèn cạnh mỗi nếp nhà: nhóm lại thành "khu" chứ không phải
        vật thể lẻ loi giữa bãi cỏ. */
+    /* Khói bếp cho nhà ở — nhà kính và lều thì không có bếp. */
+    if (kind === "cottage") {
+      const smoke = chimneySmoke(ticks);
+      smoke.position.set(spot.x + Math.cos(facing) * 0.4, spot.y + 2.6, spot.z + Math.sin(facing) * 0.4);
+      g.add(smoke);
+    }
+
     if (kind === "cottage" || kind === "greenhouse") {
       const tx = spot.x + Math.cos(facing + 1.4) * 2.4;
       const tz = spot.z + Math.sin(facing + 1.4) * 2.4;
@@ -1386,6 +1393,43 @@ export function buildFishingPier(m: Mats, ticks: TickFn[]): THREE.Group {
 
   shadows(g);
   void m;
+  return g;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Khói bếp                                                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Cột khói mảnh bốc lên từ ống khói một nếp nhà.
+ *
+ * Đây là thứ rẻ nhất mà một khung hình tĩnh có thể mua để đọc ra "có người ở".
+ * Nhà có cửa sổ sáng vẫn có thể là mô hình kiến trúc; nhà có khói bếp thì bên
+ * trong đang có người nấu cơm.
+ */
+function chimneySmoke(ticks: TickFn[]): THREE.Group {
+  const g = new THREE.Group();
+  const material = additive(0xdfe6e4, 0.16);
+  const puffs: THREE.Mesh[] = [];
+  const PUFF_COUNT = 5;
+  for (let i = 0; i < PUFF_COUNT; i++) {
+    const puff = new THREE.Mesh(new THREE.SphereGeometry(0.16, 7, 6), material);
+    puffs.push(puff);
+    g.add(puff);
+  }
+  /* Pha lệch theo vị trí đặt chứ không theo `Math.random()`: hai nếp nhà cạnh
+     nhau mà khói bốc cùng nhịp thì mắt đọc ra hoạt ảnh lặp. */
+  const phase = 0;
+  ticks.push((t) => {
+    for (let i = 0; i < PUFF_COUNT; i++) {
+      const k = ((t * 0.32 + phase + i / PUFF_COUNT) % 1);
+      puffs[i].position.set(Math.sin(t * 0.7 + i) * k * 0.55, k * 2.6, Math.cos(t * 0.5 + i * 1.7) * k * 0.45);
+      puffs[i].scale.setScalar(0.5 + k * 2.1);
+    }
+    /* Một vật liệu dùng chung cho cả cụm, nên độ mờ điều theo cụm chứ không
+       theo từng quả — năm quả riêng vật liệu là năm lệnh vẽ cho mỗi nếp nhà. */
+    (material as THREE.MeshBasicMaterial).opacity = 0.1 + 0.06 * Math.sin(t * 0.9);
+  });
   return g;
 }
 

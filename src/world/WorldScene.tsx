@@ -39,7 +39,7 @@ import {
   DECOR_IDS,
 } from "./build";
 import type { TickFn, Mats, DecorId } from "./build";
-import { makeGrass } from "./grass";
+import { makeGrass, DUNE_BAND } from "./grass";
 import type { Grass } from "./grass";
 import { makeCameraRig, polarBetween, CAMERA_SHOTS, SHOT_BY_ID } from "./camera";
 import type { ShotId } from "./camera";
@@ -446,6 +446,7 @@ export default function WorldScene({
     /* Thảm cỏ được dựng sau, nhưng `rebuildTerrain` là nơi duy nhất biết bảng
        màu của mùa nên nó vẫn phải là chỗ tô lại cỏ. */
     let grassLayer: Grass | null = null;
+    let duneLayer: Grass | null = null;
 
     /** Sắc lá của mùa, đã pha sắc nền người chơi mua ở Chợ (nếu có). */
     function foliageOf(season: Season): TerrainPalette {
@@ -477,6 +478,7 @@ export default function WorldScene({
       m.leaves1.color.setHex(palette.foliage);
       m.leaves2.color.setHex(palette.foliageAlt);
       grassLayer?.setPalette(tint.foliage, tint.foliageAlt, palette.snow);
+      duneLayer?.setPalette(tint.foliage, tint.foliageAlt, palette.snow);
       if (terrainKey === key) return;
       terrainKey = key;
       terrain.setPalette(tint);
@@ -622,6 +624,11 @@ export default function WorldScene({
       shootingStars.setActive(isNight && profile.overcast < 0.4 && effectStrength() > 0);
       cloudTint.setHex(palette.fog).lerp(new THREE.Color(0xd8e6e2), 0.25 + state.daylight * 0.5);
       cloudLayer.setCover(profile.overcast, cloudTint);
+      /* Bóng mây đậm nhất lúc trời có mây rải rác. Quang hẳn thì không có gì để
+         đổ bóng, mà u ám hẳn thì cả bầu trời là một tấm mây liền — cũng không
+         có bóng, chỉ có ánh sáng bẹt. Cả hai đầu đều về 0. */
+      const scatter = profile.overcast * (1 - profile.overcast) * 4;
+      terrain.setCloudShadow(scatter * state.daylight * 0.9);
 
       /* ---- hạt thời tiết ---- */
       weather.set(chosen, effectStrength());
@@ -631,7 +638,10 @@ export default function WorldScene({
       /* Gió là thứ duy nhất trong khung hình cho biết trời đang lặng hay đang
          giông trước cả khi hạt mưa rơi xuống. Nó chạy trong vertex shader nên
          không tốn gì, và vẫn thổi kể cả khi người chơi tắt hạt hiệu ứng. */
-      grassLayer?.setWind(reduceMotion ? 0 : 0.24 + profile.rain * 0.7 + profile.overcast * 0.35);
+      const wind = reduceMotion ? 0 : 0.24 + profile.rain * 0.7 + profile.overcast * 0.35;
+      grassLayer?.setWind(wind);
+      /* Cỏ đụn cao hơn nên ngả mạnh hơn trong cùng một cơn gió. */
+      duneLayer?.setWind(wind * 1.25);
 
       checkGolden(now, chosen);
     }
@@ -775,6 +785,14 @@ export default function WorldScene({
     if (grassLayer.mesh) {
       scene.add(grassLayer.mesh);
       staticTicks.push(grassLayer.tick);
+    }
+    /* Dải cỏ đụn chờm qua ranh giới cỏ–cát và thò tiếp ra bãi. Không có nó thì
+       chỗ cỏ gặp cát là một đường màu cắt ngang — hai mảng dán cạnh nhau chứ
+       không phải một bãi biển. Một lệnh vẽ nữa, mật độ bằng một phần tư. */
+    duneLayer = makeGrass(reduceMotion ? 0 : compactGpu ? 900 : 4200, DUNE_BAND);
+    if (duneLayer.mesh) {
+      scene.add(duneLayer.mesh);
+      staticTicks.push(duneLayer.tick);
     }
     /* Dựng xong mới có gì để tô: gọi lại để thảm cỏ nhận bảng màu của mùa. */
     rebuildTerrain(activeSeason);
@@ -1524,6 +1542,7 @@ export default function WorldScene({
       ...DISTRICT_IDS.map((d) => isleGroups[d] as THREE.Object3D),
     ];
     rig.colliders.push(terrain.mesh);
+    staticTicks.push((t) => terrain.tick(t));
 
     /* ------------------------------ API ------------------------------ */
     sceneApi.current = {
@@ -1793,6 +1812,7 @@ export default function WorldScene({
       flightTween?.kill();
       gtaoPass.dispose();
       grassLayer?.dispose();
+      duneLayer?.dispose();
       controls.dispose();
       scene.traverse((o) => {
         const mesh = o as THREE.Mesh;
