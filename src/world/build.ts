@@ -1,8 +1,20 @@
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/examples/jsm/geometries/RoundedBoxGeometry.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
-import { ISLAND_RADIUS } from "./ocean";
 import { surface } from "./textures";
+import {
+  COAST_MAX,
+  DISTRICT_ANCHORS,
+  ISLAND_RADIUS,
+  PLATEAU_U,
+  SHORE_U,
+  cliffMask,
+  coastRadius,
+  coastU,
+  sandiness,
+  terrainFlatness,
+  terrainHeightAt,
+} from "./shape";
 import { DECOR_IDS } from "../lib/decor";
 import type { DecorId } from "../lib/decor";
 
@@ -12,15 +24,18 @@ import type { DecorId } from "../lib/decor";
 
 export type TickFn = (t: number, dt: number) => void;
 
+/* Bốn quận nằm trên vòng `DISTRICT_RING` của `shape.ts`, cùng một danh sách mà
+   `terrainFlatness` dùng để san phẳng bệ công trình. Chép tay toạ độ ở hai nơi
+   là cách chắc chắn để một ngày nào đó bệ nằm một chỗ còn nhà nằm chỗ khác. */
 export const DISTRICT_POS: Record<string, THREE.Vector3> = {
-  crypto: new THREE.Vector3(11.5, 0, -8.5),
-  stocks: new THREE.Vector3(-11.5, 0, -8.5),
-  vault: new THREE.Vector3(-11.5, 0, 9),
-  academy: new THREE.Vector3(11.5, 0, 9),
+  crypto: new THREE.Vector3(DISTRICT_ANCHORS[0][0], 0, DISTRICT_ANCHORS[0][1]),
+  stocks: new THREE.Vector3(DISTRICT_ANCHORS[1][0], 0, DISTRICT_ANCHORS[1][1]),
+  vault: new THREE.Vector3(DISTRICT_ANCHORS[2][0], 0, DISTRICT_ANCHORS[2][1]),
+  academy: new THREE.Vector3(DISTRICT_ANCHORS[3][0], 0, DISTRICT_ANCHORS[3][1]),
   center: new THREE.Vector3(0, 0, 0),
 };
 
-export { ISLAND_RADIUS };
+export { ISLAND_RADIUS, COAST_MAX, coastRadius, coastU, terrainFlatness, terrainHeightAt };
 
 /* ------------------------------------------------------------------ */
 /* Shared materials                                                    */
@@ -895,58 +910,6 @@ export function buildLighthouse(m: Mats, ticks: TickFn[]): THREE.Group {
 /* Terrain, paths, nature, sky, water                                  */
 /* ------------------------------------------------------------------ */
 
-function segDist2(px: number, pz: number, ax: number, az: number, bx: number, bz: number): number {
-  const abx = bx - ax, abz = bz - az;
-  const apx = px - ax, apz = pz - az;
-  const len2 = abx * abx + abz * abz;
-  let t = len2 > 0 ? (apx * abx + apz * abz) / len2 : 0;
-  t = Math.max(0, Math.min(1, t));
-  const dx = px - (ax + abx * t), dz = pz - (az + abz * t);
-  return Math.sqrt(dx * dx + dz * dz);
-}
-
-/* Bãi cát bắt đầu sớm hơn và trải rộng gấp đôi so với bản trước. */
-const BEACH_START = 17.0;
-const SHORE_EDGE = ISLAND_RADIUS - 0.5;
-const TERRAIN_ANCHORS = [DISTRICT_POS.crypto, DISTRICT_POS.stocks, DISTRICT_POS.vault, DISTRICT_POS.academy];
-
-/**
- * Hệ số "đất được phép gợn" tại một điểm trên cao nguyên: 0 ở quảng trường hải
- * đăng, ở bốn bệ công trình và dọc các lối đi lát đá; 1 ở nơi cỏ mọc tự do.
- *
- * Nó vốn nằm lọt trong vòng lặp dựng địa hình. Tách ra vì lớp cây cỏ instancing
- * cần đúng con số này để không gieo một bụi cỏ nào lên giữa lối đi.
- */
-export function terrainFlatness(x: number, z: number): number {
-  const r = Math.sqrt(x * x + z * z);
-  /* Quảng trường hải đăng rộng 9,8 nên vùng phẳng phải trùm hết chỗ đó, nếu
-     không những gợn đất sẽ chọc lên xuyên qua mặt sân. */
-  let flat = THREE.MathUtils.smoothstep(r, 8.5, 12.5);
-  for (const a of TERRAIN_ANCHORS) {
-    const d = Math.sqrt((x - a.x) ** 2 + (z - a.z) ** 2);
-    flat *= THREE.MathUtils.smoothstep(d, 3.6, 6.4);
-    const pd = segDist2(x, z, 0, 0, a.x, a.z);
-    flat *= THREE.MathUtils.smoothstep(pd, 1.1, 2.4);
-  }
-  return flat;
-}
-
-/**
- * Cao độ mặt đảo tại `(x, z)` trong toạ độ thế giới — 0 là mặt cao nguyên.
- *
- * Cùng một công thức với đỉnh khối trụ trong `buildTerrain`, đã trừ sẵn
- * `mesh.position.y = -3`, nên cây trồng theo hàm này luôn đứng đúng trên cỏ.
- */
-export function terrainHeightAt(x: number, z: number): number {
-  const r = Math.sqrt(x * x + z * z);
-  const n =
-    Math.sin(x * 0.28) * Math.cos(z * 0.31) * 0.5 +
-    Math.sin(x * 0.11 + 2.1) * Math.sin(z * 0.13 + 1.3) * 0.7 +
-    Math.cos(x * 0.45 - z * 0.37) * 0.25;
-  const shoreFall = THREE.MathUtils.smoothstep(r, BEACH_START, SHORE_EDGE);
-  return n * 0.4 * terrainFlatness(x, z) - shoreFall * 2.35;
-}
-
 export interface TerrainPalette {
   /** sắc cỏ chính theo mùa */
   foliage: number;
@@ -956,77 +919,142 @@ export interface TerrainPalette {
   snow?: number;
 }
 
+export interface Terrain {
+  mesh: THREE.Mesh;
+  /** Sang mùa chỉ ghi lại mảng màu — không dựng lại 19.000 đỉnh. */
+  setPalette(palette: TerrainPalette): void;
+  dispose(): void;
+}
+
+/* Mặt đảo là lưới toạ độ cực: `TERRAIN_SEGMENTS` nan quạt × `TERRAIN_RINGS`
+   vòng, cộng một váy đá tụt xuống dưới mực nước.
+
+   Bản trước dùng `CylinderGeometry`. Nắp trên của nó là một hình quạt: chỉ có
+   đỉnh ở bán kính 0 và ở vành, không có vòng nào ở giữa. Nghĩa là toàn bộ hàm
+   nhiễu địa hình không có đỉnh nào để bám vào — mặt đảo thật sự là một hình
+   nón trơn, trong khi cây, cỏ và nhà lại được đặt theo `terrainHeightAt`. Hai
+   bên lệch nhau tới 1,16 đơn vị ngay tại vành đai xóm làng: nhà đứng lơ lửng
+   trên mặt đất của chính nó. */
+const TERRAIN_SEGMENTS = 256;
+const TERRAIN_RINGS = 72;
+/** Váy đá: từ đường bờ tụt thẳng xuống đáy, thu nhỏ dần cho ra dáng khối đá. */
+const SKIRT_RINGS = 8;
+const SKIRT_DEPTH = 11;
+
 /**
- * Đảo chính. Bãi cát được mở rộng hẳn ra (từ r≈17 thay vì r≈21,5) và bờ hạ
- * thoải xuống mặt nước để rìa đảo là một đường cong mềm, không phải vách cắt.
+ * Đảo chính: cao nguyên cỏ, bãi cát thoải, ba mũi đất, một vịnh và một mũi đá
+ * có vách dựng đứng.
+ *
+ * Lưới dựng bằng đúng `terrainHeightAt` mà mọi thứ khác dùng để đặt vật thể,
+ * nên không còn khe hở giữa "mặt đất theo dữ liệu" và "mặt đất nhìn thấy".
  */
-export function buildTerrain(palette: TerrainPalette): THREE.Mesh {
-  const geo = new THREE.CylinderGeometry(ISLAND_RADIUS, ISLAND_RADIUS - 7, 6, 84, 5);
-  const pos = geo.attributes.position as THREE.BufferAttribute;
-  const colors: number[] = [];
-  const grassA = new THREE.Color(palette.foliage);
-  const grassB = new THREE.Color(palette.foliageAlt);
-  /* Cát sáng hơn hẳn bản trước: dưới ACES tone mapping, 0xd8c391 ra màu bùn chứ
-     không ra bãi biển. */
-  const sandDry = new THREE.Color(0xefdcae);
-  const sandWet = new THREE.Color(0xd2bd8c);
-  const snowCap = new THREE.Color(0xeaf2f5);
-  const cliffTop = new THREE.Color(0x4d6063);
-  const cliffBot = new THREE.Color(0x2c3f43);
-  const snowAmount = palette.snow ?? 0;
-  const c = new THREE.Color();
+export function buildTerrain(palette: TerrainPalette): Terrain {
+  const topCount = TERRAIN_SEGMENTS * (TERRAIN_RINGS + 1);
+  const skirtCount = TERRAIN_SEGMENTS * SKIRT_RINGS;
+  const total = topCount + skirtCount;
+  const positions = new Float32Array(total * 3);
+  const uvs = new Float32Array(total * 2);
+  const colors = new Float32Array(total * 3);
+  /* Mỗi đỉnh giữ lại vài đại lượng đã tính để lúc sang mùa chỉ việc pha màu
+     lại, khỏi gọi lại atan2 và cả chồng hàm sin cho mười chín nghìn đỉnh. */
+  const shade = new Float32Array(total * 3); // [nhiễu 0..1, độ cát 0..1, độ đá 0..1]
 
-  for (let i = 0; i < pos.count; i++) {
-    const x = pos.getX(i);
-    const y0 = pos.getY(i);
-    const z = pos.getZ(i);
-    const r = Math.sqrt(x * x + z * z);
-
-    if (y0 > 2.9) {
-      const n =
-        Math.sin(x * 0.28) * Math.cos(z * 0.31) * 0.5 +
-        Math.sin(x * 0.11 + 2.1) * Math.sin(z * 0.13 + 1.3) * 0.7 +
-        Math.cos(x * 0.45 - z * 0.37) * 0.25;
-      /* Vùng ngoài BEACH_START hạ dần xuống sát mực nước, tạo bãi thoải. */
-      const shoreFall = THREE.MathUtils.smoothstep(r, BEACH_START, SHORE_EDGE);
-      pos.setY(i, 3 + terrainHeightAt(x, z));
-      /* Cát nở ra phía ngoài để mép đảo tròn đều, mềm mắt hơn. */
-      if (shoreFall > 0) {
-        const widen = 1 + shoreFall * 0.055;
-        pos.setX(i, x * widen);
-        pos.setZ(i, z * widen);
-      }
-
-      const mix = n * 0.5 + 0.5;
-      c.copy(grassA).lerp(grassB, mix);
-      const beach = THREE.MathUtils.smoothstep(r, BEACH_START, BEACH_START + 5.2);
-      if (beach > 0) {
-        c.lerp(sandDry, beach * 0.94);
-        const wet = THREE.MathUtils.smoothstep(r, SHORE_EDGE - 2.6, SHORE_EDGE + 0.6);
-        c.lerp(sandWet, wet * 0.6);
-      }
-      if (snowAmount > 0) c.lerp(snowCap, snowAmount * (1 - beach) * (0.35 + mix * 0.4));
-      colors.push(c.r, c.g, c.b);
-    } else {
-      const n = Math.sin(x * 0.5 + z * 0.3) * Math.cos(z * 0.42 - x * 0.2);
-      const bulge = 1 + n * 0.06 + (y0 < -2.9 ? -0.12 : 0);
-      pos.setX(i, x * bulge);
-      pos.setZ(i, z * bulge);
-      const f = THREE.MathUtils.clamp((y0 + 3) / 6, 0, 1);
-      c.copy(cliffBot).lerp(cliffTop, f);
-      colors.push(c.r, c.g, c.b);
+  let v = 0;
+  for (let ring = 0; ring <= TERRAIN_RINGS; ring++) {
+    /* Số mũ nhỏ hơn 1 dồn vòng ra phía ngoài: bãi cát và mép nước là nơi mắt
+       đọc ra đường bờ, còn giữa cao nguyên thì phẳng nên không cần dày. */
+    const u = Math.pow(ring / TERRAIN_RINGS, 0.82);
+    for (let seg = 0; seg < TERRAIN_SEGMENTS; seg++) {
+      const angle = (seg / TERRAIN_SEGMENTS) * Math.PI * 2;
+      const radius = u * coastRadius(angle);
+      const x = Math.cos(angle) * radius;
+      const z = Math.sin(angle) * radius;
+      positions[v * 3] = x;
+      positions[v * 3 + 1] = terrainHeightAt(x, z);
+      positions[v * 3 + 2] = z;
+      /* UV theo toạ độ thế giới chia cho bán kính lớn nhất: vân cát giữ đúng
+         một cỡ hạt trên khắp đảo, kể cả nơi bờ nhô ra xa hơn. */
+      uvs[v * 2] = (x / COAST_MAX) * 0.5 + 0.5;
+      uvs[v * 2 + 1] = (z / COAST_MAX) * 0.5 + 0.5;
+      shade[v * 3] =
+        (Math.sin(x * 0.28) * Math.cos(z * 0.31) * 0.5 +
+          Math.sin(x * 0.11 + 2.1) * Math.sin(z * 0.13 + 1.3) * 0.7 +
+          Math.cos(x * 0.45 - z * 0.37) * 0.25) *
+          0.5 +
+        0.5;
+      shade[v * 3 + 1] = sandiness(x, z);
+      shade[v * 3 + 2] = Math.min(1, cliffMask(x, z) * 1.35);
+      v++;
     }
   }
-  geo.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+
+  for (let ring = 0; ring < SKIRT_RINGS; ring++) {
+    const k = (ring + 1) / SKIRT_RINGS;
+    for (let seg = 0; seg < TERRAIN_SEGMENTS; seg++) {
+      const angle = (seg / TERRAIN_SEGMENTS) * Math.PI * 2;
+      /* Gần như dựng đứng ở đoạn trên rồi mới thóp vào ở chân.
+
+         Bản trước thu vào 34% theo hàm mũ 1,6, tức váy đá là một hình nón dốc
+         chừng 45°. Dưới bãi cát thì không ai thấy, nhưng ở mũi đá chính váy này
+         mới là mặt vách nhìn ra biển — và một cái vách nghiêng 45° thì đọc ra
+         quả đồi, không đọc ra vách. */
+      const shrink = 1 - Math.pow(k, 2.6) * 0.13;
+      const rim = coastRadius(angle);
+      const radius = rim * shrink * (1 + (1 - k) * 0.012);
+      const x = Math.cos(angle) * radius;
+      const z = Math.sin(angle) * radius;
+      const rimY = terrainHeightAt(Math.cos(angle) * rim, Math.sin(angle) * rim);
+      positions[v * 3] = x;
+      positions[v * 3 + 1] = rimY - Math.pow(k, 0.85) * SKIRT_DEPTH;
+      positions[v * 3 + 2] = z;
+      uvs[v * 2] = (angle / (Math.PI * 2)) * 24;
+      uvs[v * 2 + 1] = k * 3;
+      shade[v * 3] = 0.5 + Math.sin(angle * 9) * 0.2;
+      shade[v * 3 + 1] = 0;
+      shade[v * 3 + 2] = 1;
+      v++;
+    }
+  }
+
+  const indices: number[] = [];
+  const ringStart = (ring: number) => ring * TERRAIN_SEGMENTS;
+  for (let ring = 0; ring < TERRAIN_RINGS; ring++) {
+    for (let seg = 0; seg < TERRAIN_SEGMENTS; seg++) {
+      const next = (seg + 1) % TERRAIN_SEGMENTS;
+      const a = ringStart(ring) + seg;
+      const b = ringStart(ring) + next;
+      const c = ringStart(ring + 1) + seg;
+      const d = ringStart(ring + 1) + next;
+      /* Thứ tự đỉnh quyết định hướng pháp tuyến, và pháp tuyến chúc xuống thì
+         `MeshStandardMaterial` cull sạch mặt trên: cả hòn đảo biến mất, chỉ còn
+         mặt biển phủ lên chỗ nó vừa đứng. `tests/island_shape.cjs` kiểm đúng
+         chuyện này. */
+      indices.push(a, d, c, a, b, d);
+    }
+  }
+  /* Nối vành ngoài cùng của mặt trên xuống váy, rồi các vòng váy với nhau. */
+  for (let ring = 0; ring < SKIRT_RINGS; ring++) {
+    const upper = ring === 0 ? ringStart(TERRAIN_RINGS) : topCount + (ring - 1) * TERRAIN_SEGMENTS;
+    const lower = topCount + ring * TERRAIN_SEGMENTS;
+    for (let seg = 0; seg < TERRAIN_SEGMENTS; seg++) {
+      const next = (seg + 1) % TERRAIN_SEGMENTS;
+      /* Váy đá quay mặt ra ngoài, nên thứ tự cũng ngược lại với mặt trên. */
+      indices.push(upper + seg, lower + next, lower + seg, upper + seg, upper + next, lower + next);
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
+  geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  geo.setIndex(indices);
   geo.computeVertexNormals();
-  /* Bỏ `flatShading`: mặt cắt phẳng lì của mỗi tam giác chính là thứ khiến hòn
-     đảo trông như gấp bằng giấy. Chi tiết bề mặt chuyển sang cho bản đồ pháp
-     tuyến lo — cùng số tam giác nhưng ánh sáng có hạt, có gợn. */
-  /* Số lần lặp phải tính theo kích thước thật: mặt trên của hòn đảo trải 52 đơn
-     vị mà UV chỉ chạy 0..1, nên lặp 26 lần cho ra gợn cát rộng gần một mét —
-     nhìn thành sóng bê tông trên quảng trường chứ không thành hạt cát. Lặp 64
-     lần đưa mỗi gợn về khoảng hai gang tay, đúng tầm mắt đọc ra là mặt đất. */
-  const grain = surface("sand", 64);
+  geo.computeBoundingSphere();
+
+  /* Số lần lặp phải tính theo kích thước thật: mặt đảo trải hơn bảy mươi đơn
+     vị mà UV chỉ chạy 0..1, nên lặp ít lần cho ra gợn cát rộng cả mét — nhìn
+     thành sóng bê tông chứ không thành hạt cát. */
+  const grain = surface("sand", 78);
   const material = new THREE.MeshStandardMaterial({
     vertexColors: true,
     roughness: 0.95,
@@ -1034,12 +1062,58 @@ export function buildTerrain(palette: TerrainPalette): THREE.Mesh {
     normalMap: grain.normalMap,
     roughnessMap: grain.roughnessMap,
   });
-  material.normalScale.set(0.4, 0.4);
+  material.normalScale.set(0.42, 0.42);
   const mesh = new THREE.Mesh(geo, material);
-  mesh.position.y = -3;
   mesh.receiveShadow = true;
-  return mesh;
+  mesh.castShadow = true;
+
+  /* Cát sáng hơn hẳn bản đầu: dưới ACES tone mapping, 0xd8c391 ra màu bùn chứ
+     không ra bãi biển. */
+  const sandDry = new THREE.Color(0xefdcae);
+  const sandWet = new THREE.Color(0xd2bd8c);
+  const snowCap = new THREE.Color(0xeaf2f5);
+  const rockLit = new THREE.Color(0x6d7c78);
+  const rockDark = new THREE.Color(0x38484b);
+  const grassA = new THREE.Color();
+  const grassB = new THREE.Color();
+  const tint = new THREE.Color();
+
+  function setPalette(next: TerrainPalette) {
+    grassA.setHex(next.foliage);
+    grassB.setHex(next.foliageAlt);
+    const snowAmount = next.snow ?? 0;
+    for (let i = 0; i < total; i++) {
+      const mix = shade[i * 3];
+      const sand = shade[i * 3 + 1];
+      const rock = shade[i * 3 + 2];
+      tint.copy(grassA).lerp(grassB, mix);
+      if (sand > 0) {
+        tint.lerp(sandDry, sand * 0.94);
+        /* Cát ướt sẫm lại đúng dải sóng vỗ tới, không phải cả bãi. */
+        const wet = THREE.MathUtils.smoothstep(coastU(positions[i * 3], positions[i * 3 + 2]), SHORE_U - 0.09, SHORE_U + 0.02);
+        tint.lerp(sandWet, wet * 0.62);
+      }
+      if (rock > 0) tint.lerp(rockDark.clone().lerp(rockLit, mix), rock);
+      /* Tuyết không bám trên cát ướt lẫn vách đá dựng đứng. */
+      if (snowAmount > 0) tint.lerp(snowCap, snowAmount * (1 - sand) * (1 - rock * 0.55) * (0.35 + mix * 0.4));
+      colors[i * 3] = tint.r;
+      colors[i * 3 + 1] = tint.g;
+      colors[i * 3 + 2] = tint.b;
+    }
+    (geo.attributes.color as THREE.BufferAttribute).needsUpdate = true;
+  }
+
+  setPalette(palette);
+  return {
+    mesh,
+    setPalette,
+    dispose() {
+      geo.dispose();
+      material.dispose();
+    },
+  };
 }
+
 
 export function buildPaths(m: Mats): THREE.Group {
   const g = new THREE.Group();
@@ -1068,7 +1142,10 @@ export function buildPaths(m: Mats): THREE.Group {
 
 export function buildGate(m: Mats): THREE.Group {
   const g = new THREE.Group();
-  g.position.set(0, 0, ISLAND_RADIUS - 5.5);
+  /* Cổng đứng trên bãi cát hướng nam, cầu gỗ nối tiếp ra mặt nước. Vị trí suy
+     từ đường bờ chứ không chép tay, nên nới đảo ra là cổng tự đi theo. */
+  const gateZ = coastRadius(Math.PI / 2) * 0.75;
+  g.position.set(0, terrainHeightAt(0, gateZ), gateZ);
   for (const x of [-1.7, 1.7]) {
     const col = box(0.55, 3.0, 0.55, m.stone);
     col.position.set(x, 1.5, 0);

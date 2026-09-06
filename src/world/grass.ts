@@ -15,7 +15,7 @@
 
 import * as THREE from "three";
 import type { TickFn } from "./build";
-import { terrainHeightAt, terrainFlatness } from "./build";
+import { GRASS_U, PLAZA_RADIUS, coastRadius, mulberry32, sandiness, terrainFlatness, terrainHeightAt } from "./shape";
 
 export interface Grass {
   mesh: THREE.InstancedMesh | null;
@@ -62,21 +62,6 @@ function bladeGeometry(): THREE.BufferGeometry {
   geo.setIndex([0, 1, 3, 0, 3, 2, 2, 3, 4]);
   return geo;
 }
-
-/** Bộ sinh số giả ngẫu nhiên có hạt giống: mỗi lần tải trang ra đúng một đảo. */
-function mulberry32(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-/** Bán kính vùng cỏ mọc — trong là quảng trường, ngoài là bãi cát. */
-const GRASS_INNER = 4.2;
-const GRASS_OUTER = 17.4;
 
 export function makeGrass(count: number): Grass {
   const uniforms = { uTime: { value: 0 }, uWind: { value: 0.5 } };
@@ -136,14 +121,21 @@ export function makeGrass(count: number): Grass {
      bản đồ mặt nạ riêng, mà lại luôn khớp với địa hình thật. */
   const random = mulberry32(0x15ecd);
   const placed: { x: number; z: number; y: number; scale: number; yaw: number; tone: number }[] = [];
+  /* Vùng cỏ tính theo `u` chứ không theo bán kính tuyệt đối, nên nó nở ra ở mũi
+     đất và co lại trong vịnh y như bãi cát. Bản trước là hằng số 17,4 chép tay,
+     lệch hẳn so với mốc bãi cát 17 mà địa hình dùng. */
+  const innerU = (PLAZA_RADIUS - 5.6) / coastRadius(0);
   let attempts = 0;
   while (placed.length < count && attempts < count * 12) {
     attempts++;
     const angle = random() * Math.PI * 2;
-    const radius = Math.sqrt(GRASS_INNER * GRASS_INNER + random() * (GRASS_OUTER * GRASS_OUTER - GRASS_INNER * GRASS_INNER));
+    const u = Math.sqrt(innerU * innerU + random() * (GRASS_U * GRASS_U - innerU * innerU));
+    const radius = u * coastRadius(angle);
     const x = Math.cos(angle) * radius;
     const z = Math.sin(angle) * radius;
     if (terrainFlatness(x, z) < 0.55) continue;
+    /* Cỏ không mọc trên cát ướt lẫn trên vách đá. */
+    if (sandiness(x, z) > 0.08) continue;
     placed.push({
       x,
       z,

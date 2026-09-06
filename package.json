@@ -11,7 +11,7 @@
     "dev": "vite",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
-    "test": "npm run typecheck && npm run test:i18n && npm run test:prices && npm run test:news && npm run test:fishing && npm run test:shop",
+    "test": "npm run typecheck && npm run test:i18n && npm run test:shape && npm run test:prices && npm run test:news && npm run test:fishing && npm run test:shop",
     "test:i18n": "node tests/i18n_keys.cjs",
     "test:prices": "node tests/price_providers.cjs",
     "test:news": "node tests/news_feed.cjs",
@@ -23,7 +23,8 @@
     "test:panels": "node tests/panel_shots.cjs --out .artifacts/panels",
     "test:photo": "node tests/photo_camera.cjs --out .artifacts/photo",
     "test:exam": "node tests/exam_pass.cjs --out .artifacts/panels",
-    "test:fish": "node tests/fishing_play.cjs"
+    "test:fish": "node tests/fishing_play.cjs",
+    "test:shape": "node tests/island_shape.cjs"
   },
   "dependencies": {
     "gsap": "^3.15.0",

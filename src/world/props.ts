@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import type { Mats, TickFn } from "./build";
+import { BAY_ANGLE, CLIFF_ANGLE, WATER_LEVEL, coastRadius, scatter, terrainHeightAt } from "./shape";
 import type { ShopItem } from "../lib/shop";
 
 /* ------------------------------------------------------------------ */
@@ -1210,54 +1211,53 @@ export function placeProp(
 /*  Khu dân cư cố định của đảo chính                                   */
 /* ------------------------------------------------------------------ */
 
-interface VillageSpot {
-  x: number;
-  z: number;
-  rotation: number;
-  kind: "cottage" | "stall" | "tent" | "gazebo" | "windmill" | "tower" | "garden" | "greenhouse";
-}
-
-/* Nhà cửa nằm giữa bốn quận và men theo bãi cát — nơi trước đây trống trơn. */
-const VILLAGE: VillageSpot[] = [
-  { x: 0.5, z: -14.5, rotation: 0.1, kind: "cottage" },
-  { x: -3.4, z: -13.6, rotation: 0.5, kind: "cottage" },
-  { x: 3.9, z: -13.2, rotation: -0.4, kind: "cottage" },
-  { x: -0.4, z: -17.6, rotation: 3.0, kind: "stall" },
-  { x: 3.2, z: -17.2, rotation: 2.7, kind: "stall" },
-  { x: -3.9, z: -17.0, rotation: 3.4, kind: "tent" },
-  { x: 16.5, z: -0.4, rotation: -1.5, kind: "cottage" },
-  { x: 19.4, z: 2.6, rotation: -1.8, kind: "greenhouse" },
-  { x: 17.2, z: -4.6, rotation: -1.2, kind: "garden" },
-  { x: -16.6, z: 0.6, rotation: 1.5, kind: "cottage" },
-  { x: -19.2, z: -2.8, rotation: 1.9, kind: "windmill" },
-  { x: -17.4, z: 4.4, rotation: 1.2, kind: "garden" },
-  { x: 0.3, z: 15.4, rotation: 3.1, kind: "gazebo" },
-  { x: -4.6, z: 16.2, rotation: 2.7, kind: "cottage" },
-  { x: 5.2, z: 16.0, rotation: -2.8, kind: "cottage" },
-  { x: -8.4, z: 18.6, rotation: 2.4, kind: "tent" },
-  { x: 8.8, z: 18.4, rotation: -2.4, kind: "stall" },
-  { x: 13.4, z: 14.2, rotation: -2.2, kind: "tower" },
-  { x: -13.6, z: 14.0, rotation: 2.2, kind: "tower" },
-  { x: -12.2, z: -18.6, rotation: 2.9, kind: "garden" },
-  { x: 12.6, z: -18.4, rotation: -2.9, kind: "greenhouse" },
-];
-
 const COTTAGE_WALLS = [0xdde9e4, 0xf0e4cb, 0xe6d7c3, 0xd8e4e0, 0xf2e8d5];
 const COTTAGE_ROOFS = [0x1e5f58, 0xa8574f, 0x8f5a4a, 0x2a5f7a, 0xb2803a];
 
+/* Nhịp của xóm: cứ chín nếp nhà thì có một cối xay, một nhà kính, một vọng lâu…
+   Rút kiểu theo chỉ số chứ không rút ngẫu nhiên, để không bao giờ có hai cái
+   cối xay đứng cạnh nhau — thứ mà mắt bắt ra ngay là "máy sinh ngẫu nhiên". */
+const VILLAGE_KINDS = [
+  "cottage", "cottage", "garden", "cottage", "stall", "cottage", "tent",
+  "greenhouse", "cottage", "windmill", "cottage", "garden", "cottage", "stall",
+  "cottage", "gazebo", "tent", "cottage", "tower", "cottage", "garden",
+] as const;
+
+type VillageKind = (typeof VILLAGE_KINDS)[number];
+
 /**
- * Xóm làng, chợ phiên và vườn tược trên đảo chính. Trước đây khoảng đất giữa
- * bốn quận hoàn toàn trống, khiến hòn đảo trông như một mô hình kiến trúc chứ
- * không phải nơi có người ở.
+ * Xóm làng, chợ phiên và vườn tược trên đảo chính.
+ *
+ * Bản trước là hai mươi mốt cặp toạ độ chép tay. Chúng đúng với hòn đảo bán
+ * kính 26 và chỉ đúng với nó: nới đảo ra là nửa xóm nằm giữa bãi cỏ trống còn
+ * vành ngoài không có gì. Nay chỗ ở được gieo tất định trong dải `u` của vành
+ * xóm, nên xóm luôn ôm đúng vành đất giữa quảng trường và bãi cát.
  */
 export function buildVillage(m: Mats, ticks: TickFn[]): THREE.Group {
   const g = new THREE.Group();
-  VILLAGE.forEach((spot, index) => {
+  const spots = scatter({
+    count: 36,
+    minU: 0.44,
+    maxU: 0.72,
+    seed: 0x11ac3,
+    spacing: 4.6,
+    minFlatness: 0.8,
+    maxSand: 0.35,
+    avoidCliff: true,
+    reject: (x, z) =>
+      (x - PIER_POSITION.x) ** 2 + (z - PIER_POSITION.z) ** 2 < 49 ||
+      (x - HARBOR_POSITION.x) ** 2 + (z - HARBOR_POSITION.z) ** 2 < 81,
+  });
+
+  spots.forEach((spot, index) => {
+    const kind: VillageKind = VILLAGE_KINDS[index % VILLAGE_KINDS.length];
+    /* Nhà quay mặt ra ngoài biển — đó là hướng mà một ngôi nhà ven đảo nhìn. */
+    const facing = Math.atan2(spot.x, spot.z) + (spot.roll - 0.5) * 0.7;
     let node: THREE.Group;
-    switch (spot.kind) {
+    switch (kind) {
       case "cottage":
         node = propCottage(COTTAGE_WALLS[index % COTTAGE_WALLS.length], COTTAGE_ROOFS[index % COTTAGE_ROOFS.length]);
-        node.scale.setScalar(1.15);
+        node.scale.setScalar(1.05 + spot.roll * 0.2);
         break;
       case "stall":
         node = propStall(0xd9a066, index % 2 ? 0xe2604f : 0x4cb0d9, ticks);
@@ -1283,19 +1283,23 @@ export function buildVillage(m: Mats, ticks: TickFn[]): THREE.Group {
         node.scale.setScalar(1.5);
         break;
     }
-    node.position.set(spot.x, 0, spot.z);
-    node.rotation.y = spot.rotation;
+    node.position.set(spot.x, spot.y, spot.z);
+    node.rotation.y = facing;
     g.add(node);
 
     /* Một cây và một đèn cạnh mỗi nếp nhà: nhóm lại thành "khu" chứ không phải
        vật thể lẻ loi giữa bãi cỏ. */
-    if (spot.kind === "cottage" || spot.kind === "greenhouse") {
+    if (kind === "cottage" || kind === "greenhouse") {
+      const tx = spot.x + Math.cos(facing + 1.4) * 2.4;
+      const tz = spot.z + Math.sin(facing + 1.4) * 2.4;
       const tree = propPalm(index % 2 ? 0x3f9c70 : 0x2e8d63);
-      tree.position.set(spot.x + Math.cos(spot.rotation + 1.4) * 2.2, 0, spot.z + Math.sin(spot.rotation + 1.4) * 2.2);
+      tree.position.set(tx, terrainHeightAt(tx, tz), tz);
       tree.scale.setScalar(0.85);
       g.add(tree);
+      const lx = spot.x + Math.cos(facing - 1.2) * 2.0;
+      const lz = spot.z + Math.sin(facing - 1.2) * 2.0;
       const lantern = propLantern(0xffc069, ticks);
-      lantern.position.set(spot.x + Math.cos(spot.rotation - 1.2) * 1.9, 0, spot.z + Math.sin(spot.rotation - 1.2) * 1.9);
+      lantern.position.set(lx, terrainHeightAt(lx, lz), lz);
       g.add(lantern);
     }
   });
@@ -1303,9 +1307,25 @@ export function buildVillage(m: Mats, ticks: TickFn[]): THREE.Group {
   return g;
 }
 
+/** Điểm trên đảo tại phương vị `angle` và độ sâu `u`, đã bám đúng cao độ đất. */
+function coastPoint(angle: number, u: number): THREE.Vector3 {
+  const radius = coastRadius(angle) * u;
+  const x = Math.cos(angle) * radius;
+  const z = Math.sin(angle) * radius;
+  return new THREE.Vector3(x, terrainHeightAt(x, z), z);
+}
+
+/* Bến câu nằm trên mũi đất hướng đông nam, ngay mép nước. Toạ độ được suy ra
+   từ đường bờ chứ không chép tay: nới đảo ra là bến câu tự đi theo. */
+const PIER_ANGLE = 0.86;
 /** Vị trí bến câu trên đảo chính — cũng là điểm bấm để mở trò câu cá. */
-export const PIER_POSITION = new THREE.Vector3(-14.5, 0, 16.5);
-export const PIER_ROTATION = 2.35;
+export const PIER_POSITION = coastPoint(PIER_ANGLE, 0.84);
+export const PIER_ROTATION = -PIER_ANGLE + Math.PI / 2;
+
+/* Bến cảng viễn dương neo trong Vịnh Thương Cảng — vùng lõm sâu nhất của đường
+   bờ, đúng chỗ mà một cảng thật sẽ chọn: kín gió và nước sâu sát bờ. */
+export const HARBOR_POSITION = coastPoint(BAY_ANGLE, 0.74);
+export const HARBOR_ROTATION = -BAY_ANGLE + Math.PI / 2;
 
 /** Bến câu: cầu gỗ, chòi, thùng cá và một cần câu dựng sẵn. */
 export function buildFishingPier(m: Mats, ticks: TickFn[]): THREE.Group {
@@ -1362,6 +1382,303 @@ export function buildFishingPier(m: Mats, ticks: TickFn[]): THREE.Group {
       ripple.scale.setScalar(0.4 + cycle * 2.4);
       (ripple.material as THREE.MeshBasicMaterial).opacity = 0.34 * (1 - cycle);
     });
+  });
+
+  shadows(g);
+  void m;
+  return g;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Thác nước trên mũi đá                                              */
+/* ------------------------------------------------------------------ */
+
+/* Thác phải nằm trong lòng mặt vách, không nằm ở rìa. Lệch ra rìa thì `cliffMask`
+   chỉ còn chừng 0,29 nên vách cao vỏn vẹn 1,4 đơn vị — tấm rèm co lại thành một
+   vệt trắng bằng ngón tay. */
+/** Điểm mà thác đổ xuống: trên mặt vách nhìn ra biển. */
+export const FALLS_ANGLE = CLIFF_ANGLE - 0.1;
+
+/**
+ * Thác đổ từ mép mũi đá xuống mặt biển.
+ *
+ * Ba lớp: rèm nước chảy, bụi nước ở chân thác, và vòng sóng lan trên mặt biển.
+ * Rèm nước là một tấm phẳng có UV trượt xuống — đắt hơn hạt rất nhiều lần về
+ * mặt hình ảnh mà chỉ tốn một lệnh vẽ.
+ */
+export function makeWaterfall(): { group: THREE.Group; tick: TickFn } {
+  const g = new THREE.Group();
+  /* Rèm nước phải treo NGOÀI mép đảo. Đặt nó ở 0,97 bán kính bờ thì mặt đất
+     vẫn còn chạy tiếp ra ngoài và nuốt gần trọn tấm rèm — chỉ còn ló một vệt
+     trắng ở đỉnh. */
+  const rim = coastRadius(FALLS_ANGLE);
+  const top = terrainHeightAt(Math.cos(FALLS_ANGLE) * rim * 0.96, Math.sin(FALLS_ANGLE) * rim * 0.96);
+  const drop = top - WATER_LEVEL;
+  g.position.set(Math.cos(FALLS_ANGLE) * rim, WATER_LEVEL, Math.sin(FALLS_ANGLE) * rim);
+  g.rotation.y = -FALLS_ANGLE + Math.PI / 2;
+
+  /* Rèm nước dựng bằng lưới riêng chứ không phải `PlaneGeometry`.
+
+     Một tấm phẳng đục thì mắt đọc ra đúng cái nó là: tờ bìa trắng dán trước
+     vách đá, bốn cạnh sắc lẻm. Thứ làm nên một dòng thác là những cạnh TAN
+     DẦN — mép trái mép phải mờ vào đá, đỉnh mờ vào chỗ nước rời khỏi mép, chân
+     mờ vào bụi nước. Alpha theo đỉnh làm được cả bốn thứ đó mà không cần thêm
+     một tấm vân nào phải tải. */
+  const COLS = 12;
+  const ROWS = 14;
+  const curtainPos: number[] = [];
+  const curtainColor: number[] = [];
+  const curtainIndex: number[] = [];
+  for (let row = 0; row <= ROWS; row++) {
+    const v = row / ROWS;
+    /* Dòng nước loe dần khi rơi, và cong ra ngoài theo trọng lực. */
+    const halfWidth = 1.15 * (0.72 + v * 0.55);
+    const bulge = Math.pow(v, 1.7) * 0.9;
+    for (let col = 0; col <= COLS; col++) {
+      const k = col / COLS;
+      curtainPos.push((k - 0.5) * halfWidth * 2, drop * (1 - v), bulge);
+      /* Mờ ở hai mép, mờ ở đỉnh nơi nước vừa rời đá, mờ ở chân nơi nó vỡ thành
+         bụi. Đậm nhất ở khoảng một phần ba trên. */
+      const edge = Math.pow(Math.sin(k * Math.PI), 0.65);
+      const head = Math.min(1, v * 6);
+      const tail = 1 - Math.pow(Math.max(0, v - 0.82) / 0.18, 1.4);
+      /* Vài sợi nước đậm hơn phần còn lại: một dòng thác không phẳng đều. */
+      const strand = 0.78 + 0.22 * Math.sin(k * 27.3 + row * 0.4);
+      const alpha = Math.max(0, edge * head * tail * strand);
+      curtainColor.push(1, 1, 1, alpha * 0.85);
+    }
+  }
+  for (let row = 0; row < ROWS; row++) {
+    for (let col = 0; col < COLS; col++) {
+      const a = row * (COLS + 1) + col;
+      const b = a + 1;
+      const c = a + COLS + 1;
+      const d = c + 1;
+      curtainIndex.push(a, c, d, a, d, b);
+    }
+  }
+  const curtainGeo = new THREE.BufferGeometry();
+  curtainGeo.setAttribute("position", new THREE.Float32BufferAttribute(curtainPos, 3));
+  curtainGeo.setAttribute("color", new THREE.Float32BufferAttribute(curtainColor, 4));
+  curtainGeo.setIndex(curtainIndex);
+  curtainGeo.computeVertexNormals();
+
+  const curtain = new THREE.Mesh(
+    curtainGeo,
+    new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      vertexColors: true,
+      emissive: new THREE.Color(0x9fd8e0),
+      emissiveIntensity: 0.45,
+      roughness: 0.22,
+      metalness: 0,
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    })
+  );
+  curtain.position.set(0, 0, 0.35);
+  g.add(curtain);
+
+  /* Mép nước ở đỉnh: một vệt sáng mảnh ngay chỗ dòng chảy rời khỏi đá. Không có
+     nó thì tấm rèm trông như treo lơ lửng trước vách chứ không phải chảy ra
+     từ nó. */
+  const lip = new THREE.Mesh(
+    new THREE.BoxGeometry(1.9, 0.16, 0.5),
+    glow(0xeaf8fa, 1.1)
+  );
+  lip.position.set(0, drop - 0.05, 0.2);
+  g.add(lip);
+
+  /* Bụi nước ở chân thác: vài quả cầu mờ chồng nhau, phồng xẹp lệch pha. */
+  const mistMat = additive(0xdff2f4, 0.22);
+  const mist: THREE.Mesh[] = [];
+  for (let i = 0; i < 5; i++) {
+    const puff = new THREE.Mesh(new THREE.SphereGeometry(0.75, 10, 8), mistMat);
+    puff.position.set((i - 2) * 0.55, 0.35 + (i % 2) * 0.3, 0.7);
+    mist.push(puff);
+    g.add(puff);
+  }
+
+  /* Vòng sóng lan ra trên mặt biển ngay chân thác. */
+  const ringMat = additive(0xdff2f4, 0.3);
+  const rings: THREE.Mesh[] = [];
+  for (let i = 0; i < 3; i++) {
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.6, 0.78, 28), ringMat);
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.set(0, 0.14, 1.1);
+    rings.push(ring);
+    g.add(ring);
+  }
+
+  const scroll = curtain.material as THREE.MeshStandardMaterial;
+  return {
+    group: g,
+    tick: (t) => {
+      /* Rèm nước không có vân riêng, nên chuyển động đến từ độ sáng chạy dọc
+         thân thác — mắt đọc ra dòng chảy, và nó tốn đúng một uniform. */
+      scroll.emissiveIntensity = 0.35 + 0.22 * Math.sin(t * 6.1);
+      mist.forEach((puff, i) => {
+        const phase = (t * 0.9 + i * 0.37) % 1;
+        puff.scale.setScalar(0.7 + phase * 0.6);
+        (puff.material as THREE.MeshBasicMaterial).opacity = 0.26 * (1 - phase);
+      });
+      rings.forEach((ring, i) => {
+        const phase = (t * 0.45 + i / 3) % 1;
+        ring.scale.setScalar(0.6 + phase * 3.2);
+        (ring.material as THREE.MeshBasicMaterial).opacity = 0.32 * (1 - phase);
+      });
+    },
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/*  Bến cảng viễn dương                                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Bến cảng trong Vịnh Thương Cảng: kè đá, nhà kho, cần cẩu và cột buộc dây.
+ *
+ * Đây vừa là công trình vừa là nút bấm — người chơi bấm vào nó để phái du
+ * thuyền đi chuyến. Nên nó phải đọc ra "chỗ tàu rời bến" ngay từ xa: cần cẩu
+ * quay chậm, đèn hiệu nhấp nháy, thùng hàng xếp chờ.
+ */
+export function buildHarbor(m: Mats, ticks: TickFn[]): THREE.Group {
+  const g = new THREE.Group();
+  const stone = solid(0x9aa8a5, 0.9);
+  const stoneDark = solid(0x6f7d7b, 0.92);
+  const wood = solid(0x6e4b33, 0.95);
+  const plank = solid(0x8a6647, 0.9);
+  const roof = solid(0xa8574f, 0.85);
+  const metal = shiny(0xc0c8c6);
+
+  /* Cụm này được đặt ở `HARBOR_POSITION` và xoay sao cho +z cục bộ chỉ thẳng ra
+     biển. Nhờ vậy toạ độ z cục bộ đổi được thành bán kính thế giới, và mỗi món
+     tự tìm được mặt đất dưới chân mình.
+
+     Không có phép đổi này thì mọi cao độ phải chép tay theo một mặt đất đã
+     nghiêng — bậc kè hoặc lún vào cát hoặc treo lơ lửng trên nước, và mỗi lần
+     chỉnh hình đảo là một lần phải dò lại bằng mắt. */
+  const baseRadius = Math.hypot(HARBOR_POSITION.x, HARBOR_POSITION.z);
+  const groundAt = (z: number) => {
+    const radius = baseRadius + z;
+    return terrainHeightAt(Math.cos(BAY_ANGLE) * radius, Math.sin(BAY_ANGLE) * radius) - HARBOR_POSITION.y;
+  };
+  const seaLevel = WATER_LEVEL - HARBOR_POSITION.y;
+
+  /* Kè đá: ba bậc thềm bám mặt cát dốc xuống nước. */
+  for (let i = 0; i < 3; i++) {
+    const z = 1.4 + i * 1.9;
+    const quay = box(7.6 - i * 1.2, 0.55, 2.0, i === 0 ? stone : stoneDark);
+    /* Đáy bậc ăn xuống dưới mặt cát chứ không tì lên: mặt cát nghiêng nên tì
+       đúng một điểm là ba góc còn lại hở ra. */
+    quay.position.set(0, groundAt(z) + 0.05, z);
+    g.add(quay);
+  }
+
+  /* Cầu tàu bắt đầu ở chỗ mặt cát chạm mực nước và chạy tiếp ra ngoài. */
+  const deckY = seaLevel + 0.55;
+  let dockStart = 5.0;
+  for (let z = 4; z < 14; z += 0.25) {
+    if (groundAt(z) <= seaLevel) {
+      dockStart = z;
+      break;
+    }
+  }
+  const dockEnd = dockStart + 7.5;
+  for (let z = dockStart; z < dockEnd; z += 1.5) {
+    const board = box(3.0, 0.16, 1.5, plank);
+    board.position.set(0, deckY, z);
+    g.add(board);
+  }
+  for (const x of [-1.25, 1.25]) {
+    for (const k of [0.15, 0.55, 0.95]) {
+      const z = dockStart + (dockEnd - dockStart) * k;
+      const floor = groundAt(z);
+      const height = Math.max(1.2, deckY - floor);
+      const pile = cyl(0.13, 0.16, height, 7, wood);
+      pile.position.set(x, deckY - height / 2, z);
+      g.add(pile);
+    }
+  }
+
+  /* Nhà kho trên bờ. */
+  const shedZ = -1.6;
+  const shedY = groundAt(shedZ);
+  const shed = box(3.6, 2.3, 2.8, solid(0xe6d7c3, 0.9));
+  shed.position.set(-2.6, shedY + 1.15, shedZ);
+  g.add(shed);
+  const shedRoof = box(4.1, 0.3, 3.3, roof);
+  shedRoof.position.set(-2.6, shedY + 2.45, shedZ);
+  g.add(shedRoof);
+  const door = box(1.0, 1.4, 0.1, wood);
+  door.position.set(-2.6, shedY + 0.7, shedZ + 1.45);
+  g.add(door);
+
+  /* Cần cẩu: cột, cần vươn ra mặt nước và móc treo lủng lẳng. */
+  const craneZ = 0.2;
+  const craneY = groundAt(craneZ);
+  const craneBase = cyl(0.45, 0.55, 0.4, 10, stoneDark);
+  craneBase.position.set(2.9, craneY + 0.2, craneZ);
+  g.add(craneBase);
+  const craneSwing = new THREE.Group();
+  craneSwing.position.set(2.9, craneY + 0.4, craneZ);
+  const mast = box(0.3, 3.8, 0.3, metal);
+  mast.position.y = 1.9;
+  craneSwing.add(mast);
+  const jib = box(0.22, 0.22, 3.8, metal);
+  jib.position.set(0, 3.7, 1.6);
+  craneSwing.add(jib);
+  const hook = box(0.18, 0.34, 0.18, metal);
+  hook.position.set(0, 2.6, 3.3);
+  craneSwing.add(hook);
+  const cable = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 1.1, 4), solid(0x3a3a3a, 0.7));
+  cable.position.set(0, 3.15, 3.3);
+  craneSwing.add(cable);
+  g.add(craneSwing);
+
+  /* Thùng hàng chờ bốc. */
+  const crateMat = solid(0xb0803f, 0.92);
+  for (const [x, z, lift, size] of [
+    [-0.4, -2.0, 0, 0.85],
+    [0.6, -2.7, 0, 0.72],
+    [-0.3, -2.1, 0.85, 0.62],
+    [1.7, -2.2, 0, 0.66],
+  ] as [number, number, number, number][]) {
+    const crate = box(size, size, size, crateMat);
+    crate.position.set(x, groundAt(z) + size / 2 + lift, z);
+    crate.rotation.y = x + z;
+    g.add(crate);
+  }
+  const barrel = cyl(0.3, 0.32, 0.7, 12, wood);
+  barrel.position.set(2.1, groundAt(-1.1) + 0.35, -1.1);
+  g.add(barrel);
+
+  /* Cột buộc dây hai bên kè. */
+  for (const x of [-2.2, 2.2]) {
+    const bollard = cyl(0.16, 0.2, 0.6, 8, stoneDark);
+    bollard.position.set(x, groundAt(2.4) + 0.4, 2.4);
+    g.add(bollard);
+  }
+
+  /* Đèn hiệu ở đầu cầu tàu: thứ duy nhất trong cả cụm tự phát sáng, nên mắt tìm
+     ra bến cảng ngay cả lúc nửa đêm. */
+  const beaconZ = dockEnd - 0.6;
+  const post = box(0.14, 2.2, 0.14, wood);
+  post.position.set(1.35, deckY + 1.1, beaconZ);
+  g.add(post);
+  const beacon = ball(0.24, glow(0x7fe8bb, 2.2));
+  beacon.position.set(1.35, deckY + 2.3, beaconZ);
+  g.add(beacon);
+  const beaconLight = new THREE.PointLight(0x7fe8bb, 1.5, 14, 2);
+  beaconLight.position.copy(beacon.position);
+  g.add(beaconLight);
+
+  ticks.push((t) => {
+    craneSwing.rotation.y = Math.sin(t * 0.22) * 0.5;
+    const pulse = 0.55 + 0.45 * Math.pow(Math.sin(t * 1.3) * 0.5 + 0.5, 2);
+    beaconLight.intensity = 0.7 + pulse * 1.6;
+    (beacon.material as THREE.MeshStandardMaterial).emissiveIntensity = 1.2 + pulse * 1.6;
   });
 
   shadows(g);

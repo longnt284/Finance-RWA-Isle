@@ -615,6 +615,8 @@ const vi: Dict = {
   "shot.skyline": "Hàng chân trời",
   "shot.pier": "Bến câu sát nước",
   "shot.lagoon": "Vành san hô",
+  "shot.cliff": "Mũi đá và thác nước",
+  "shot.bay": "Vịnh Thương Cảng",
   "shot.drone": "Flycam toàn đảo",
 
   "pm.title": "Chế độ ảnh",
@@ -1260,6 +1262,8 @@ const en: Dict = {
   "shot.skyline": "Island skyline",
   "shot.pier": "Pier at water level",
   "shot.lagoon": "The coral ring",
+  "shot.cliff": "Cliff and waterfall",
+  "shot.bay": "Trade Harbour bay",
   "shot.drone": "Drone over the isle",
 
   "pm.title": "Photo mode",

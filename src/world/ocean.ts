@@ -1,21 +1,20 @@
 import * as THREE from "three";
 import type { TickFn } from "./atmosphere";
 import { surface, waterNormalMap } from "./textures";
+import { COAST_GLSL, ISLAND_RADIUS, SHORELINE_U, WATER_LEVEL, coastRadius } from "./shape";
 
 /* ------------------------------------------------------------------ */
-/*  Đại dương tròn, thềm cát nông và vành san hô đánh dấu lãnh thổ      */
+/*  Đại dương, thềm cát nông và vành san hô đánh dấu lãnh thổ           */
 /* ------------------------------------------------------------------ */
 
-/** Bán kính đảo chính. */
-export const ISLAND_RADIUS = 26;
+export { ISLAND_RADIUS };
 /** Mép ngoài của thềm cát nông — vùng nước ngọc lam quanh đảo. */
-export const SHELF_RADIUS = 41;
+export const SHELF_RADIUS = 52;
 /** Vành san hô: ranh giới lãnh thổ, du thuyền không vượt qua được. */
 export const TERRITORY_RADIUS = 118;
 /** Mặt nước là một đĩa tròn nên đường chân trời không bao giờ lộ góc vuông. */
 export const OCEAN_RADIUS = 470;
-/** Mặt nước nằm dưới mặt đất một chút để bờ có độ dốc. */
-export const WATER_LEVEL = -1.45;
+export { WATER_LEVEL };
 
 /** Đĩa tròn có mật độ đỉnh dồn về tâm — nơi người chơi thực sự nhìn. */
 function oceanGeometry(): THREE.BufferGeometry {
@@ -67,8 +66,8 @@ export function makeOcean(): Ocean {
       uSunDir: { value: new THREE.Vector3(0.4, 0.6, -0.5) },
       uMoonDir: { value: new THREE.Vector3(-0.4, 0.5, 0.6) },
       uRain: { value: 0 },
-      uIsland: { value: ISLAND_RADIUS },
       uShelf: { value: SHELF_RADIUS },
+      uShoreU: { value: SHORELINE_U },
       uTerritory: { value: TERRITORY_RADIUS },
       uRipple: { value: waterNormalMap() },
     },
@@ -117,8 +116,8 @@ export function makeOcean(): Ocean {
       uniform vec3 uMoonDir;
       uniform float uDaylight;
       uniform float uRain;
-      uniform float uIsland;
       uniform float uShelf;
+      uniform float uShoreU;
       uniform float uTerritory;
       uniform sampler2D uRipple;
       varying vec3 vWorld;
@@ -126,6 +125,8 @@ export function makeOcean(): Ocean {
       varying vec3 vSwell;
 
       float hash21(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+
+      ${COAST_GLSL}
 
       /* Lấy pháp tuyến gợn từ tấm vân, đổi sang hệ toạ độ thế giới (Y là chiều
          lên). Tấm vân lưu kênh Z là trục "lên" của không gian tiếp tuyến. */
@@ -150,8 +151,15 @@ export function makeOcean(): Ocean {
       void main() {
         vec2 p = vWorld.xz;
         float d = length(p);
+        /* Đường bờ không còn là đường tròn, nên "khoảng cách tới bờ" phải tính
+           theo bán kính bờ tại chính phương vị này. Dùng một hằng số duy nhất
+           thì bọt sóng vỗ vào giữa mũi đất và hụt hẳn ở đáy vịnh. */
+        float coast = coastRadiusAt(p);
+        /* Mép nước nằm trong mép đảo: bãi cát còn chạy tiếp ra ngoài rồi mới
+           chìm hẳn. Lấy mép đảo làm mép nước thì bọt sóng vỗ hụt gần bốn đơn vị. */
+        float shore = coast * uShoreU;
         float viewDist = distance(cameraPosition, vWorld);
-        float ring = sin(d * 0.34 - uTime * 1.15) * 0.5 + 0.5;
+        float ring = 0.0;
         float drift = sin(p.x * 0.06 + uTime * 0.35) * sin(p.y * 0.05 - uTime * 0.28);
 
         /* --- pháp tuyến: sóng lừng + BA lớp gợn cuộn ngược chiều ---
@@ -174,11 +182,15 @@ export function makeOcean(): Ocean {
         vec3 deep = mix(vec3(0.004, 0.018, 0.058), vec3(0.008, 0.062, 0.150), uDaylight);
         vec3 openSea = mix(vec3(0.012, 0.052, 0.104), vec3(0.028, 0.196, 0.330), uDaylight);
         vec3 lagoon = uShallow * (0.28 + uDaylight * 0.98);
-        float shelfMix = 1.0 - smoothstep(uIsland - 1.5, uShelf, d);
+        float shelfMix = 1.0 - smoothstep(shore, uShelf, d);
         float depthMix = 1.0 - smoothstep(uShelf, uShelf + 46.0, d);
         vec3 col = mix(deep, openSea, depthMix);
         col = mix(col, lagoon, shelfMix * 0.72);
-        col = mix(col, col * 1.12, ring * 0.18 + drift * 0.12 + vWave * 0.30);
+        /* Nhịp sóng bám theo khoảng cách tới bờ, không bám theo bán kính từ gốc
+           toạ độ: bờ đã hết tròn thì những vòng đồng tâm quanh tâm đảo đọc ra
+           hình học chứ không đọc ra sóng. */
+        ring = sin((d - shore) * 0.34 - uTime * 1.15) * 0.5 + 0.5;
+        col = mix(col, col * 1.12, ring * 0.14 + drift * 0.12 + vWave * 0.30);
 
         /* --- tán xạ dưới mặt sóng ---
            Đỉnh sóng mỏng nên ánh sáng xuyên qua được, khiến nó sáng và ngả lục
@@ -188,15 +200,18 @@ export function makeOcean(): Ocean {
         col += vec3(0.06, 0.30, 0.24) * crest * backlit * uDaylight * 0.45;
 
         /* --- bọt sóng vỗ bờ: 2 dải lệch pha + vân 2 tần số --- */
-        float surf = (1.0 - smoothstep(uIsland - 2.2, uIsland + 3.4, d)) * smoothstep(uIsland - 6.5, uIsland - 2.0, d);
-        float surfPulse = 0.55 + 0.45 * sin(d * 1.5 - uTime * 2.1);
-        float surfPulse2 = 0.5 + 0.5 * sin(d * 2.6 - uTime * 3.2 + 1.7);
+        /* Dải bọt rộng 4 đơn vị. Rộng hơn thế thì cả vành nước quanh đảo hoá
+           thành một quầng trắng đục, và mắt mất luôn cái mốc "đây là mép nước". */
+        float surf = smoothstep(shore + 4.2, shore + 0.1, d);
+        float toShore = d - shore;
+        float surfPulse = 0.55 + 0.45 * sin(toShore * 1.5 - uTime * 2.1);
+        float surfPulse2 = 0.5 + 0.5 * sin(toShore * 2.6 - uTime * 3.2 + 1.7);
         float foamGrain = 0.45 + 0.65 * texture2D(uRipple, p * 0.09 + vec2(uTime * 0.02, 0.0)).x;
         float foamFine = texture2D(uRipple, p * 0.23 - vec2(uTime * 0.015, uTime * 0.008)).y;
         float foam = clamp(surf * (surfPulse * 0.65 + surfPulse2 * 0.35) * (foamGrain * 0.7 + foamFine * 0.5), 0.0, 1.0);
         /* Rìa bọt sáng hơn thân bọt — viền trắng ôm sát mép nước. */
         float foamEdge = smoothstep(0.35, 0.95, foam);
-        col = mix(col, vec3(0.88, 0.96, 0.95), foam * 0.55);
+        col = mix(col, vec3(0.88, 0.96, 0.95), foam * 0.42);
         col = mix(col, vec3(0.98, 1.0, 0.99), foamEdge * foam * 0.45);
 
         /* --- bọt đầu sóng ngoài khơi (whitecaps): chỉ ở đỉnh sóng cao --- */
@@ -249,7 +264,7 @@ export function makeOcean(): Ocean {
            Ngay sát bờ, mặt nước để lộ thềm cát bên dưới thay vì tô đè một mảng
            ngọc lam. Đây là chi tiết mà mắt dùng để phân biệt "biển" với "sàn
            màu xanh": bãi cát phải chạy tiếp xuống dưới nước rồi mới mờ dần đi. */
-        float clarity = 1.0 - smoothstep(uIsland - 6.0, uShelf - 4.0, d);
+        float clarity = 1.0 - smoothstep(shore - 2.0, uShelf - 4.0, d);
         float alpha = mix(1.0, 0.42, clarity * 0.9);
         /* Bọt thì đục hẳn, và nhìn càng lướt thì nước càng kín. */
         alpha = clamp(max(alpha + fresnel * 0.5, foam * 0.85), 0.0, 1.0);
@@ -300,28 +315,61 @@ export function makeOcean(): Ocean {
 /* ------------------------------------------------------------------ */
 
 export function makeSandShelf(): THREE.Mesh {
-  const geometry = new THREE.RingGeometry(ISLAND_RADIUS - 4.5, SHELF_RADIUS, 96, 8);
-  const position = geometry.attributes.position as THREE.BufferAttribute;
+  /* Thềm cát là lưới toạ độ cực bám theo đường bờ, không phải một vành tròn.
+     Vành tròn thì ở mũi đất nó chui vào trong đảo, còn ở đáy vịnh nó để hở một
+     khoảng nước sâu ngay sát bãi cát. */
+  const SEGMENTS = 192;
+  const RINGS = 14;
+  const positions: number[] = [];
   const colors: number[] = [];
+  const indices: number[] = [];
   const near = new THREE.Color(0xd9c691);
   const far = new THREE.Color(0x5d7c74);
   const tint = new THREE.Color();
-  for (let i = 0; i < position.count; i++) {
-    const x = position.getX(i);
-    const y = position.getY(i);
-    const radius = Math.hypot(x, y);
-    const k = THREE.MathUtils.clamp((radius - (ISLAND_RADIUS - 4.5)) / (SHELF_RADIUS - ISLAND_RADIUS + 4.5), 0, 1);
-    // Thềm chìm dần ra xa và gợn nhẹ để không phẳng lì như đĩa.
-    const ripple = Math.sin(x * 0.22) * Math.cos(y * 0.19) * 0.28;
-    position.setZ(i, -0.35 - Math.pow(k, 1.6) * 5.4 + ripple * (1 - k));
-    tint.copy(near).lerp(far, Math.pow(k, 0.85));
-    colors.push(tint.r, tint.g, tint.b);
+
+  for (let ring = 0; ring <= RINGS; ring++) {
+    const k = ring / RINGS;
+    for (let seg = 0; seg < SEGMENTS; seg++) {
+      const angle = (seg / SEGMENTS) * Math.PI * 2;
+      /* Bắt đầu từ trong đường bờ một chút để không hở khe giữa bãi cát trên
+         cạn và thềm cát dưới nước, rồi trải ra tới mép ngoài của thềm. */
+      const inner = coastRadius(angle) * 0.78;
+      const radius = inner + (SHELF_RADIUS - inner) * k;
+      const x = Math.cos(angle) * radius;
+      const z = Math.sin(angle) * radius;
+      const ripple = Math.sin(x * 0.22) * Math.cos(z * 0.19) * 0.28;
+      positions.push(x, -0.35 - Math.pow(k, 1.6) * 5.4 + ripple * (1 - k), z);
+      tint.copy(near).lerp(far, Math.pow(k, 0.85));
+      colors.push(tint.r, tint.g, tint.b);
+    }
   }
+  for (let ring = 0; ring < RINGS; ring++) {
+    for (let seg = 0; seg < SEGMENTS; seg++) {
+      const next = (seg + 1) % SEGMENTS;
+      const a = ring * SEGMENTS + seg;
+      const b = ring * SEGMENTS + next;
+      const c = (ring + 1) * SEGMENTS + seg;
+      const d = (ring + 1) * SEGMENTS + next;
+      indices.push(a, d, c, a, b, d);
+    }
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
   geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+  /* UV theo toạ độ thế giới để hạt cát giữ nguyên cỡ trên khắp thềm. */
+  const uvs: number[] = [];
+  for (let i = 0; i < positions.length; i += 3) {
+    uvs.push((positions[i] / SHELF_RADIUS) * 15 + 0.5, (positions[i + 2] / SHELF_RADIUS) * 15 + 0.5);
+  }
+  geometry.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+  geometry.setIndex(indices);
   geometry.computeVertexNormals();
-  /* Thềm cát giờ nhìn xuyên qua mặt nước thấy được, nên nó phải ra chất cát:
-     gợn sóng đáy chứ không phải một mặt nghiêng phẳng lì. */
-  const grain = surface("sand", 30);
+  geometry.computeBoundingSphere();
+
+  /* Thềm cát nhìn xuyên qua mặt nước thấy được, nên nó phải ra chất cát: gợn
+     sóng đáy chứ không phải một mặt nghiêng phẳng lì. */
+  const grain = surface("sand", 1);
   const shelfMaterial = new THREE.MeshStandardMaterial({
     vertexColors: true,
     roughness: 0.96,
@@ -331,7 +379,6 @@ export function makeSandShelf(): THREE.Mesh {
   });
   shelfMaterial.normalScale.set(0.8, 0.8);
   const mesh = new THREE.Mesh(geometry, shelfMaterial);
-  mesh.rotation.x = -Math.PI / 2;
   mesh.position.y = WATER_LEVEL + 0.05;
   mesh.receiveShadow = true;
   return mesh;
