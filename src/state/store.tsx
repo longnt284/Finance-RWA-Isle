@@ -6,8 +6,31 @@ import { makeT } from "../lib/i18n";
 import type { Lang, TFn } from "../lib/i18n";
 import { DEFAULT_WATCH } from "../lib/market";
 import type { Season, WeatherId } from "../lib/season";
-import { FISH_BY_ID, FISH_COUNT, RARITY_META } from "../lib/fishing";
-import { SHOP_BY_ID, FREE_ITEMS } from "../lib/shop";
+import {
+  BAIT_BY_ID,
+  FISH_BY_ID,
+  FISH_COUNT,
+  RARITY_META,
+  TOURNAMENT_TIERS,
+  tournamentReward,
+  tournamentTier,
+} from "../lib/fishing";
+import type { BaitId, BaitState } from "../lib/fishing";
+import { SHOP_BY_ID, SHOP_ITEMS, FREE_ITEMS } from "../lib/shop";
+import {
+  CHAIN_BY_ID,
+  CHAIN_DEFS,
+  CHAIN_LENGTH,
+  bumpChain,
+  chainComplete,
+  chainForWeek,
+  chainStep,
+  emptyWeekly,
+  weekKey,
+} from "../lib/chain";
+import type { ChainDef, ChainStep, QuestMetric, WeeklyState } from "../lib/chain";
+import { EXPEDITION_BY_ID, expeditionOutcome, expeditionRemaining } from "../lib/expedition";
+import type { ExpeditionId, ExpeditionState } from "../lib/expedition";
 
 /* ============================== Types ============================== */
 
@@ -116,6 +139,15 @@ export interface AccountInfo {
 }
 
 /** Tiến độ nhiệm vụ hằng ngày, làm mới mỗi 0h theo giờ máy người dùng. */
+/** Giải câu cá trong ngày. */
+export interface TournamentState {
+  day: string;
+  /** Cân nặng con to nhất bắt được hôm nay, tính bằng kg. */
+  bestKg: number;
+  /** Bậc giải đã lĩnh thưởng — lĩnh rồi lên bậc cao hơn thì lĩnh thêm phần chênh. */
+  claimedTier: number;
+}
+
 export interface DailyQuestState {
   day: string;
   ids: string[];
@@ -189,6 +221,18 @@ export interface State {
   fishCaught: number;
   /** Tổng xu đã kiếm từ bán cá — dùng cho thống kê và thành tựu. */
   fishEarned: number;
+  /** Hộp mồi đang dùng; `null` nghĩa là câu chay. */
+  bait: BaitState | null;
+  /** Giải câu cá trong ngày: con to nhất hôm nay và đã lĩnh thưởng chưa. */
+  tournament: TournamentState;
+  /** Chuyến viễn dương đang chạy; `null` nghĩa là tàu đang neo ở bến. */
+  expedition: ExpeditionState | null;
+  expeditionsDone: number;
+  /** Tổng xu mang về từ các chuyến viễn dương. */
+  expeditionEarned: number;
+  /** Chuỗi nhiệm vụ của tuần này. */
+  weekly: WeeklyState;
+  weeklyDone: number;
   shop: ShopState;
   yachtTier: YachtTier;
   world: WorldPrefs;
@@ -321,9 +365,12 @@ export function checkinIndex(state: State, now: number = Date.now()): number {
 
 /* ============================== Nhiệm vụ ngày ============================== */
 
-export type QuestMetric =
-  | "task" | "quick" | "goal" | "networth" | "watch" | "note" | "visit" | "exam" | "voyage" | "decor"
-  | "fish" | "news" | "shop";
+/* Luật chuỗi tuần và bộ chỉ số nhiệm vụ nằm ở `lib/chain.ts` — chúng là luật
+   chơi chứ không phải trạng thái React, nên phải kiểm được bằng Node mà không
+   cần dựng cả một cây component. Bày lại ở đây để chỗ gọi không phải nhớ hai
+   đường import cho cùng một khái niệm. */
+export type { ChainDef, ChainStep, QuestMetric, WeeklyState };
+export { CHAIN_BY_ID, CHAIN_DEFS, CHAIN_LENGTH, chainComplete, chainForWeek, chainStep, weekKey };
 
 export interface QuestDef {
   id: string;
@@ -389,6 +436,20 @@ export function questClaimable(state: State, id: string): boolean {
 }
 
 /** Cộng tiến độ cho mọi nhiệm vụ hôm nay đang đo cùng một chỉ số. */
+/**
+ * Cộng tiến độ cho cả nhiệm vụ ngày lẫn chuỗi tuần trong một lần gọi.
+ *
+ * Bọc chung ở đây chứ không bắt từng `case` của reducer nhớ gọi hai hàm: hai
+ * mươi chỗ gọi thì sớm muộn cũng có chỗ quên một hàm, và chuỗi tuần sẽ đứng im
+ * ở đúng một loại hành động mà không ai hiểu vì sao.
+ */
+function bump(state: State, metric: QuestMetric, amount = 1): State {
+  const quests = bumpQuests(state.quests, metric, amount);
+  const weekly = bumpChain(state.weekly, metric, amount);
+  if (quests === state.quests && weekly === state.weekly) return state;
+  return { ...state, quests, weekly };
+}
+
 function bumpQuests(quests: DailyQuestState, metric: QuestMetric, amount = 1): DailyQuestState {
   let changed = false;
   const progress = { ...quests.progress };
@@ -402,6 +463,28 @@ function bumpQuests(quests: DailyQuestState, metric: QuestMetric, amount = 1): D
     }
   }
   return changed ? { ...quests, progress } : quests;
+}
+
+/**
+ * Những món trong Chợ mà người chơi chưa có và giá không vượt trần.
+ *
+ * Chuyến viễn dương lẫn chuỗi tuần đều trả thưởng bằng một món có sẵn trong
+ * danh mục thay vì một danh mục riêng. Thêm danh mục riêng nghĩa là thêm hình
+ * khối phải dựng, thêm tên phải dịch, và thêm một đường nữa để `test:shop`
+ * không phủ tới.
+ */
+function relicPool(state: State, cap: number): string[] {
+  return SHOP_ITEMS.filter((item) => item.price > 0 && item.price <= cap && !state.shop.owned.includes(item.id)).map(
+    (item) => item.id
+  );
+}
+
+function pickRelic(state: State, cap: number): string | null {
+  const pool = relicPool(state, cap);
+  if (!pool.length) return null;
+  /* Món đắt nhất còn thiếu: phần thưởng cuối chuỗi phải là thứ người chơi để
+     dành cả tuần mới mua nổi, không phải một bụi cỏ giá bốn mươi xu. */
+  return pool.reduce((best, id) => ((SHOP_BY_ID.get(id)?.price ?? 0) > (SHOP_BY_ID.get(best)?.price ?? 0) ? id : best));
 }
 
 /* ============================== Achievements ============================== */
@@ -448,6 +531,14 @@ export const ACH_DEFS: AchDef[] = [
   { id: "a25", tier: "mid", reward: 70, done: (s) => s.shop.owned.filter((id) => !FREE_ITEMS.includes(id)).length >= 10 },
   { id: "a26", tier: "hard", reward: 240, done: (s) => s.shop.owned.filter((id) => !FREE_ITEMS.includes(id)).length >= 40 },
   { id: "a27", tier: "mid", reward: 60, done: (s) => s.fishEarned >= 2000 },
+  { id: "a28", tier: "easy", reward: 25, done: (s) => s.expeditionsDone >= 1 },
+  { id: "a29", tier: "mid", reward: 90, done: (s) => s.expeditionsDone >= 15 },
+  { id: "a30", tier: "hard", reward: 300, done: (s) => s.expeditionEarned >= 25000 },
+  { id: "a31", tier: "mid", reward: 70, done: (s) => tournamentTier(s.tournament.bestKg) >= 3 },
+  { id: "a32", tier: "hard", reward: 260, done: (s) => tournamentTier(s.tournament.bestKg) >= 5 },
+  { id: "a33", tier: "easy", reward: 30, done: (s) => s.bait !== null },
+  { id: "a34", tier: "mid", reward: 110, done: (s) => s.weeklyDone >= 1 },
+  { id: "a35", tier: "hard", reward: 340, done: (s) => s.weeklyDone >= 8 },
 ];
 
 /* ============================== Actions ============================== */
@@ -481,6 +572,12 @@ type Action =
   | { type: "RENAME_CITY"; name: string }
   | { type: "CLAIM_DAILY"; today: string; yesterday: string }
   | { type: "CLAIM_QUEST"; id: string }
+  | { type: "CLAIM_CHAIN" }
+  | { type: "BUY_BAIT"; baitId: BaitId }
+  | { type: "SPEND_BAIT" }
+  | { type: "CLAIM_TOURNAMENT" }
+  | { type: "START_EXPEDITION"; routeId: ExpeditionId; now: number }
+  | { type: "CLAIM_EXPEDITION"; now: number }
   | { type: "EXAM_RESULT"; district: DistrictId; passed: boolean }
   | { type: "UPGRADE_YACHT" }
   | { type: "SET_WORLD"; patch: Partial<WorldPrefs> }
@@ -597,6 +694,13 @@ export function freshState(): State {
     basket: [],
     fishCaught: 0,
     fishEarned: 0,
+    bait: null,
+    tournament: { day: today, bestKg: 0, claimedTier: 0 },
+    expedition: null,
+    expeditionsDone: 0,
+    expeditionEarned: 0,
+    weekly: emptyWeekly(weekKey()),
+    weeklyDone: 0,
     shop: emptyShop(),
     yachtTier: 1,
     world: defaultWorld(),
@@ -743,6 +847,13 @@ function reducer(state: State, action: Action): State {
       let s = state;
       /* Bộ nhiệm vụ mới khi sang ngày mới. */
       if (s.quests.day !== action.today) s = { ...s, quests: emptyQuests(action.today) };
+      /* Giải câu cá tính lại từ đầu mỗi ngày. */
+      if (s.tournament.day !== action.today) {
+        s = { ...s, tournament: { day: action.today, bestKg: 0, claimedTier: 0 } };
+      }
+      /* Chuỗi tuần đổi vào thứ Hai, không đổi cùng nhịp với nhiệm vụ ngày. */
+      const week = weekKey();
+      if (s.weekly.week !== week) s = { ...s, weekly: emptyWeekly(week) };
       if (s.lastVisit === action.today || !s.onboarded) return s;
       const cont = s.lastVisit === action.yesterday;
       const streak = cont ? s.streak + 1 : 1;
@@ -777,7 +888,7 @@ function reducer(state: State, action: Action): State {
       if (nowDone) {
         s = gainXp(s, task.district, gained);
         s = { ...s, log: pushLog(s.log, { k: "log.taskDone", p: { t: task.title, x: gained }, kind: "xp", xp: gained }) };
-        s = { ...s, quests: bumpQuests(s.quests, "task") };
+        s = bump(s, "task");
       } else {
         s = gainXp(s, task.district, -gained);
       }
@@ -789,7 +900,7 @@ function reducer(state: State, action: Action): State {
       const current = Math.max(0, Math.min(goal.target, action.current));
       const justDone = current >= goal.target && !goal.done;
       const goals = state.goals.map((g) => (g.id === action.id ? { ...g, current, done: current >= goal.target } : g));
-      let s: State = { ...state, goals, quests: bumpQuests(state.quests, "goal") };
+      let s: State = bump({ ...state, goals }, "goal");
       if (justDone) {
         s = gainXp(s, goal.district, GOAL_BONUS_XP);
         s = { ...s, log: pushLog(s.log, { k: "log.goalDone", p: { t: goal.title, x: GOAL_BONUS_XP }, kind: "goal", xp: GOAL_BONUS_XP }) };
@@ -801,7 +912,7 @@ function reducer(state: State, action: Action): State {
       const gained = Math.round(action.xp * xpMult(state.streak));
       let s = gainXp(state, action.district, gained);
       s = { ...s, log: pushLog(s.log, { k: "log.trade", pk: { a: action.labelKey }, p: { x: gained }, kind: "xp", xp: gained }) };
-      s = { ...s, quests: bumpQuests(s.quests, "quick") };
+      s = bump(s, "quick");
       return s;
     }
     case "AWARD_ACH": {
@@ -814,17 +925,13 @@ function reducer(state: State, action: Action): State {
     case "LOG_NETWORTH": {
       const v = Math.max(0, action.value);
       const snapshots = [...state.snapshots, { t: Date.now(), v }].slice(-120);
-      let s: State = { ...state, snapshots, quests: bumpQuests(state.quests, "networth") };
+      let s: State = bump({ ...state, snapshots }, "networth");
       s = gainXp(s, "vault", NETWORTH_XP);
       s = { ...s, log: pushLog(s.log, { k: "log.nw", kind: "milestone" }) };
       return s;
     }
     case "ADD_NOTE":
-      return {
-        ...state,
-        notes: [action.note, ...state.notes].slice(0, 60),
-        quests: bumpQuests(state.quests, "note"),
-      };
+      return bump({ ...state, notes: [action.note, ...state.notes].slice(0, 60) }, "note");
     case "DELETE_NOTE":
       return { ...state, notes: state.notes.filter((n) => n.id !== action.id) };
     case "ADD_CUSTOM_ACH":
@@ -841,24 +948,19 @@ function reducer(state: State, action: Action): State {
     }
     case "ADD_WATCH":
       if (state.watchlist.includes(action.id)) return state;
-      return {
-        ...state,
-        watchlist: [...state.watchlist, action.id].slice(0, 40),
-        quests: bumpQuests(state.quests, "watch"),
-      };
+      return bump({ ...state, watchlist: [...state.watchlist, action.id].slice(0, 40) }, "watch");
     case "REMOVE_WATCH":
       return { ...state, watchlist: state.watchlist.filter((w) => w !== action.id) };
     case "TOGGLE_DECOR":
-      return {
+      return bump({
         ...state,
-        quests: bumpQuests(state.quests, "decor"),
         isleDecor: {
           ...state.isleDecor,
           [action.district]: state.isleDecor[action.district].includes(action.id)
             ? state.isleDecor[action.district].filter((decorId) => decorId !== action.id)
             : [...state.isleDecor[action.district], action.id],
         },
-      };
+      }, "decor");
     case "SET_ISLE_THEME":
       return { ...state, isleTheme: { ...state.isleTheme, [action.district]: action.theme } };
     case "CATCH_FISH": {
@@ -875,8 +977,12 @@ function reducer(state: State, action: Action): State {
         fish: { ...state.fish, [action.fishId]: record },
         basket,
         fishCaught: state.fishCaught + 1,
-        quests: bumpQuests(state.quests, "fish"),
+        tournament: {
+          ...state.tournament,
+          bestKg: Math.max(state.tournament.bestKg, action.weight),
+        },
       };
+      s = bump(s, "fish");
       const xp = RARITY_META[def.rarity].xp;
       s = gainXp(s, s.focus, xp);
       s = {
@@ -926,8 +1032,8 @@ function reducer(state: State, action: Action): State {
         ...state,
         coins: state.coins - item.price,
         shop: { ...state.shop, owned: [...state.shop.owned, action.itemId] },
-        quests: bumpQuests(state.quests, "shop"),
       };
+      s = bump(s, "shop");
       s = { ...s, log: pushLog(s.log, { k: "log.buy", p: { n: state.lang === "vi" ? item.vi : item.en, c: item.price }, kind: "milestone" }) };
       s = { ...s, toasts: withToast(s.toasts, { title: t("sp.bought"), sub: state.lang === "vi" ? item.vi : item.en, kind: "jade" }) };
       return s;
@@ -945,14 +1051,10 @@ function reducer(state: State, action: Action): State {
         if (cleaned.length >= PLACE_LIMIT) return state;
         next = [...cleaned, action.itemId];
       }
-      return {
-        ...state,
-        quests: bumpQuests(state.quests, "decor"),
-        shop: { ...state.shop, placed: { ...state.shop.placed, [action.slot]: next } },
-      };
+      return bump({ ...state, shop: { ...state.shop, placed: { ...state.shop.placed, [action.slot]: next } } }, "decor");
     }
     case "READ_NEWS":
-      return { ...state, quests: bumpQuests(state.quests, "news") };
+      return bump(state, "news");
     case "SET_LANG":
       return { ...state, lang: action.lang };
     case "SET_CURRENCY":
@@ -976,6 +1078,99 @@ function reducer(state: State, action: Action): State {
           title: t("toast.daily", { n: checkinDay + 1 }),
           sub: t("toast.dailySub", { x: reward, d: dLabel(t, s.focus) }),
           kind: "jade",
+        }),
+      };
+      return s;
+    }
+    case "CLAIM_CHAIN": {
+      const chain = CHAIN_BY_ID.get(state.weekly.chainId);
+      if (!chain || !chainComplete(state.weekly) || state.weekly.claimed) return state;
+      const relic = pickRelic(state, chain.relicCap);
+      let s: State = {
+        ...state,
+        coins: state.coins + chain.coins,
+        weekly: { ...state.weekly, claimed: true },
+        weeklyDone: state.weeklyDone + 1,
+        shop: relic ? { ...state.shop, owned: [...state.shop.owned, relic] } : state.shop,
+      };
+      const relicItem = relic ? SHOP_BY_ID.get(relic) : undefined;
+      s = { ...s, log: pushLog(s.log, { k: "log.chainDone", p: { c: chain.coins }, pk: { n: `chain.${chain.id}.n` }, kind: "milestone" }) };
+      s = {
+        ...s,
+        toasts: withToast(s.toasts, {
+          title: t("chain.claimed"),
+          sub: relicItem
+            ? `${chain.coins} · ${state.lang === "vi" ? relicItem.vi : relicItem.en}`
+            : t("chain.claimedSub", { c: chain.coins }),
+          kind: "gold",
+        }),
+      };
+      return s;
+    }
+    case "BUY_BAIT": {
+      const bait = BAIT_BY_ID.get(action.baitId);
+      if (!bait || state.coins < bait.price) return state;
+      /* Mua hộp mới khi hộp cũ chưa hết thì số lượt cộng dồn, không bị xoá.
+         Người chơi mua thêm giữa chừng là chuyện thường; mất số lượt đã trả
+         tiền là thứ không ai tha thứ. */
+      const left = state.bait?.id === action.baitId ? state.bait.left + bait.casts : bait.casts;
+      let s: State = { ...state, coins: state.coins - bait.price, bait: { id: action.baitId, left } };
+      s = { ...s, log: pushLog(s.log, { k: "log.bait", p: { c: bait.price, n: bait.casts }, pk: { b: `bait.${bait.id}` }, kind: "milestone" }) };
+      return s;
+    }
+    case "SPEND_BAIT": {
+      if (!state.bait) return state;
+      const left = state.bait.left - 1;
+      return { ...state, bait: left > 0 ? { ...state.bait, left } : null };
+    }
+    case "CLAIM_TOURNAMENT": {
+      const tier = tournamentTier(state.tournament.bestKg);
+      if (tier <= state.tournament.claimedTier) return state;
+      /* Trả phần CHÊNH giữa bậc mới và bậc đã lĩnh, nên bắt con to hơn trong
+         cùng một ngày vẫn được thưởng thêm mà không trả trùng phần cũ. */
+      const already = state.tournament.claimedTier > 0 ? TOURNAMENT_TIERS[state.tournament.claimedTier - 1].coins : 0;
+      const coins = tournamentReward(state.tournament.bestKg) - already;
+      if (coins <= 0) return state;
+      let s: State = {
+        ...state,
+        coins: state.coins + coins,
+        tournament: { ...state.tournament, claimedTier: tier },
+      };
+      s = { ...s, log: pushLog(s.log, { k: "log.tourney", p: { c: coins, w: state.tournament.bestKg }, kind: "milestone" }) };
+      s = { ...s, toasts: withToast(s.toasts, { title: t("tn.claimed"), sub: t("tn.claimedSub", { c: coins }), kind: "gold" }) };
+      return s;
+    }
+    case "START_EXPEDITION": {
+      const route = EXPEDITION_BY_ID.get(action.routeId);
+      if (!route || state.expedition || state.yachtTier < route.tier) return state;
+      let s: State = { ...state, expedition: { routeId: action.routeId, startedAt: action.now } };
+      s = { ...s, log: pushLog(s.log, { k: "log.expStart", pk: { r: `exp.${route.id}.n` }, kind: "system" }) };
+      return s;
+    }
+    case "CLAIM_EXPEDITION": {
+      if (!state.expedition || expeditionRemaining(state.expedition, action.now) > 0) return state;
+      const route = EXPEDITION_BY_ID.get(state.expedition.routeId);
+      if (!route) return { ...state, expedition: null };
+      const outcome = expeditionOutcome(state.expedition, relicPool(state, route.relicCap));
+      let s: State = {
+        ...state,
+        expedition: null,
+        coins: state.coins + outcome.coins,
+        expeditionsDone: state.expeditionsDone + 1,
+        expeditionEarned: state.expeditionEarned + outcome.coins,
+        shop: outcome.relic ? { ...state.shop, owned: [...state.shop.owned, outcome.relic] } : state.shop,
+      };
+      s = bump(s, "voyage");
+      const relicItem = outcome.relic ? SHOP_BY_ID.get(outcome.relic) : undefined;
+      s = { ...s, log: pushLog(s.log, { k: "log.expDone", p: { c: outcome.coins }, pk: { r: `exp.${route.id}.n` }, kind: "milestone" }) };
+      s = {
+        ...s,
+        toasts: withToast(s.toasts, {
+          title: t("exp.landed"),
+          sub: relicItem
+            ? `${outcome.coins} · ${state.lang === "vi" ? relicItem.vi : relicItem.en}`
+            : t("exp.landedSub", { c: outcome.coins }),
+          kind: "gold",
         }),
       };
       return s;
@@ -1086,6 +1281,12 @@ export interface StoreApi {
   renameCity(name: string): void;
   claimDaily(): void;
   claimQuest(id: string): void;
+  claimChain(): void;
+  buyBait(baitId: BaitId): void;
+  spendBait(): void;
+  claimTournament(): void;
+  startExpedition(routeId: ExpeditionId): void;
+  claimExpedition(): void;
   submitExam(district: DistrictId, passed: boolean): void;
   upgradeYacht(): void;
   setWorld(patch: Partial<WorldPrefs>): void;
@@ -1215,6 +1416,13 @@ export function normalizeSave(raw: unknown, legacy: boolean): State | null {
     isleDecor,
     isleTheme,
     coins: isNumber(parsed.coins) ? Math.max(0, Math.round(parsed.coins)) : 0,
+    bait: normalizeBait(parsed.bait),
+    tournament: normalizeTournament(parsed.tournament),
+    expedition: normalizeExpedition(parsed.expedition),
+    expeditionsDone: isNumber(parsed.expeditionsDone) ? Math.max(0, Math.round(parsed.expeditionsDone)) : 0,
+    expeditionEarned: isNumber(parsed.expeditionEarned) ? Math.max(0, Math.round(parsed.expeditionEarned)) : 0,
+    weekly: normalizeWeekly(parsed.weekly),
+    weeklyDone: isNumber(parsed.weeklyDone) ? Math.max(0, Math.round(parsed.weeklyDone)) : 0,
     fish,
     basket,
     fishCaught: isNumber(parsed.fishCaught) ? Math.max(0, Math.round(parsed.fishCaught)) : 0,
@@ -1225,6 +1433,62 @@ export function normalizeSave(raw: unknown, legacy: boolean): State | null {
     account: (parsed.account as AccountInfo | null | undefined) ?? null,
     privacyAccepted: parsed.privacyAccepted === true,
     toasts: [],
+  };
+}
+
+/* Bản lưu đến từ localStorage hoặc từ máy chủ, nên mọi thứ trong đó đều là dữ
+   liệu không đáng tin: một trường sai kiểu là một khung hình trắng. Mỗi lát cắt
+   mới đều có một hàm chuẩn hoá riêng thay vì tin vào phép trải `...parsed`. */
+
+function normalizeBait(raw: unknown): BaitState | null {
+  if (!raw || typeof raw !== "object") return null;
+  const bait = raw as Partial<BaitState>;
+  if (typeof bait.id !== "string" || !BAIT_BY_ID.has(bait.id as BaitId)) return null;
+  const left = isNumber(bait.left) ? Math.floor(bait.left) : 0;
+  if (left <= 0) return null;
+  const def = BAIT_BY_ID.get(bait.id as BaitId);
+  return { id: bait.id as BaitId, left: Math.min(left, (def?.casts ?? 0) * 6) };
+}
+
+function normalizeTournament(raw: unknown): TournamentState {
+  const today = dayKey(Date.now());
+  if (!raw || typeof raw !== "object") return { day: today, bestKg: 0, claimedTier: 0 };
+  const value = raw as Partial<TournamentState>;
+  /* Bản lưu của hôm qua không được mang thành tích sang hôm nay. */
+  if (value.day !== today) return { day: today, bestKg: 0, claimedTier: 0 };
+  return {
+    day: today,
+    bestKg: isNumber(value.bestKg) ? Math.max(0, value.bestKg) : 0,
+    claimedTier: isNumber(value.claimedTier)
+      ? Math.max(0, Math.min(TOURNAMENT_TIERS.length, Math.round(value.claimedTier)))
+      : 0,
+  };
+}
+
+function normalizeExpedition(raw: unknown): ExpeditionState | null {
+  if (!raw || typeof raw !== "object") return null;
+  const value = raw as Partial<ExpeditionState>;
+  if (typeof value.routeId !== "string" || !EXPEDITION_BY_ID.has(value.routeId as ExpeditionId)) return null;
+  if (!isNumber(value.startedAt) || value.startedAt <= 0) return null;
+  /* Dấu thời gian ở tương lai nghĩa là đồng hồ máy bị chỉnh lùi sau khi khởi
+     hành. Kéo về hiện tại chứ không huỷ chuyến: người chơi không làm gì sai. */
+  return { routeId: value.routeId as ExpeditionId, startedAt: Math.min(value.startedAt, Date.now()) };
+}
+
+function normalizeWeekly(raw: unknown): WeeklyState {
+  const week = weekKey();
+  if (!raw || typeof raw !== "object") return emptyWeekly(week);
+  const value = raw as Partial<WeeklyState>;
+  if (value.week !== week) return emptyWeekly(week);
+  const chainId = typeof value.chainId === "string" && CHAIN_BY_ID.has(value.chainId) ? value.chainId : chainForWeek(week);
+  const chain = CHAIN_BY_ID.get(chainId);
+  const step = isNumber(value.step) ? Math.max(0, Math.min(chain?.steps.length ?? 0, Math.round(value.step))) : 0;
+  return {
+    week,
+    chainId,
+    step,
+    progress: isNumber(value.progress) ? Math.max(0, Math.round(value.progress)) : 0,
+    claimed: value.claimed === true,
   };
 }
 
@@ -1311,6 +1575,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         dispatch({ type: "CLAIM_DAILY", today: dayKey(now), yesterday: dayKey(now - 86400000) });
       },
       claimQuest: (id) => dispatch({ type: "CLAIM_QUEST", id }),
+      claimChain: () => dispatch({ type: "CLAIM_CHAIN" }),
+      buyBait: (baitId) => dispatch({ type: "BUY_BAIT", baitId }),
+      spendBait: () => dispatch({ type: "SPEND_BAIT" }),
+      claimTournament: () => dispatch({ type: "CLAIM_TOURNAMENT" }),
+      startExpedition: (routeId) => dispatch({ type: "START_EXPEDITION", routeId, now: Date.now() }),
+      claimExpedition: () => dispatch({ type: "CLAIM_EXPEDITION", now: Date.now() }),
       submitExam: (district, passed) => dispatch({ type: "EXAM_RESULT", district, passed }),
       upgradeYacht: () => dispatch({ type: "UPGRADE_YACHT" }),
       setWorld: (patch) => dispatch({ type: "SET_WORLD", patch }),

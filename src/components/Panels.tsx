@@ -3,6 +3,7 @@ import {
   useStore, CHECKIN_REWARDS, CHECKIN_CYCLE, checkinIndex, checkinReward, QUEST_BY_ID, QUESTS_PER_DAY,
   questDone, questClaimable, xpMult, totalLevels, availableYachtTier,
   YACHT_TIERS, YACHT_REQUIREMENT, MAX_YACHT_TIER,
+  CHAIN_BY_ID, CHAIN_LENGTH, chainComplete,
 } from "../state/store";
 import type { QualityMode, YachtTier } from "../state/store";
 import { makeT } from "../lib/i18n";
@@ -10,9 +11,10 @@ import { dayKey } from "../lib/format";
 import { sound } from "../lib/audio";
 import { SEASONS, WEATHERS, seasonForDate, phaseForHour, autoWeather } from "../lib/season";
 import type { Season, WeatherId } from "../lib/season";
+import { EXPEDITION_BY_ID, EXPEDITION_ROUTES, expeditionProgress, expeditionRemaining, formatRemaining, routeUnlocked } from "../lib/expedition";
 import {
   IconClose, IconCalendar, IconFlag, IconCheck, IconGift, IconYacht,
-  IconSun, IconMoon, IconSliders, IconLock, IconCloud,
+  IconSun, IconMoon, IconSliders, IconLock, IconCloud, IconChain, IconAnchor,
 } from "./icons";
 
 function PanelShell({
@@ -205,6 +207,231 @@ export function QuestsPanel({ onClose }: { onClose: () => void }) {
           )}
           <p className="mt-2 text-center font-mono text-[9.5px] text-mist-500">{t("qs.resetAt")}</p>
         </section>
+
+        {/* ------------------------------ chuỗi tuần ------------------------------ */}
+        <ChainSection />
+      </div>
+    </PanelShell>
+  );
+}
+
+/**
+ * Chuỗi nhiệm vụ tuần.
+ *
+ * Bốn chặng nhưng chỉ một chặng nhận tiến độ tại một thời điểm, nên bảng này
+ * phải nói rõ chặng nào đang mở. Hiện cả bốn cùng lúc với bốn thanh tiến độ thì
+ * người chơi sẽ đi làm chặng bốn trước rồi tưởng game hỏng.
+ */
+function ChainSection() {
+  const { state, api } = useStore();
+  const t = makeT(state.lang);
+  const chain = CHAIN_BY_ID.get(state.weekly.chainId);
+  if (!chain) return null;
+  const complete = chainComplete(state.weekly);
+  const claimable = complete && !state.weekly.claimed;
+
+  return (
+    <section className="border-t border-mist-500/12 pt-4">
+      <div className="flex items-center justify-between">
+        <h3 className="flex items-center gap-1.5 font-display text-[10px] tracking-[0.22em] text-mist-400">
+          <IconChain className="h-3.5 w-3.5 text-gold-400" />
+          {t("chain.title")} · {t(`chain.${chain.id}.n`)}
+        </h3>
+        <span className="font-mono text-[10px] text-mist-500">
+          {t("misc.of", { a: Math.min(state.weekly.step, CHAIN_LENGTH), b: CHAIN_LENGTH })}
+        </span>
+      </div>
+      <p className="mt-1 text-[11px] leading-relaxed text-mist-500">{t(`chain.${chain.id}.d`)}</p>
+
+      <div className="mt-3 space-y-1.5">
+        {chain.steps.map((step, index) => {
+          const done = index < state.weekly.step;
+          const active = index === state.weekly.step;
+          const progress = active ? Math.min(step.target, state.weekly.progress) : done ? step.target : 0;
+          return (
+            <div
+              key={index}
+              className={`rounded-lg border px-3 py-2.5 transition-all duration-200 ${
+                done
+                  ? "border-jade-500/35 bg-jade-500/6"
+                  : active
+                    ? "border-gold-400/55 bg-gold-500/8"
+                    : "border-mist-500/12 bg-ink-850/40"
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                {done ? (
+                  <IconCheck className="h-3.5 w-3.5 shrink-0 text-jade-400" />
+                ) : (
+                  <span
+                    className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border font-mono text-[8px] ${
+                      active ? "border-gold-400/70 text-gold-300" : "border-mist-500/30 text-mist-500"
+                    }`}
+                  >
+                    {index + 1}
+                  </span>
+                )}
+                <span className={`min-w-0 flex-1 truncate text-[12px] ${done ? "text-jade-300" : active ? "text-mist-100" : "text-mist-500"}`}>
+                  {t(`metric.${step.metric}`)}
+                </span>
+                <span className="shrink-0 font-mono text-[9.5px] text-mist-500">{t("misc.of", { a: progress, b: step.target })}</span>
+              </div>
+              {active && (
+                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-ink-700">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-gold-600 to-gold-300 transition-all duration-500"
+                    style={{ width: `${(progress / step.target) * 100}%` }}
+                  />
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <button
+        onClick={() => {
+          api.claimChain();
+          sound.chime();
+        }}
+        disabled={!claimable}
+        className={`mt-3 flex w-full items-center justify-center gap-2 rounded-xl py-2.5 font-display text-[11px] tracking-[0.14em] transition-all ${
+          state.weekly.claimed
+            ? "cursor-not-allowed border border-jade-500/35 bg-jade-500/8 text-jade-300"
+            : claimable
+              ? "btn-gold glow-pulse"
+              : "cursor-not-allowed border border-mist-500/20 text-mist-500"
+        }`}
+      >
+        {state.weekly.claimed ? (
+          <>
+            <IconCheck className="h-4 w-4" /> {t("chain.claimed")}
+          </>
+        ) : (
+          <>
+            <IconGift className="h-4 w-4" /> {t("chain.claim", { c: chain.coins })}
+          </>
+        )}
+      </button>
+      <p className="mt-2 text-center font-mono text-[9.5px] text-mist-500">{t("chain.resetAt")}</p>
+    </section>
+  );
+}
+
+/* ================================================================== */
+/*  Bến cảng viễn dương                                                */
+/* ================================================================== */
+
+/**
+ * Bảng phái tàu đi chuyến.
+ *
+ * Đồng hồ đếm ngược chạy bằng `setInterval` một giây, KHÔNG bằng vòng lặp
+ * render của thế giới 3D: bảng này mở ra là thứ duy nhất người chơi đang nhìn,
+ * và bắt cả cảnh 3D vẽ lại mỗi giây chỉ để đổi hai chữ số là phí.
+ */
+export function HarborPanel({ onClose }: { onClose: () => void }) {
+  const { state, api } = useStore();
+  const t = makeT(state.lang);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const trip = state.expedition;
+  const route = trip ? EXPEDITION_BY_ID.get(trip.routeId) : null;
+  const remaining = trip ? expeditionRemaining(trip, now) : 0;
+  const landed = !!trip && remaining <= 0;
+
+  return (
+    <PanelShell title={t("exp.title")} icon={<IconAnchor className="h-[18px] w-[18px]" />} onClose={onClose}>
+      <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-5">
+        <p className="text-[11.5px] leading-relaxed text-mist-400">{t("exp.sub")}</p>
+
+        {trip && route && (
+          <section
+            className={`rounded-xl border p-4 ${landed ? "border-gold-400/60 bg-gold-500/10" : "hairline-gold bg-ink-850/60"}`}
+          >
+            <div className="flex items-center justify-between">
+              <span className="font-display text-[12px] text-mist-100">{t(`exp.${route.id}.n`)}</span>
+              <span className={`font-mono text-[11px] ${landed ? "text-gold-300" : "text-mist-400"}`}>
+                {formatRemaining(remaining, state.lang)}
+              </span>
+            </div>
+            <div className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-ink-700">
+              <div
+                className={`h-full rounded-full transition-all duration-500 ${landed ? "bg-jade-400" : "bg-gradient-to-r from-gold-600 to-gold-300"}`}
+                style={{ width: `${expeditionProgress(trip, now) * 100}%` }}
+              />
+            </div>
+            <button
+              onClick={() => {
+                api.claimExpedition();
+                sound.coin();
+              }}
+              disabled={!landed}
+              className={`mt-3 flex w-full items-center justify-center gap-2 rounded-xl py-2.5 font-display text-[11px] tracking-[0.14em] transition-all ${
+                landed ? "btn-gold glow-pulse" : "cursor-not-allowed border border-mist-500/20 text-mist-500"
+              }`}
+            >
+              <IconGift className="h-4 w-4" />
+              {landed ? t("exp.collect") : t("exp.sailing")}
+            </button>
+          </section>
+        )}
+
+        <section className="space-y-2">
+          {EXPEDITION_ROUTES.map((candidate) => {
+            const unlocked = routeUnlocked(candidate, state.yachtTier);
+            const busy = !!trip;
+            return (
+              <div
+                key={candidate.id}
+                className={`rounded-xl border p-3.5 transition-all duration-200 ${
+                  unlocked ? "hairline-gold bg-ink-850/55" : "border-mist-500/12 bg-ink-850/35"
+                }`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className={`flex items-center gap-1.5 text-[13px] font-semibold ${unlocked ? "text-mist-100" : "text-mist-500"}`}>
+                      {!unlocked && <IconLock className="h-3 w-3 shrink-0" />}
+                      {t(`exp.${candidate.id}.n`)}
+                    </div>
+                    <div className="mt-0.5 text-[11px] leading-snug text-mist-500">{t(`exp.${candidate.id}.d`)}</div>
+                  </div>
+                  <span className="shrink-0 font-mono text-[10px] text-gold-300">
+                    {candidate.coinMin}–{candidate.coinMax}
+                  </span>
+                </div>
+                <div className="mt-2.5 flex items-center gap-2.5">
+                  <span className="font-mono text-[9.5px] text-mist-500">
+                    {formatRemaining(candidate.minutes * 60_000, state.lang)}
+                  </span>
+                  <span className="font-mono text-[9.5px] text-mist-500">
+                    {t("exp.relic", { p: Math.round(candidate.relicChance * 100) })}
+                  </span>
+                  <button
+                    onClick={() => {
+                      api.startExpedition(candidate.id);
+                      sound.chime();
+                    }}
+                    disabled={!unlocked || busy}
+                    className={`ml-auto shrink-0 rounded-md px-2.5 py-1 font-mono text-[10px] transition-all ${
+                      unlocked && !busy ? "btn-gold" : "cursor-not-allowed border border-mist-500/25 text-mist-500"
+                    }`}
+                  >
+                    {unlocked ? t("exp.send") : t("exp.needTier", { n: candidate.tier })}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </section>
+
+        <p className="text-center font-mono text-[9.5px] text-mist-500">
+          {t("exp.total", { n: state.expeditionsDone, c: state.expeditionEarned })}
+        </p>
       </div>
     </PanelShell>
   );

@@ -54,6 +54,8 @@ import { makeOcean, makeSandShelf, makeBoundary, TERRITORY_RADIUS, WATER_LEVEL }
 import { makeWeather } from "./weather";
 import { makeYacht, YACHT_LENGTH } from "./yacht";
 import { SEASON_PALETTES, WEATHER_PROFILES, seasonForDate, autoWeather, goldenPhase, goldenWeatherOk } from "../lib/season";
+import { weatherBias } from "../lib/barometer";
+import type { BarometerBand } from "../lib/barometer";
 import type { Season, WeatherId, GoldenKind } from "../lib/season";
 import { SHOP_BY_ID } from "../lib/shop";
 import type { GroundPalette } from "../lib/shop";
@@ -99,6 +101,10 @@ interface Props {
   decor: Record<IsleSlot, string[]>;
   /** Người chơi bấm vào bến câu trên đảo. */
   onFish: (zone: "shore" | "vortex") => void;
+  /** Bấm vào bến cảng trong thế giới 3D thì mở bảng viễn dương. */
+  onHarbor: () => void;
+  /** Dải phong vũ biểu thị trường — nghiêng bảng cân thời tiết tự động. */
+  barometer: BarometerBand;
   /** Du thuyền lọt vào một xoáy nước ngoài khơi. */
   onVortex: () => void;
   /** Giờ trong ngày do chế độ ảnh ấn định (0..24), hoặc `null` để bám đồng hồ thật. */
@@ -173,18 +179,18 @@ function viewPose(view: ViewId, activeIsle: DistrictId = "crypto"): { pos: THREE
 
 export default function WorldScene({
   levels, selected, onSelect, handleRef, lang, islands, activeIsle, voyage, helmInput, yachtTier, world, decor,
-  onFish, onVortex, timeOverride, showLabels, onGolden,
+  onFish, onHarbor, barometer, onVortex, timeOverride, showLabels, onGolden,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
   const labelEls = useRef<Record<string, HTMLDivElement | null>>({});
   const propsRef = useRef({
     levels, selected, onSelect, lang, islands, activeIsle, voyage, helmInput, yachtTier, world, decor,
-    onFish, onVortex, timeOverride, showLabels, onGolden,
+    onFish, onHarbor, barometer, onVortex, timeOverride, showLabels, onGolden,
   });
   propsRef.current = {
     levels, selected, onSelect, lang, islands, activeIsle, voyage, helmInput, yachtTier, world, decor,
-    onFish, onVortex, timeOverride, showLabels, onGolden,
+    onFish, onHarbor, barometer, onVortex, timeOverride, showLabels, onGolden,
   };
 
   const sceneApi = useRef<{
@@ -543,8 +549,12 @@ export default function WorldScene({
       const season: Season = prefs.mode === "manual" ? prefs.season : seasonForDate(now);
       const state = skyStateFor(now);
       const isNight = state.daylight < 0.28;
-      const chosen: WeatherId = prefs.mode === "manual" ? prefs.weather : autoWeather(now, season, isNight);
-      const key = `${minute}|${season}|${chosen}|${prefs.quality}|${prefs.effects}`;
+      /* Thời tiết tự động nghiêng theo phong vũ biểu thị trường. Ở chế độ tay
+         thì không: người chơi đã tự chọn trời rồi, đừng cãi lại họ. */
+      const band = propsRef.current.barometer;
+      const chosen: WeatherId =
+        prefs.mode === "manual" ? prefs.weather : autoWeather(now, season, isNight, weatherBias(band));
+      const key = `${minute}|${season}|${chosen}|${prefs.quality}|${prefs.effects}|${band}`;
       if (!force && key === lastEnvKey) return;
       lastEnvKey = key;
 
@@ -1357,6 +1367,7 @@ export default function WorldScene({
       if (tag) {
         sound.tick();
         if (tag === "fishing") propsRef.current.onFish("shore");
+        else if (tag === "harbor") propsRef.current.onHarbor();
         else if (tag.startsWith("isle:")) propsRef.current.onSelect("isle", tag.slice(5) as DistrictId);
         else propsRef.current.onSelect(tag as ViewId);
       }

@@ -71,6 +71,20 @@ const WEATHERS = stringArray("src/lib/season.ts", "WEATHERS");
 const PHASES = stringArray("src/lib/season.ts", "DAY_PHASES");
 const MAX_YACHT_TIER = Number(/MAX_YACHT_TIER: YachtTier = (\d+)/.exec(read("src/state/store.tsx"))[1]);
 const SHOT_IDS = stringArray("src/world/camera.ts", "SHOT_IDS");
+const EXPEDITION_IDS = idsOf("src/lib/expedition.ts", "EXPEDITION_ROUTES");
+const BAIT_IDS = idsOf("src/lib/fishing.ts", "BAITS");
+const CHAIN_IDS = idsOf("src/lib/chain.ts", "CHAIN_DEFS");
+/** Đọc miền giá trị của một union kiểu `export type Name = "a" | "b";`. */
+function unionOf(rel, name) {
+  const body = read(rel);
+  const match = new RegExp(`export type ${name}\\s*=([^;]*);`).exec(body);
+  if (!match) throw new Error(`Không đọc được union ${name} trong ${rel}`);
+  return [...match[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+}
+
+/* Miền của `QuestMetric` — cũng là nhãn của từng chặng trong chuỗi tuần. */
+const METRICS = unionOf("src/lib/chain.ts", "QuestMetric");
+const BAROMETER_BANDS = unionOf("src/lib/barometer.ts", "BarometerBand");
 const TUTORIAL_STEPS = Number(/const STEPS = (\d+)/.exec(read("src/components/Modals.tsx"))[1]);
 
 const expected = new Set();
@@ -100,6 +114,12 @@ for (const theme of ["emerald", "sunset", "lagoon", "violet"]) add(`theme.${them
 for (const id of SHOT_IDS) add(`shot.${id}`);
 for (const id of ["free", "wide", "classic", "square", "tall"]) add(`pm.frame.${id}`);
 for (const kind of ["sunrise", "sunset"]) { add(`gh.${kind}.t`); add(`gh.${kind}.b`); }
+/* Bốn cơ chế mới cũng dựng khoá động từ danh sách hằng, y hệt như trên. */
+for (const id of EXPEDITION_IDS) { add(`exp.${id}.n`); add(`exp.${id}.d`); }
+for (const id of BAIT_IDS) add(`bait.${id}`);
+for (const id of CHAIN_IDS) { add(`chain.${id}.d`); add(`chain.${id}.n`); }
+for (const metric of METRICS) add(`metric.${metric}`);
+for (const band of BAROMETER_BANDS) add(`baro.${band}`);
 
 /* ------------------- khoá tĩnh có trong mã nguồn ------------------- */
 

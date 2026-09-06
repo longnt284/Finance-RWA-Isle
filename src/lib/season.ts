@@ -133,13 +133,24 @@ function hash(input: string): number {
  * Thời tiết tự động: cố định trong mỗi khối 3 giờ nên không nhấp nháy giữa các
  * khung hình, nhưng vẫn đổi vài lần mỗi ngày.
  */
-export function autoWeather(date: Date, season: Season, isNight: boolean): WeatherId {
+export function autoWeather(
+  date: Date,
+  season: Season,
+  isNight: boolean,
+  /** Hệ số nhân của phong vũ biểu thị trường; bỏ trống thì chỉ có mùa quyết định. */
+  bias?: Partial<Record<WeatherId, number>>
+): WeatherId {
   const block = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}-${Math.floor(date.getHours() / 3)}`;
   const weights = SEASON_WEIGHTS[season];
-  const entries = (Object.entries(weights) as [WeatherId, number][]).filter(
-    ([id]) => isNight || !NIGHT_ONLY.includes(id)
-  );
+  const entries = (Object.entries(weights) as [WeatherId, number][])
+    .filter(([id]) => isNight || !NIGHT_ONLY.includes(id))
+    /* Nhân chứ không thay: kiểu thời tiết nào mùa này vốn không có thì thị
+       trường đỏ đến mấy cũng không gọi nó ra được. Một ngày đỏ giữa mùa xuân
+       phải ra giông, không ra tuyết. */
+    .map(([id, weight]) => [id, weight * (bias?.[id] ?? 1)] as [WeatherId, number])
+    .filter(([, weight]) => weight > 0);
   const total = entries.reduce((sum, [, weight]) => sum + weight, 0);
+  if (total <= 0) return "clear";
   let roll = hash(block) * total;
   for (const [id, weight] of entries) {
     roll -= weight;

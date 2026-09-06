@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { setUsdRate } from "./format";
+import { readBarometer } from "./barometer";
+import type { Barometer } from "./barometer";
 
 export type StockSector = "bank" | "realty" | "industrial" | "energy" | "consumer" | "tech" | "finance" | "health";
 export type MarketVenue = "crypto" | "vn" | "us";
@@ -581,4 +583,30 @@ export function useMarket(assetIds: readonly string[] = []): number {
     return market.trackAssets(key ? key.split(",") : []);
   }, [key]);
   return useSyncExternalStore(market.subscribe, market.getVersion, market.getVersion);
+}
+
+/* ------------------------------------------------------------------ */
+/*  Phong vũ biểu thị trường                                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Đọc phong vũ biểu từ chính rổ theo dõi của người chơi.
+ *
+ * Để ở đây chứ không ở `barometer.ts` vì nó cần `useSyncExternalStore` của kho
+ * giá; `barometer.ts` phải giữ nguyên trạng thuần để kiểm được bằng Node.
+ *
+ * Rổ theo dõi chứ không phải cả 250 mã: bầu trời trên đảo phải phản ánh những
+ * gì NGƯỜI CHƠI nắm, không phản ánh chỉ số chung của thị trường.
+ */
+export function useBarometer(watchlist: readonly string[]): Barometer {
+  useMarket(watchlist);
+  const changes: number[] = [];
+  for (const id of watchlist) {
+    const quote = market.quotes[id];
+    /* Giá tham chiếu là giá dựng sẵn khi mạng chặn nguồn thật; đưa nó vào thì
+       phong vũ biểu sẽ báo một thị trường không tồn tại. */
+    if (!quote || quote.status === "reference") continue;
+    changes.push(quote.ch);
+  }
+  return readBarometer(changes);
 }

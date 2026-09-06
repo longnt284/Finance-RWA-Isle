@@ -149,6 +149,90 @@ export function fishValue(fish: FishDef, weight: number): number {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Mồi câu                                                            */
+/*                                                                     */
+/*  Xu trước đây chỉ có một chỗ để tiêu là Chợ Trang Trí, nên tiêu hết  */
+/*  một lượt là chẳng còn lý do gì để đi câu tiếp. Mồi là cống tiêu thứ */
+/*  hai, và là cống duy nhất trả lại thứ mà người chơi đang thiếu: cơ   */
+/*  hội gặp loài hiếm.                                                 */
+/* ------------------------------------------------------------------ */
+
+export type BaitId = "worm" | "shrimp" | "squid" | "chum";
+
+export interface BaitDef {
+  id: BaitId;
+  vi: string;
+  en: string;
+  /** Giá một hộp, tính bằng xu. */
+  price: number;
+  /** Số lần thả cần mà một hộp dùng được. */
+  casts: number;
+  /** Cộng thẳng vào `luck` của xổ số cắn câu. */
+  luck: number;
+}
+
+/* Giá mỗi lượt thả cần tăng dần theo may mắn nó mua được: 1,4 · 3,0 · 6,4 ·
+   11,2 xu một lượt. Người chơi mới đủ tiền mua giun ngay sau vài con cá, còn
+   mồi mực thì phải bán cả giỏ. */
+export const BAITS: BaitDef[] = [
+  { id: "worm", vi: "Giun biển", en: "Sea Worm", price: 42, casts: 30, luck: 0.1 },
+  { id: "shrimp", vi: "Tép bạc", en: "Silver Shrimp", price: 135, casts: 45, luck: 0.22 },
+  { id: "squid", vi: "Mực cắt", en: "Cut Squid", price: 384, casts: 60, luck: 0.38 },
+  { id: "chum", vi: "Mồi tanh", en: "Blood Chum", price: 896, casts: 80, luck: 0.55 },
+];
+
+export const BAIT_BY_ID = new Map(BAITS.map((bait) => [bait.id, bait]));
+
+/** Hộp mồi đang dùng. `null` nghĩa là câu chay. */
+export interface BaitState {
+  id: BaitId;
+  /** Số lượt thả cần còn lại. */
+  left: number;
+}
+
+export function baitLuck(bait: BaitState | null): number {
+  if (!bait || bait.left <= 0) return 0;
+  return BAIT_BY_ID.get(bait.id)?.luck ?? 0;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Giải câu cá trong ngày                                             */
+/*                                                                     */
+/*  Bộ sưu tập thưởng cho việc gặp đủ loài, còn giải này thưởng cho một */
+/*  thứ khác hẳn: con cá to nhất bắt được hôm nay. Hai mục tiêu kéo về  */
+/*  hai hướng ngược nhau, nên chúng không nuốt lẫn nhau.                */
+/* ------------------------------------------------------------------ */
+
+export interface TournamentTier {
+  /** Ngưỡng cân nặng (kg) của con cá to nhất trong ngày. */
+  kg: number;
+  coins: number;
+}
+
+export const TOURNAMENT_TIERS: TournamentTier[] = [
+  { kg: 1, coins: 40 },
+  { kg: 5, coins: 120 },
+  { kg: 20, coins: 340 },
+  { kg: 60, coins: 780 },
+  { kg: 150, coins: 1600 },
+];
+
+/** Bậc giải đã đạt với con cá to nhất trong ngày; 0 nghĩa là chưa tới bậc nào. */
+export function tournamentTier(bestKg: number): number {
+  let tier = 0;
+  for (let i = 0; i < TOURNAMENT_TIERS.length; i++) {
+    if (bestKg >= TOURNAMENT_TIERS[i].kg) tier = i + 1;
+  }
+  return tier;
+}
+
+/** Xu nhận được nếu lĩnh thưởng ngay bây giờ. */
+export function tournamentReward(bestKg: number): number {
+  const tier = tournamentTier(bestKg);
+  return tier > 0 ? TOURNAMENT_TIERS[tier - 1].coins : 0;
+}
+
+/* ------------------------------------------------------------------ */
 /*  Minigame — cùng cơ chế thanh trượt của Stardew Valley               */
 /* ------------------------------------------------------------------ */
 

@@ -11,6 +11,7 @@ import { Hero, OnboardingModal, TutorialOverlay, GoldenHourCard } from "./compon
 import { makeT } from "./lib/i18n";
 import { sound } from "./lib/audio";
 import { useMarketEvents } from "./lib/events";
+import { useBarometer } from "./lib/market";
 import { dayKey } from "./lib/format";
 import type { GoldenKind } from "./lib/season";
 import type { ShotId } from "./world/camera";
@@ -24,6 +25,7 @@ const MarketDrawer = lazy(() => import("./components/Drawers").then((module) => 
 const ToolsDrawer = lazy(() => import("./components/Drawers").then((module) => ({ default: module.ToolsDrawer })));
 const NotesDrawer = lazy(() => import("./components/Drawers").then((module) => ({ default: module.NotesDrawer })));
 const QuestsPanel = lazy(() => import("./components/Panels").then((module) => ({ default: module.QuestsPanel })));
+const HarborPanel = lazy(() => import("./components/Panels").then((module) => ({ default: module.HarborPanel })));
 const WorldPanel = lazy(() => import("./components/Panels").then((module) => ({ default: module.WorldPanel })));
 const NewsPanel = lazy(() => import("./components/News"));
 const ShopPanel = lazy(() => import("./components/Shop"));
@@ -68,6 +70,10 @@ function Shell() {
   const [muted, setMuted] = useState(sound.isMuted());
   const [activeIsle, setActiveIsle] = useState<DistrictId>("crypto");
   const [voyage, setVoyage] = useState(false);
+  /* Phong vũ biểu đọc từ chính rổ theo dõi của người chơi. Tính ở đây rồi
+     truyền xuống, chứ không để mỗi nơi tự tính: thế giới 3D, HUD và trò câu cá
+     phải cùng đọc một con số, nếu không HUD báo giông mà trời vẫn quang. */
+  const barometer = useBarometer(state.watchlist);
   const [examDistrict, setExamDistrict] = useState<DistrictId | null>(null);
   const [helmInput, setHelmInput] = useState({ throttle: 0, turn: 0 });
   /* Chế độ ảnh và chế độ "chỉ thế giới" là hai mức của cùng một ý: bớt giao
@@ -274,6 +280,8 @@ function Shell() {
           world={state.world}
           decor={state.shop.placed}
           onFish={openFishing}
+          onHarbor={() => setDrawer("harbor")}
+          barometer={barometer.band}
           onVortex={onVortex}
           timeOverride={photoMode ? timeOverride : null}
           showLabels={!photoMode && !cleanMode}
@@ -343,6 +351,7 @@ function Shell() {
                 {drawer === "tools" && <ToolsDrawer onClose={() => setDrawer(null)} />}
                 {drawer === "notes" && <NotesDrawer onClose={() => setDrawer(null)} />}
                 {drawer === "quests" && <QuestsPanel onClose={() => setDrawer(null)} />}
+                {drawer === "harbor" && <HarborPanel onClose={() => setDrawer(null)} />}
                 {drawer === "world" && <WorldPanel onClose={() => setDrawer(null)} />}
                 {drawer === "account" && <AccountPanel onClose={() => setDrawer(null)} />}
                 {drawer === "news" && <NewsPanel onClose={() => setDrawer(null)} />}
