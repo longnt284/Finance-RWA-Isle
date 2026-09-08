@@ -254,32 +254,26 @@ export default function WorldScene({
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.07;
-    controls.minDistance = 9;
-    controls.maxDistance = 165;
+    /* Khoảng zoom rộng: sát 5 đơn vị để soi mặt tiền một công trình, xa 220 để
+       thấy trọn quần đảo lẫn vành san hô. Người chơi tự quyết định đứng đâu. */
+    controls.minDistance = 5;
+    controls.maxDistance = 220;
     /* `maxPolarAngle` được giá máy ghi lại mỗi khung theo khoảng cách; giá trị
        này chỉ là điểm khởi đầu cho khung hình đầu tiên. */
     controls.maxPolarAngle = 1.5;
     controls.minPolarAngle = 0.1;
-    controls.autoRotateSpeed = 0.4;
     controls.target.set(0, 1.2, 0);
 
-    let userInteracting = false;
-    let idleTimer = 0;
+    /* Camera không bao giờ tự chạy. Bản trước bật `autoRotate` lại sau 4,5 giây
+       người chơi buông chuột: khung hình tự trôi, và mỗi lần vòng quay quét qua
+       hải đăng hay mũi đá thì giá máy lại kéo camera dí vào công trình. Ngắm
+       cảnh là việc của người chơi, không phải của vòng lặp. */
     const onCtlStart = () => {
-      userInteracting = true;
-      window.clearTimeout(idleTimer);
       /* Người chơi vừa cầm lấy chuột: khung hình dựng sẵn hết hiệu lực, giới
          hạn góc tự động quay lại làm việc của nó. */
       rig.polarOverride = null;
     };
-    const onCtlEnd = () => {
-      window.clearTimeout(idleTimer);
-      idleTimer = window.setTimeout(() => {
-        userInteracting = false;
-      }, 4500);
-    };
     controls.addEventListener("start", onCtlStart);
-    controls.addEventListener("end", onCtlEnd);
 
     const rig = makeCameraRig(camera, controls);
 
@@ -1161,6 +1155,30 @@ export default function WorldScene({
     });
     composer.addPass(gtaoPass);
 
+    /* Bầu trời đứng ngoài lượt vẽ pháp tuyến của GTAO.
+       GTAO dựng lại cả cảnh một lượt nữa bằng một vật liệu pháp tuyến ghi đè.
+       Vật liệu ấy không biết billboard: dưới nó, mỗi sprite mây, mặt trời hay
+       mặt trăng tụt về đúng hình gốc của mình — một tấm phẳng đứng im trong
+       không gian, ghi chiều sâu bất kể `depthWrite: false` của vật liệu thật.
+       Tầng mây vì thế đổ bóng che khuất lên chính nó, và người chơi thấy những
+       ô chữ nhật tối lơ lửng trên trời đúng chỗ các tấm sprite nằm. Bầu trời
+       không có bóng tiếp xúc để mà tính, nên cách sửa gọn nhất là giấu nó đi
+       trong đúng lượt vẽ ấy — ảnh đẹp đã vẽ xong từ `RenderPass` trước đó. */
+    const skyBillboards: THREE.Object3D[] = [sunBody.sprite, moonBody.sprite, shootingStars.group, cloudLayer.group];
+    const skyWasVisible: boolean[] = [];
+    const renderGtao = gtaoPass.render.bind(gtaoPass);
+    gtaoPass.render = (...args: Parameters<typeof renderGtao>) => {
+      for (let i = 0; i < skyBillboards.length; i++) {
+        skyWasVisible[i] = skyBillboards[i].visible;
+        skyBillboards[i].visible = false;
+      }
+      try {
+        renderGtao(...args);
+      } finally {
+        for (let i = 0; i < skyBillboards.length; i++) skyBillboards[i].visible = skyWasVisible[i];
+      }
+    };
+
     /* Bloom điện ảnh: ngưỡng cao để chỉ đèn, mặt trời, rune mới nở quầng;
        radius rộng cho halo mềm, strength điều theo ngày/đêm ở renderFrame. */
     const bloomPass = new UnrealBloomPass(
@@ -1739,7 +1757,6 @@ export default function WorldScene({
       /* Trường hạt thời tiết luôn bám quanh camera nên không bao giờ thấy mép. */
       if (currentWeather !== "clear") weather.setCenter(controls.target.x, controls.target.z);
 
-      controls.autoRotate = !propsRef.current.voyage && propsRef.current.selected === "overview" && !flying && !userInteracting && introDone && !reduceMotion;
       controls.update();
       /* Kẹp góc chúi theo khoảng cách, đẩy camera ra trước vật cản, ghim sàn.
          Dùng `rawDt` chứ không phải `dt`: `dt` đã bị kẹp xuống 0,05 giây để vật
@@ -1798,13 +1815,11 @@ export default function WorldScene({
 
     /* ------------------------------ cleanup ------------------------------ */
     return () => {
-      window.clearTimeout(idleTimer);
       cancelAnimationFrame(raf);
       window.removeEventListener("resize", onResize);
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       controls.removeEventListener("start", onCtlStart);
-      controls.removeEventListener("end", onCtlEnd);
       renderer.domElement.removeEventListener("pointermove", onPointerMove);
       renderer.domElement.removeEventListener("pointerdown", onPointerDown);
       renderer.domElement.removeEventListener("pointerup", onPointerUp);

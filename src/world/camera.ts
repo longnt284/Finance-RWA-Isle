@@ -176,7 +176,7 @@ const TARGET_SKIP = 1.6;
  */
 function maxPolarFor(distance: number): number {
   const k = THREE.MathUtils.smoothstep(distance, 12, 86);
-  return THREE.MathUtils.lerp(1.3, 1.52, k);
+  return THREE.MathUtils.lerp(1.45, 1.56, k);
 }
 
 /** Góc chúi của một cặp (điểm ngắm, vị trí máy) — 0 là nhìn thẳng từ trên xuống. */
@@ -232,13 +232,22 @@ export function makeCameraRig(camera: THREE.PerspectiveCamera, controls: OrbitCo
            vật liệu, nên tia xuất phát từ trong lòng một khối kín thì đi thẳng
            ra ngoài chứ không báo va chạm giả. */
         const hits = raycaster.intersectObjects(rig.colliders, true);
-        if (hits.length) wanted = Math.max(MIN_ORBIT, skip + hits[0].distance - COLLIDE_MARGIN);
+        if (hits.length) {
+          /* Sàn dưới của cú đẩy tỉ lệ với chính khoảng cách người chơi chọn.
+             Không có nó thì một khung hình rộng — camera cách đảo bảy tám chục
+             đơn vị — hễ tia quét trúng mái hải đăng là bị kéo thẳng về 2,6 đơn
+             vị: người chơi đang ngắm toàn cảnh bỗng thấy mình dí sát chân tháp.
+             Vật cản ở tầm xa chỉ được phép kéo camera vào hai phần ba đường. */
+          const closest = Math.max(MIN_ORBIT, distance * 0.34);
+          wanted = Math.max(closest, skip + hits[0].distance - COLLIDE_MARGIN);
+        }
       }
 
-      /* Lùi ra thì từ tốn, bị ép vào thì lập tức — chậm một nhịp lúc bị ép là
-         đúng một nhịp người chơi nhìn xuyên qua tường. */
+      /* Cả hai chiều đều kéo mượt, nhưng bị ép vào thì nhanh gấp bốn lần lúc lùi
+         ra: đủ nhanh để không kịp nhìn xuyên qua tường, mà vẫn là một chuyển
+         động chứ không phải cú giật đổi chỗ tức thì. */
       if (smoothed <= 0) smoothed = wanted;
-      smoothed = wanted < smoothed ? wanted : THREE.MathUtils.damp(smoothed, wanted, 3.4, dt);
+      smoothed = THREE.MathUtils.damp(smoothed, wanted, wanted < smoothed ? 14 : 3.4, dt);
 
       camera.position.copy(controls.target).addScaledVector(direction, smoothed);
 

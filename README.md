@@ -138,9 +138,12 @@ seed mà ứng dụng dùng, nên nó bấm trúng chứ không đoán.
   và mép bậc thềm tối lại đúng như ngoài đời. Bán kính 0,75 đơn vị, cỡ của một
   bóng tiếp xúc thật ở tỉ lệ công trình cao 5–10 đơn vị. Vì nó phải vẽ lại toàn
   cảnh một lượt nữa để lấy pháp tuyến và chiều sâu, ngưỡng tự tắt chặt hơn bloom
-  (20ms thay vì 26ms) và máy yếu bị loại thẳng. Cận cảnh camera nâng từ 0,1 lên
-  0,6 và viễn cảnh hạ từ 1400 xuống 950: tỉ lệ xa/gần 14.000 lần của bản trước
-  làm depth texture vỡ vụn, bóng tiếp xúc biến thành những vệt sọc.
+  (20ms thay vì 26ms) và máy yếu bị loại thẳng. Lượt vẽ pháp tuyến ấy dùng vật
+  liệu ghi đè, mà vật liệu ghi đè thì không biết billboard: mây, mặt trời và mặt
+  trăng tụt về đúng hình gốc — những tấm phẳng đứng im ghi chiều sâu — nên tầng
+  mây tự đổ bóng che khuất lên chính nó thành mấy ô chữ nhật tối lơ lửng giữa
+  trời. Bầu trời vì thế được giấu đi trong đúng lượt vẽ đó; ảnh đẹp đã xong từ
+  `RenderPass` trước rồi.
 - **Thảm cỏ dựng bằng instancing**, hai dải, mỗi dải một lệnh vẽ. Dải đồng cỏ
   **15.000 ngọn** phủ cao nguyên; dải **cỏ đụn 4.200 ngọn** cao hơn, thưa hơn,
   ngả vàng, mọc chờm qua ranh giới cỏ–cát rồi thò tiếp ra bãi. Thiếu dải thứ hai
@@ -195,15 +198,19 @@ seed mà ứng dụng dùng, nên nó bấm trúng chứ không đoán.
 
 ## Camera
 
+- **Camera không bao giờ tự chạy.** Không có vòng quay tự động, không có cú bay
+  nào người chơi không tự bấm: buông chuột ra thì khung hình đứng nguyên ở đó.
+  Khoảng zoom trải từ 5 tới 220 đơn vị.
 - **Giới hạn góc theo ngữ cảnh.** `maxPolarAngle` được tính lại mỗi khung theo
-  khoảng cách camera–mục tiêu: 1,30 rad ở tầm gần, nới dần tới 1,52 khi lùi ra xa.
-  Ở tầm gần, trần mặc định của `OrbitControls` cho phép hạ camera xuống gần như
-  ngang mặt đất — và vì mặt đảo là một khối trụ hữu hạn, người chơi nhìn thẳng vào
-  mặt dưới của nó.
+  khoảng cách camera–mục tiêu: 1,45 rad ở tầm gần, nới dần tới 1,56 khi lùi ra xa.
+  Trần này chỉ còn đủ chặt để camera không lia xuống dưới mặt đảo — vì mặt đảo là
+  một khối trụ hữu hạn, hạ thấp hơn nữa là nhìn thẳng vào mặt dưới của nó.
 - **Va chạm camera.** Mỗi khung, một tia bắn từ điểm ngắm ra phía camera; vướng
-  công trình hay địa hình thì camera bị kéo vào trước mặt vật cản 0,85 đơn vị. Bị
-  ép vào thì tức thì, lùi ra thì từ tốn — chậm một nhịp lúc bị ép là đúng một nhịp
-  nhìn xuyên qua tường. Tia bỏ qua 1,6 đơn vị đầu tiên quanh điểm ngắm, nên chính
+  công trình hay địa hình thì camera bị kéo vào trước mặt vật cản 0,85 đơn vị.
+  Cú đẩy có sàn dưới bằng 34% khoảng cách người chơi đang chọn, nên một khung
+  toàn cảnh không bị mái hải đăng kéo dí về sát chân tháp. Bị ép vào thì kéo
+  nhanh gấp bốn lần lúc lùi ra — đủ nhanh để không kịp nhìn xuyên qua tường mà
+  vẫn là chuyển động chứ không phải cú giật. Tia bỏ qua 1,6 đơn vị đầu tiên quanh điểm ngắm, nên chính
   thứ đang được lấy làm mẫu không đẩy camera vào; mặt sau bị loại theo `side` của
   vật liệu nên tia xuất phát từ trong lòng một khối kín vẫn đi thẳng ra ngoài. Một
   sàn cứng chặn camera rơi xuống dưới mặt cỏ hay chìm dưới mặt biển.
