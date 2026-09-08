@@ -541,7 +541,12 @@ export function makeCloudLayer(count = 9): CloudLayer {
   } catch {
     puffTexture = null;
   }
-  for (let i = 0; i < count; i++) {
+  /* Không có tấm puff thì không có mây. Hình dạng của một đám mây nằm hoàn toàn
+     trong kênh alpha của tấm ấy: thiếu nó, `SpriteMaterial` vẽ nguyên tấm
+     billboard thành một mảng màu đặc, và tầng mây biến thành mấy ô chữ nhật
+     lơ lửng giữa trời. Trời quang còn đỡ xấu hơn nhiều. */
+  const cloudCount = puffTexture ? count : 0;
+  for (let i = 0; i < cloudCount; i++) {
     const material = new THREE.SpriteMaterial({
       map: puffTexture,
       color: baseColor.clone(),
