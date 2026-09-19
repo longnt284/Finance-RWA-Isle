@@ -57,8 +57,31 @@ function markGoldenShown(kind: GoldenKind) {
   }
 }
 
-/** Trang bìa chỉ chào người quay lại một lần cho mỗi phiên, không phải mỗi lần tải lại thẻ. */
-const RETURN_KEY = "vuong-greeted";
+/**
+ * Nền tĩnh của cổng vào.
+ *
+ * Trước đây thế giới 3D dựng ngay lúc tải trang rồi nằm sau trang bìa làm nền.
+ * Đó là chỗ tốn nhất của cả ứng dụng — vài nghìn draw call, một chuỗi hậu kỳ và
+ * cả tấm bóng đổ — bị trả giá đúng vào giây người chơi chưa nhìn nó. Nền bây giờ
+ * là một mảng gradient CSS: không một pixel WebGL nào cho tới khi người chơi
+ * thật sự bấm vào đảo.
+ */
+function GateBackdrop() {
+  return (
+    <div className="absolute inset-0 overflow-hidden" aria-hidden="true">
+      {/* Trời: xanh mực ở đỉnh, ấm dần xuống chân trời. */}
+      <div className="absolute inset-0" style={{ background: "linear-gradient(to bottom,#04121a 0%,#0a2b34 32%,#1d5b53 54%,#2c6f5d 58%,#0b2b31 60%,#061a20 100%)" }} />
+      {/* Mặt trời thấp bên phải — nguồn sáng duy nhất của khung hình. */}
+      <div className="absolute inset-0" style={{ background: "radial-gradient(circle at 72% 57%,rgba(247,206,126,0.55) 0%,rgba(226,150,86,0.22) 12%,rgba(226,150,86,0.07) 26%,transparent 46%)" }} />
+      {/* Vệt nắng dọc trên mặt nước, đúng dưới mặt trời. */}
+      <div className="absolute inset-x-0 bottom-0 top-[58%]" style={{ background: "radial-gradient(ellipse 14% 90% at 72% 0%,rgba(247,206,126,0.30) 0%,transparent 70%)" }} />
+      {/* Mây tầng thấp vắt ngang chân trời. */}
+      <div className="absolute inset-x-0 top-[44%] h-[14%] opacity-60" style={{ background: "radial-gradient(ellipse 30% 45% at 24% 62%,rgba(226,168,120,0.28),transparent 70%),radial-gradient(ellipse 22% 38% at 58% 40%,rgba(233,186,140,0.22),transparent 70%),radial-gradient(ellipse 26% 40% at 88% 70%,rgba(210,150,110,0.20),transparent 70%)" }} />
+      {/* Vệt tối đáy khung, để chữ ở nửa dưới luôn đọc được. */}
+      <div className="absolute inset-x-0 bottom-0 h-[46%]" style={{ background: "linear-gradient(to top,#03141a 0%,rgba(3,20,26,0.55) 45%,transparent 100%)" }} />
+    </div>
+  );
+}
 
 function Shell() {
   const { state, api } = useStore();
@@ -86,23 +109,34 @@ function Shell() {
   const [fishingZone, setFishingZone] = useState<FishingZone | null>(null);
   const worldRef = useRef<WorldHandle | null>(null);
 
-  /* Người chơi cũ được chào lại bằng chính trang bìa. Bản lưu có thể vừa được
-     kéo từ đám mây xuống ở lần dựng đầu tiên, nên cờ này bật lên khi `onboarded`
-     chuyển thành `true` chứ không chỉ ở lần chạy đầu. */
-  const [greeting, setGreeting] = useState(false);
-  const greetChecked = useRef(false);
+  /* Cổng vào.
+     Có bản lưu rồi vẫn phải bấm một lần mới vào đảo. Hai lý do, và cả hai đều
+     quan trọng hơn một cú bấm: trang bìa là chỗ duy nhất nói tên của nơi này,
+     nên người chơi cần đi qua nó mỗi lần để nhớ mình đang ở đâu; và chừng nào
+     cổng chưa mở thì thế giới 3D chưa dựng, nên trang tải xong gần như tức
+     thì thay vì đứng hình mấy giây. Không còn ghi nhớ theo phiên: mỗi lần tải
+     trang là một lần chào. */
+  const [entered, setEntered] = useState(false);
+
+  /* Trong lúc người chơi đọc trang bìa, tải sẵn mã của thế giới 3D — hơn 600KB
+     của three cộng phần dựng cảnh. Chỉ tải, không dựng: không một lệnh vẽ nào
+     chạy, nên trang bìa vẫn nhẹ, mà cú bấm "vào đảo" thì không phải chờ mạng
+     nữa. Đợi tới lúc máy rảnh để không giành băng thông với phông chữ và giá
+     thị trường đang tải cho chính trang bìa. */
   useEffect(() => {
-    if (greetChecked.current || !state.onboarded) return;
-    greetChecked.current = true;
-    let greeted = false;
-    try {
-      greeted = window.sessionStorage.getItem(RETURN_KEY) === "1";
-      window.sessionStorage.setItem(RETURN_KEY, "1");
-    } catch {
-      greeted = false;
+    if (entered) return;
+    const warm = () => {
+      void import("./world/WorldScene");
+      void import("./components/Workspace");
+    };
+    const idle = window.requestIdleCallback;
+    if (idle) {
+      const handle = idle(warm, { timeout: 2500 });
+      return () => window.cancelIdleCallback?.(handle);
     }
-    if (!greeted) setGreeting(true);
-  }, [state.onboarded]);
+    const timer = setTimeout(warm, 1200);
+    return () => clearTimeout(timer);
+  }, [entered]);
 
   const levels = useMemo(() => districtLevels(state), [state.certified]);
   const islands = useMemo(
@@ -159,7 +193,13 @@ function Shell() {
       setSelected("overview");
       setDrawer(null);
       setExamDistrict(null);
+      /* Xoá tài khoản thì cổng đóng lại — người chơi quay về đúng trang bìa
+         của một hòn đảo chưa khai mở. */
+      setEntered(false);
     } else if (!prevOnboarded.current && state.onboarded) {
+      /* Vừa khai mở xong (hoặc vừa bấm xem demo): đi thẳng vào đảo, đừng bắt
+         bấm thêm một cổng nữa. */
+      setEntered(true);
       setSelected(state.focus);
       if (!state.tutorialSeen) {
         const timer = setTimeout(() => setDrawer("tutorial"), 900);
@@ -265,6 +305,8 @@ function Shell() {
 
   return (
     <div className="cine-grain cine-vignette relative h-screen w-screen select-none overflow-hidden bg-ink-900">
+      {!entered && <GateBackdrop />}
+      {entered && (
       <Suspense fallback={<div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_45%,#173f3a_0%,#071816_72%)]" aria-hidden="true" />}>
         <WorldScene
           levels={levels}
@@ -288,10 +330,11 @@ function Shell() {
           onGolden={onGolden}
         />
       </Suspense>
+      )}
 
-      {greeting && state.onboarded ? (
-        <Hero returning onBegin={() => setGreeting(false)} />
-      ) : state.onboarded ? (
+      {!entered && state.onboarded ? (
+        <Hero returning onBegin={() => setEntered(true)} />
+      ) : entered && state.onboarded ? (
         <>
           {!photoMode && !cleanMode && (
           <HUD
@@ -382,8 +425,8 @@ function Shell() {
         </>
       ) : (
         <>
-          <Hero onBegin={() => setShowOnboard(true)} />
-          <OnboardingModal open={showOnboard} onClose={() => setShowOnboard(false)} />
+          <Hero onBegin={() => setShowOnboard(true)} onEnter={() => setEntered(true)} />
+          <OnboardingModal open={showOnboard} onClose={() => setShowOnboard(false)} onEnter={() => setEntered(true)} />
         </>
       )}
     </div>

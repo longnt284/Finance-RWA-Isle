@@ -74,7 +74,7 @@ function HeroTicker() {
  * vì mời khai mở một hòn đảo mới, nó chào tên hòn đảo họ đã dựng và ba con số
  * nói rằng nó vẫn còn nguyên ở đó.
  */
-export function Hero({ onBegin, returning = false }: { onBegin: () => void; returning?: boolean }) {
+export function Hero({ onBegin, returning = false, onEnter }: { onBegin: () => void; returning?: boolean; onEnter?: () => void }) {
   const { state, api } = useStore();
   const t = makeT(state.lang);
   const worth = netWorth(state);
@@ -194,6 +194,9 @@ export function Hero({ onBegin, returning = false }: { onBegin: () => void; retu
                 onClick={() => {
                   sound.coin();
                   api.completeOnboarding("", "crypto", true);
+                  /* Mở cổng ngay trong cùng một lượt dựng, để trang bìa không
+                     kịp nhấp nháy sang bản "chào mừng trở lại". */
+                  onEnter?.();
                 }}
                 className="btn-ghost rounded-xl px-6 py-3.5 font-display text-[12px] tracking-[0.14em]"
               >
@@ -233,7 +236,7 @@ export function Hero({ onBegin, returning = false }: { onBegin: () => void; retu
 
 /* ============================ ONBOARDING ============================ */
 
-export function OnboardingModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function OnboardingModal({ open, onClose, onEnter }: { open: boolean; onClose: () => void; onEnter?: () => void }) {
   const { state, api } = useStore();
   const t = makeT(state.lang);
   const [name, setName] = useState("");
@@ -302,6 +305,7 @@ export function OnboardingModal({ open, onClose }: { open: boolean; onClose: () 
             onClick={() => {
               sound.levelUp();
               api.completeOnboarding(name, focus, false);
+              onEnter?.();
               onClose();
             }}
             className="btn-gold flex items-center gap-2 rounded-xl px-6 py-3 font-display text-[11px] tracking-[0.14em]"
