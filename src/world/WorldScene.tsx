@@ -219,11 +219,27 @@ export default function WorldScene({
 
     const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const compactGpu = window.matchMedia("(max-width: 760px)").matches || (navigator.hardwareConcurrency ?? 8) <= 4;
-    /* Photoreal cần pixel để nét: desktop lên tới 2.0, mobile 1.35. Composer
+    /* Photoreal cần pixel để nét: desktop lên tới 1.75, mobile 1.25. Composer
        có MSAA riêng nên cờ antialias của renderer chỉ là lớp dự phòng khi
-       post tắt — bật luôn để khung fallback vẫn sắc. */
-    const maxPixelRatio = compactGpu ? 1.35 : 2.0;
-    let renderPixelRatio = Math.min(window.devicePixelRatio, maxPixelRatio);
+       post tắt — bật luôn để khung fallback vẫn sắc.
+
+       Trần hạ từ 2.0 xuống 1.75 vì trên màn Retina, 2.0 nhân với MSAA nửa-float
+       của composer ra một bộ đệm cỡ vài trăm megabyte: đẹp hơn không đáng kể
+       mà khung hình mất gần một nửa.
+
+       Và quan trọng hơn: khung đầu tiên luôn chạy ở mức thấp. Đo trước, đẹp
+       sau. Vòng lặp thích ứng sẽ nâng dần lên trần trong vài giây nếu máy kham
+       nổi — thay vì mở hết cỡ rồi tụt xuống, để người chơi nhìn thấy đúng cái
+       giây giật đầu tiên ấy. */
+    /* Người chơi tự chọn mức "cao" thì họ đã nói là máy kham được và họ muốn
+       ảnh đẹp hơn nhịp mượt — trả lại cho họ đúng độ phân giải tối đa, MSAA
+       8x, GTAO 16 mẫu và tấm bóng 3072. Mức "tự động" thì ngược lại: mượt
+       trước, đẹp sau. */
+    const cinematic = propsRef.current.world.quality === "high";
+    const maxPixelRatio = compactGpu ? 1.25 : cinematic ? 2 : 1.75;
+    const startPixelRatio = compactGpu ? 1 : cinematic ? 1.5 : 1.25;
+    const ceilingPixelRatio = Math.min(window.devicePixelRatio, maxPixelRatio);
+    let renderPixelRatio = Math.min(window.devicePixelRatio, startPixelRatio);
     const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance", stencil: false });
     renderer.setPixelRatio(renderPixelRatio);
     renderer.setSize(container.clientWidth, container.clientHeight);
@@ -232,6 +248,13 @@ export default function WorldScene({
        dụng làm mềm viền bóng — thứ PCFSoft vốn bỏ qua. */
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFShadowMap;
+    /* Tấm bóng đổ vẽ lại ở 30Hz thay vì mỗi khung.
+       Nó là một lượt vẽ đầy đủ thứ hai của cả cảnh — gần như đắt bằng chính
+       khung hình. Thứ duy nhất chuyển động đủ nhanh để thấy được bóng trễ một
+       khung là du thuyền và lá cây, mà cả hai đều đang lắc lư nhẹ. Đổi lại
+       khoảng một phần tư thời gian GPU của mỗi khung. */
+    renderer.shadowMap.autoUpdate = false;
+    renderer.shadowMap.needsUpdate = true;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.16;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -507,7 +530,11 @@ export default function WorldScene({
     let shadowSize = 0;
     function applyShadowQuality() {
       const prefs = propsRef.current.world;
-      const wanted = compactGpu ? 1024 : prefs.quality === "high" ? 4096 : prefs.quality === "balanced" ? 1536 : 2560;
+      /* 4096² là một tấm bóng 64MB phải vẽ lại mỗi khung. Nó không mua thêm
+         được gì ở khoảng cách camera thường dùng — 2048² đã cho viền bóng nét
+         hơn cả độ mềm mà `shadow.radius` cố ý thêm vào. Giữ 3072 cho mức
+         "cao" để ảnh chụp cận cảnh vẫn sạch. */
+      const wanted = compactGpu ? 1024 : prefs.quality === "high" ? 3072 : prefs.quality === "balanced" ? 1024 : 2048;
       if (wanted === shadowSize) return;
       shadowSize = wanted;
       sunLight.shadow.mapSize.set(wanted, wanted);
@@ -1125,12 +1152,16 @@ export default function WorldScene({
        áp cho khung hình vẽ thẳng ra màn hình, nên trước đây hễ bật bloom là mọi
        đường mái, cột buồm và mép lá lại lởm chởm. Đây chính là chỗ chữ "sắc
        nét" bị đánh mất. */
-    /* MSAA 8x trên desktop cho mép mái, cột buồm, tàu lá không còn răng cưa
-       ngay cả khi bloom bật. Mobile giữ 4x — đủ sắc mà không đốt GPU. */
+    /* MSAA 4x trên desktop, 2x trên máy nhỏ.
+       Trước đây là 8x/4x. Từ 4x lên 8x, mắt gần như không phân biệt được mép
+       mái hay cột buồm nữa — nhưng băng thông bộ đệm thì gấp đôi, và ở nửa-float
+       cộng pixel ratio cao thì đó chính là cái trần mà GPU tích hợp đâm vào. Ai
+       muốn 8x thì chọn mức "cao" trong bảng Thế giới. */
+    const msaaSamples = cinematic ? (compactGpu ? 4 : 8) : compactGpu ? 2 : 4;
     const composerTarget = new THREE.WebGLRenderTarget(
       Math.max(1, container.clientWidth),
       Math.max(1, container.clientHeight),
-      { type: THREE.HalfFloatType, samples: compactGpu ? 4 : 8 }
+      { type: THREE.HalfFloatType, samples: msaaSamples }
     );
     const composer = new EffectComposer(renderer, composerTarget);
     composer.setPixelRatio(renderPixelRatio);
@@ -1150,7 +1181,10 @@ export default function WorldScene({
       distanceExponent: 1.4,
       thickness: 1.2,
       scale: 1.05,
-      samples: compactGpu ? 8 : 16,
+      /* 16 mẫu là mức phim; 8 mẫu cho gần đúng cùng một bóng tiếp xúc với nửa
+         chi phí, vì bán kính ở đây chỉ 0,75 đơn vị nên nhiễu tán rất ít. Mức
+         "cao" vẫn được trả đủ 16. */
+      samples: cinematic ? 16 : compactGpu ? 4 : 8,
       screenSpaceRadius: false,
     });
     composer.addPass(gtaoPass);
@@ -1200,7 +1234,19 @@ export default function WorldScene({
      * khi thời gian dựng khung vượt 26ms — máy yếu giữ được nhịp mượt thay vì
      * đẹp mà giật. Người chơi chọn "cao" thì tôn trọng lựa chọn đó.
      */
-    let averageFrameMs = 16;
+    /* Khởi tạo cố tình bi quan. Cửa sổ đo đầu tiên dài 60 khung, nên trong
+       khoảng một giây đầu GTAO và bloom đứng ngoài — đúng cái giây mà trình
+       duyệt còn đang biên dịch shader, tải texture và dựng cây. Nếu máy khoẻ,
+       cửa sổ đo kế tiếp sẽ bật chúng lên và người chơi không kịp nhận ra. */
+    /* Lật giữa 0 và 1 mỗi khung để `renderFrame` biết khung này có vẽ lại tấm
+       bóng hay không. Khởi tạo bằng 1 để khung đầu tiên vẽ. */
+    let shadowTick = 1;
+    let averageFrameMs = 40;
+    /* Máy đã tụt khung ba cửa sổ đo liền thì đừng thử GTAO lại nữa. Không có
+       cờ này, nó bật–tắt–bật theo từng cú quay camera, và cảnh nhấp nháy sáng
+       tối còn khó chịu hơn là không có bóng tiếp xúc. */
+    let slowWindows = 0;
+    let gtaoBanned = false;
     function bloomEnabled(): boolean {
       const prefs = propsRef.current.world;
       if (!prefs.effects) return false;
@@ -1232,7 +1278,7 @@ export default function WorldScene({
       if (!prefs.effects || compactGpu) return false;
       if (prefs.quality === "balanced") return false;
       if (prefs.quality === "high") return true;
-      return renderPixelRatio >= 1 && averageFrameMs < 20;
+      return !gtaoBanned && renderPixelRatio >= 1 && averageFrameMs < 20;
     }
 
     /* Đoạn mở đầu tự lái camera từ ngoài không gian xuống. Cờ này nằm ở đây,
@@ -1636,9 +1682,14 @@ export default function WorldScene({
       if (perfFrames >= 60) {
         const averageFrame = perfTime / perfFrames;
         averageFrameMs = averageFrame;
+        if (averageFrame > 24) {
+          if (++slowWindows >= 3) gtaoBanned = true;
+        } else if (averageFrame < 16) {
+          slowWindows = 0;
+        }
         let nextRatio = renderPixelRatio;
-        if (averageFrame > 22 && renderPixelRatio > 0.85) nextRatio = Math.max(0.85, renderPixelRatio - 0.15);
-        else if (averageFrame < 15 && renderPixelRatio < maxPixelRatio) nextRatio = Math.min(maxPixelRatio, renderPixelRatio + 0.1);
+        if (averageFrame > 22 && renderPixelRatio > 0.7) nextRatio = Math.max(0.7, renderPixelRatio - 0.15);
+        else if (averageFrame < 14 && renderPixelRatio < ceilingPixelRatio) nextRatio = Math.min(ceilingPixelRatio, renderPixelRatio + 0.1);
         if (Math.abs(nextRatio - renderPixelRatio) > 0.01) {
           renderPixelRatio = nextRatio;
           renderer.setPixelRatio(renderPixelRatio);
@@ -1791,6 +1842,9 @@ export default function WorldScene({
      */
     function renderFrame(t: number, hero = false) {
       const effects = propsRef.current.world.effects;
+      /* Ảnh tĩnh luôn được một tấm bóng tươi; lúc chơi thì cách một khung một
+         lần, tức 30Hz trên màn 60Hz. */
+      renderer.shadowMap.needsUpdate = hero || (shadowTick = 1 - shadowTick) === 0;
       if (!(hero ? effects : postEnabled())) {
         renderer.render(scene, camera);
         return;
