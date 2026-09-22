@@ -478,10 +478,14 @@ phát triển local. Nếu deploy trên nền tảng khác, trỏ client tới p
 VITE_EQUITY_FEED_URL=https://your-domain.example/api/quotes
 VITE_CRYPTO_FEED_URL=https://your-domain.example/api/crypto
 VITE_NEWS_FEED_URL=https://your-domain.example/api/news
+VITE_FX_FEED_URL=https://open.er-api.com/v6/latest/USD
 ```
 
-Ba biến này khai trong `src/vite-env.d.ts` và đọc tập trung ở `src/lib/endpoints.ts`;
-bỏ trống thì dùng đường dẫn cùng origin.
+Bốn biến này khai trong `src/vite-env.d.ts` và đọc tập trung ở
+`src/lib/endpoints.ts`; bỏ trống thì ba biến đầu dùng đường dẫn cùng origin.
+`VITE_FX_FEED_URL` là nguồn duy nhất trình duyệt gọi thẳng ra ngoài và phải giữ
+đúng dạng `{ rates: { VND } }`; hỏng thì giao diện giữ tỷ giá mặc định trong
+`format.ts` chứ không hiện số sai.
 
 Proxy giá cổ phiếu nhận `?symbols=AAPL,FPT.VN` và trả
 `{ quotes: [{ symbol, price, previousClose, updatedAt }], failed, tried, asOf }`.

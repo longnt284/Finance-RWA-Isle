@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { setUsdRate } from "./format";
 import { readBarometer } from "./barometer";
-import { CRYPTO_FEED_URL, EQUITY_FEED_URL } from "./endpoints";
+import { CRYPTO_FEED_URL, EQUITY_FEED_URL, FX_FEED_URL } from "./endpoints";
 import type { Barometer } from "./barometer";
 
 export type StockSector = "bank" | "realty" | "industrial" | "energy" | "consumer" | "tech" | "finance" | "health";
@@ -545,7 +545,7 @@ class MarketStore {
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 8000);
     try {
-      const response = await fetch("https://open.er-api.com/v6/latest/USD", { signal: controller.signal, cache: "no-store" });
+      const response = await fetch(FX_FEED_URL, { signal: controller.signal, cache: "no-store" });
       if (!response.ok) return;
       const payload = (await response.json()) as { rates?: { VND?: number } };
       if (payload.rates?.VND) setUsdRate(payload.rates.VND);

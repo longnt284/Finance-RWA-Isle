@@ -17,6 +17,8 @@ interface ImportMetaEnv {
   readonly VITE_CRYPTO_FEED_URL?: string;
   /** Nguồn bảng tin RSS đã gom sẵn. Mặc định `/api/news`. */
   readonly VITE_NEWS_FEED_URL?: string;
+  /** Tỷ giá USD → VND, dạng `{ rates: { VND } }`. Mặc định open.er-api.com. */
+  readonly VITE_FX_FEED_URL?: string;
   /** Dự án Supabase cho tính năng tài khoản. Bỏ trống thì app chạy chế độ lưu-trên-máy. */
   readonly VITE_SUPABASE_URL?: string;
   /** Publishable (anon) key của Supabase. TUYỆT ĐỐI không đặt service_role key. */

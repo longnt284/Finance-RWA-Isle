@@ -19,3 +19,12 @@ function endpoint(configured: string | undefined, fallback: string): string {
 export const EQUITY_FEED_URL = endpoint(import.meta.env.VITE_EQUITY_FEED_URL, "/api/quotes");
 export const CRYPTO_FEED_URL = endpoint(import.meta.env.VITE_CRYPTO_FEED_URL, "/api/crypto");
 export const NEWS_FEED_URL = endpoint(import.meta.env.VITE_NEWS_FEED_URL, "/api/news");
+
+/**
+ * Tỷ giá USD → VND. Nguồn duy nhất mà trình duyệt gọi thẳng ra ngoài, vì nó là
+ * API công khai không cần khoá và không vướng CORS.
+ *
+ * Phải trả đúng dạng `{ rates: { VND: number } }` của exchangerate-api. Hỏng thì
+ * ứng dụng giữ tỷ giá mặc định trong `format.ts` chứ không hiện số sai.
+ */
+export const FX_FEED_URL = endpoint(import.meta.env.VITE_FX_FEED_URL, "https://open.er-api.com/v6/latest/USD");
