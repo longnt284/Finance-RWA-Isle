@@ -1,6 +1,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { chromium } = require("playwright");
+const { enterIsland } = require("./_gate.cjs");
 
 function readArg(name, fallback) {
   const index = process.argv.indexOf(name);
@@ -51,11 +52,13 @@ async function main() {
         })
     );
 
-  await page.goto(url, { waitUntil: "networkidle", timeout: 60_000 });
-  await page.locator("canvas").waitFor({ state: "visible", timeout: 30_000 });
+  /* `networkidle` không bao giờ tới: bảng giá và bảng tin hỏi lại theo chu kỳ
+     suốt phiên, nên mạng không có lúc nào rảnh hai giây liền. */
+  await page.goto(url, { waitUntil: "load", timeout: 60_000 });
+  /* Trang bìa là thứ người chơi thấy trước tiên, và giờ nó đứng một mình:
+     thế giới 3D chỉ dựng sau khi cổng mở. Chụp nó trước khi bấm vào. */
   await page.waitForTimeout(2_000);
   await page.screenshot({ path: path.join(out, "hero.png"), fullPage: true });
-  const heroFrameRate = await sampleFps();
 
   const navigation = await page.evaluate(() => {
     const entry = performance.getEntriesByType("navigation")[0];
@@ -69,12 +72,12 @@ async function main() {
       : null;
   });
 
-  const demo = page.getByRole("button", { name: "Xem bản demo có sẵn" });
-  if (await demo.count()) {
-    await demo.click();
-    await page.waitForTimeout(2_500);
-    await page.screenshot({ path: path.join(out, "demo.png"), fullPage: true });
-  }
+  await enterIsland(page);
+  await page.waitForTimeout(2_500);
+  await page.screenshot({ path: path.join(out, "demo.png"), fullPage: true });
+  /* Đo nhịp khung hình sau khi cổng mở: trước đó chưa có một lệnh vẽ WebGL nào
+     để mà đo. */
+  const heroFrameRate = await sampleFps();
 
   const privateIsles = page.getByRole("button", { name: "Đảo riêng", exact: true });
   if (await privateIsles.count()) {

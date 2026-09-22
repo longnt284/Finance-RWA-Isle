@@ -6,7 +6,6 @@ import {
   COAST_MAX,
   DISTRICT_ANCHORS,
   ISLAND_RADIUS,
-  PLATEAU_U,
   SHORE_U,
   cliffMask,
   coastRadius,
@@ -1649,7 +1648,10 @@ function rocket(m: Mats, ticks: TickFn[]): THREE.Group {
   return g;
 }
 
-function holoChart(m: Mats, ticks: TickFn[]): THREE.Group {
+/* Biểu đồ ba chiều dựng toàn bằng `MeshBasicMaterial` phát sáng nên không
+   cần tới bảng vật liệu chung. Vẫn nhận `Mats` để bốn hàm dựng công trình
+   của đảo có cùng một chữ ký và gọi được trong cùng một biểu thức. */
+function holoChart(_m: Mats, ticks: TickFn[]): THREE.Group {
   const g = new THREE.Group();
   const holoMat = new THREE.MeshBasicMaterial({ color: 0x5ce8c4, transparent: true, opacity: 0.32, blending: THREE.AdditiveBlending, depthWrite: false });
   const bars: THREE.Mesh[] = [];

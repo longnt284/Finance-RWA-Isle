@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { setUsdRate } from "./format";
 import { readBarometer } from "./barometer";
+import { CRYPTO_FEED_URL, EQUITY_FEED_URL } from "./endpoints";
 import type { Barometer } from "./barometer";
 
 export type StockSector = "bank" | "realty" | "industrial" | "energy" | "consumer" | "tech" | "finance" | "health";
@@ -217,6 +218,8 @@ class MarketStore {
   private cryptoInFlight = false;
   /** WebSocket đã từng mở được trong phiên này chưa. */
   private wsEverOpen = false;
+  /** Mốc ân hạn chờ WebSocket mở, giữ lại để `stop()` dọn được. */
+  private graceTimer: ReturnType<typeof setTimeout> | null = null;
   private notifyTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectDelay = 1500;
@@ -253,13 +256,46 @@ class MarketStore {
     this.healthTimer = window.setInterval(() => this.checkHealth(), 5000);
     /* Mạng chặn Binance thì WebSocket không bao giờ mở. Sau thời gian ân hạn,
        chuyển hẳn sang lấy giá crypto qua máy chủ. */
-    window.setTimeout(() => {
+    this.graceTimer = window.setTimeout(() => {
+      this.graceTimer = null;
       if (!this.wsEverOpen) this.startCryptoPolling();
     }, CRYPTO_WS_GRACE_MS);
     this.equityTimer = window.setInterval(() => void this.refreshEquities(), 60_000);
     this.fxTimer = window.setInterval(() => void this.refreshFx(), 30 * 60_000);
     window.addEventListener("online", this.handleOnline);
     window.addEventListener("offline", this.handleOffline);
+  }
+
+  /**
+   * Vòng đời ngược của `ensureStarted()`.
+   *
+   * Tồn tại vì `healthTimer` và `fxTimer` vốn được giữ lại mà không có chỗ nào
+   * dọn: mỗi lần Vite thay module nóng là một bộ hẹn giờ nữa chồng lên, và
+   * bảng giá trong máy người phát triển bị hỏi lại vài lần mỗi nhịp.
+   */
+  stop(): void {
+    if (!this.started || typeof window === "undefined") return;
+    this.started = false;
+    for (const timer of [this.healthTimer, this.equityTimer, this.fxTimer]) {
+      if (timer !== null) window.clearInterval(timer);
+    }
+    this.healthTimer = null;
+    this.equityTimer = null;
+    this.fxTimer = null;
+    this.stopCryptoPolling();
+    for (const timer of [this.graceTimer, this.notifyTimer, this.reconnectTimer]) {
+      if (timer !== null) window.clearTimeout(timer);
+    }
+    this.graceTimer = null;
+    this.notifyTimer = null;
+    this.reconnectTimer = null;
+    /* Gỡ `this.socket` trước khi đóng: handler `close` bỏ qua ổ cắm không còn
+       là ổ cắm hiện hành, nên nó sẽ không hẹn giờ kết nối lại. */
+    const socket = this.socket;
+    this.socket = null;
+    socket?.close();
+    window.removeEventListener("online", this.handleOnline);
+    window.removeEventListener("offline", this.handleOffline);
   }
 
   trackAssets(ids: readonly string[]): () => void {
@@ -409,7 +445,7 @@ class MarketStore {
     const timeout = window.setTimeout(() => controller.abort(), 12_000);
     try {
       const bySymbol = new Map(assets.map((asset) => [asset.sym, asset]));
-      const response = await fetch(`/api/crypto?symbols=${encodeURIComponent([...bySymbol.keys()].join(","))}`, {
+      const response = await fetch(`${CRYPTO_FEED_URL}?symbols=${encodeURIComponent([...bySymbol.keys()].join(","))}`, {
         signal: controller.signal,
         cache: "no-store",
       });
@@ -465,8 +501,6 @@ class MarketStore {
   /** Trả về số mã thất bại trong lô. Một lô hỏng không kéo đổ các lô còn lại. */
   private async fetchEquityChunk(assets: Asset[]): Promise<number> {
     const symbolToAsset = new Map(assets.map((asset) => [yahooSymbol(asset), asset]));
-    const configuredFeed = (import.meta.env.VITE_EQUITY_FEED_URL as string | undefined)?.replace(/\/$/, "");
-    const endpoint = configuredFeed || "/api/quotes";
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 12_000);
     const markStale = () => {
@@ -477,7 +511,7 @@ class MarketStore {
     };
     try {
       const symbols = [...symbolToAsset.keys()];
-      const response = await fetch(`${endpoint}?symbols=${encodeURIComponent(symbols.join(","))}`, { signal: controller.signal, cache: "no-store" });
+      const response = await fetch(`${EQUITY_FEED_URL}?symbols=${encodeURIComponent(symbols.join(","))}`, { signal: controller.signal, cache: "no-store" });
       if (!response.ok) throw new Error(String(response.status));
       const payload = (await response.json()) as {
         quotes?: Array<{ symbol: string; price: number; previousClose: number | null; updatedAt: number }>;
@@ -575,6 +609,10 @@ class MarketStore {
 }
 
 export const market = new MarketStore();
+
+/* Vite thay module nóng thì bản cũ phải tự dọn, nếu không mỗi lần lưu tệp là
+   thêm một bộ hẹn giờ và một WebSocket nữa chạy song song. */
+if (import.meta.hot) import.meta.hot.dispose(() => market.stop());
 
 export function useMarket(assetIds: readonly string[] = []): number {
   const key = useMemo(() => assetIds.join(","), [assetIds]);

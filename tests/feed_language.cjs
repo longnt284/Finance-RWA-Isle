@@ -10,6 +10,7 @@
  *   node tests/feed_language.cjs --url http://127.0.0.1:3000
  */
 const { chromium } = require("playwright");
+const { enterIsland } = require("./_gate.cjs");
 
 function readArg(name, fallback) {
   const index = process.argv.indexOf(name);
@@ -84,7 +85,7 @@ async function main() {
   await page.goto(url, { waitUntil: "domcontentloaded" });
   await page.evaluate((save) => localStorage.setItem("vuong-state-v3", JSON.stringify(save)), SAVE);
   await page.reload({ waitUntil: "load" });
-  await page.locator("canvas").waitFor({ state: "visible", timeout: 30_000 });
+  await enterIsland(page);
   await page.waitForTimeout(2_500);
 
   /* Panel Hoạt động là khối có nút tiêu đề; đọc cả cụm cho chắc. */

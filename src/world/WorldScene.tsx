@@ -117,6 +117,12 @@ interface Props {
 
 const DISTRICT_IDS: DistrictId[] = ["crypto", "stocks", "vault", "academy"];
 
+/** Nhãn trợ năng của canvas, dùng chung cho lúc dựng cảnh và lúc đổi ngôn ngữ. */
+const WORLD_ARIA_LABEL: Record<Lang, string> = {
+  vi: "Bản đồ quần đảo tài chính 3D tương tác",
+  en: "Interactive 3D finance archipelago",
+};
+
 /**
  * Tắt `lagSmoothing` của GSAP.
  *
@@ -238,7 +244,7 @@ export default function WorldScene({
     const cinematic = propsRef.current.world.quality === "high";
     const maxPixelRatio = compactGpu ? 1.25 : cinematic ? 2 : 1.75;
     const startPixelRatio = compactGpu ? 1 : cinematic ? 1.5 : 1.25;
-    const ceilingPixelRatio = Math.min(window.devicePixelRatio, maxPixelRatio);
+    let ceilingPixelRatio = Math.min(window.devicePixelRatio, maxPixelRatio);
     let renderPixelRatio = Math.min(window.devicePixelRatio, startPixelRatio);
     const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance", stencil: false });
     renderer.setPixelRatio(renderPixelRatio);
@@ -260,7 +266,7 @@ export default function WorldScene({
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.domElement.tabIndex = 0;
     renderer.domElement.setAttribute("role", "img");
-    renderer.domElement.setAttribute("aria-label", lang === "vi" ? "Bản đồ quần đảo tài chính 3D tương tác" : "Interactive 3D finance archipelago");
+    renderer.domElement.setAttribute("aria-label", WORLD_ARIA_LABEL[lang]);
     container.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
@@ -269,8 +275,9 @@ export default function WorldScene({
     /* Cận cảnh 0,6 và viễn cảnh 950 thay cho 0,1–1400. GTAO đọc chiều sâu từ
        một depth texture số nguyên: tỉ lệ xa/gần 14.000 lần như bản trước làm
        độ chính xác vỡ vụn, bóng tiếp xúc biến thành những vệt sọc. Vòm trời
-       nằm ở bán kính 620 nên 950 vẫn thừa chỗ. */
-    const camera = new THREE.PerspectiveCamera(46, Math.max(0.1, container.clientWidth / Math.max(1, container.clientHeight)), 0.1, 1400);
+       nằm ở bán kính 620 (SKY_RADIUS trong atmosphere.ts) nên 950 vẫn thừa
+       chỗ, và `controls.minDistance` là 5 nên không ai chạm tới mặt cận. */
+    const camera = new THREE.PerspectiveCamera(46, Math.max(0.1, container.clientWidth / Math.max(1, container.clientHeight)), 0.6, 950);
     const BASE_FOV = 46;
     camera.position.set(4, 95, 155);
 
@@ -1547,6 +1554,16 @@ export default function WorldScene({
     function onResize() {
       const w = Math.max(1, container.clientWidth);
       const h = Math.max(1, container.clientHeight);
+      /* Kéo cửa sổ sang màn hình có mật độ điểm ảnh khác — hoặc phóng to trang —
+         đổi `devicePixelRatio` mà không đổi kích thước khung. Không đọc lại thì
+         khung hình hoặc mờ hẳn, hoặc vẽ ở độ phân giải gấp đôi cần thiết. */
+      const nextCeiling = Math.min(window.devicePixelRatio, maxPixelRatio);
+      if (Math.abs(nextCeiling - ceilingPixelRatio) > 0.01) {
+        ceilingPixelRatio = nextCeiling;
+        renderPixelRatio = Math.min(renderPixelRatio, ceilingPixelRatio);
+        renderer.setPixelRatio(renderPixelRatio);
+        composer.setPixelRatio(renderPixelRatio);
+      }
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       renderer.setSize(w, h);
@@ -1555,6 +1572,47 @@ export default function WorldScene({
       gradePass.material.uniforms.uResolution.value.set(w, h);
     }
     window.addEventListener("resize", onResize);
+    /* `resize` của cửa sổ bỏ sót mọi lần khung chứa đổi kích thước mà cửa sổ
+       thì không: mở bảng bên, thu ngăn kéo, hay thanh địa chỉ trên di động trượt
+       đi. Quan sát thẳng khung chứa thì bắt được cả ba.
+
+       Chỉ gọi lại khi số đo thật sự đổi: `renderer.setSize` ghi lại style của
+       canvas, và canvas thì nằm trong chính khung đang quan sát — không chặn thì
+       đó là một vòng lặp tự kích hoạt chờ sẵn. */
+    let observedWidth = container.clientWidth;
+    let observedHeight = container.clientHeight;
+    const resizeObserver = new ResizeObserver(() => {
+      const w = container.clientWidth;
+      const h = container.clientHeight;
+      if (w === observedWidth && h === observedHeight) return;
+      observedWidth = w;
+      observedHeight = h;
+      onResize();
+    });
+    resizeObserver.observe(container);
+
+    /* --------------------- mất và khôi phục ngữ cảnh WebGL ---------------------
+       GPU có thể thu hồi ngữ cảnh bất cứ lúc nào: máy ngủ dậy, trình điều khiển
+       khởi động lại, hay trình duyệt lấy lại bộ nhớ của một tab nền. Không bắt
+       sự kiện này thì canvas đen vĩnh viễn mà vòng lặp vẫn chạy không.
+
+       `preventDefault` trên `webglcontextlost` là điều kiện để trình duyệt chịu
+       bắn `webglcontextrestored`. */
+    let contextLost = false;
+    function onContextLost(event: Event) {
+      event.preventDefault();
+      contextLost = true;
+      cancelAnimationFrame(raf);
+    }
+    function onContextRestored() {
+      contextLost = false;
+      /* Ngữ cảnh mới không giữ lại tấm bóng đã nướng của ngữ cảnh cũ. */
+      renderer.shadowMap.needsUpdate = true;
+      onResize();
+      raf = requestAnimationFrame(frame);
+    }
+    renderer.domElement.addEventListener("webglcontextlost", onContextLost);
+    renderer.domElement.addEventListener("webglcontextrestored", onContextRestored);
 
     /* ------------------------- ảnh chụp độ phân giải cao -------------------------
        `preserveDrawingBuffer` để `false` vì bật lên là mỗi khung hình phải giữ
@@ -1664,6 +1722,7 @@ export default function WorldScene({
     }
 
     function frame() {
+      if (contextLost) return;
       raf = requestAnimationFrame(frame);
       const rawDt = clock.getDelta();
       const dt = Math.min(0.05, rawDt);
@@ -1871,6 +1930,9 @@ export default function WorldScene({
     return () => {
       cancelAnimationFrame(raf);
       window.removeEventListener("resize", onResize);
+      resizeObserver.disconnect();
+      renderer.domElement.removeEventListener("webglcontextlost", onContextLost);
+      renderer.domElement.removeEventListener("webglcontextrestored", onContextRestored);
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       controls.removeEventListener("start", onCtlStart);
@@ -1963,6 +2025,14 @@ export default function WorldScene({
   useEffect(() => {
     sceneApi.current?.setVoyage(voyage);
   }, [voyage]);
+
+  /* Nhãn trợ năng của canvas được đặt một lần lúc dựng cảnh, nên đổi ngôn ngữ
+     giữa phiên thì trình đọc màn hình vẫn đọc câu cũ. Cảnh 3D không dựng lại
+     theo ngôn ngữ — đúng như vậy — nên cập nhật riêng chỗ này. */
+  useEffect(() => {
+    const canvas = containerRef.current?.querySelector("canvas");
+    if (canvas) canvas.setAttribute("aria-label", WORLD_ARIA_LABEL[lang]);
+  }, [lang]);
 
   useEffect(() => {
     sceneApi.current?.rebuildYacht();

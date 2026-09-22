@@ -12,6 +12,7 @@
  */
 const assert = require("node:assert");
 const { chromium } = require("playwright");
+const { enterIsland } = require("./_gate.cjs");
 
 function readArg(name, fallback) {
   const index = process.argv.indexOf(name);
@@ -72,6 +73,7 @@ async function main() {
   page.on("pageerror", (error) => pageErrors.push(String(error)));
   await page.addInitScript((save) => localStorage.setItem("vuong-state-v3", JSON.stringify(save)), SAVE);
   await page.goto(url, { waitUntil: "domcontentloaded" });
+  await enterIsland(page);
   await page.waitForTimeout(5000);
 
   await page.getByRole("button", { name: "Câu cá", exact: false }).first().click();

@@ -7,6 +7,7 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const { chromium } = require("playwright");
+const { enterIsland } = require("./_gate.cjs");
 
 function readArg(name, fallback) {
   const index = process.argv.indexOf(name);
@@ -94,7 +95,7 @@ async function main() {
       { h: hour }
     );
     await page.reload({ waitUntil: "load" });
-    await page.locator("canvas").waitFor({ state: "visible", timeout: 30_000 });
+    await enterIsland(page);
     await page.waitForTimeout(5_000);
   }
 

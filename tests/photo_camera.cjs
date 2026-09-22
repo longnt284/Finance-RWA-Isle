@@ -11,6 +11,7 @@
  */
 const fs = require("node:fs"), path = require("node:path");
 const { chromium } = require("playwright");
+const { enterIsland } = require("./_gate.cjs");
 
 function readArg(name, fallback) {
   const index = process.argv.indexOf(name);
@@ -59,8 +60,7 @@ const SAVE = {
   await page.reload({ waitUntil: "load" });
   const shot = async (n) => { await page.screenshot({ path: path.join(OUT, n + ".png") }); console.log("  ✓", n); };
   await page.waitForTimeout(3000); await shot("1-hero-returning");
-  await page.getByText("Vào đảo").click();
-  await page.locator("canvas").waitFor({ state: "visible", timeout: 30000 });
+  await enterIsland(page);
   await page.waitForTimeout(15000); await shot("2-world");
   await page.getByRole("button", { name: "Góc máy" }).first().click(); await page.waitForTimeout(400);
   await page.getByRole("button", { name: "Flycam toàn đảo" }).click(); await page.waitForTimeout(6000); await shot("3-shot-drone");

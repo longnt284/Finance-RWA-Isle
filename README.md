@@ -9,6 +9,9 @@ Bạn ghi lại mục tiêu, nhiệm vụ và mốc tài sản của mình; qu�
 
 ## Chạy local
 
+Cần Node `^20.19` hoặc `>=22.12` — đúng mốc mà Vite 7 yêu cầu. Tệp `.nvmrc` ghi
+sẵn phiên bản để `nvm use` chọn đúng.
+
 ```bash
 npm ci
 npm run dev
@@ -19,6 +22,7 @@ Kiểm tra trước khi deploy:
 ```bash
 npm run typecheck
 npm run build
+npm run preview         # phục vụ thư mục dist đúng như bản deploy
 ```
 
 Kiểm thử không cần trình duyệt (chạy được ở mọi môi trường, kể cả khi mạng chặn
@@ -63,12 +67,20 @@ npm run test:ui
 Bộ ảnh kiểm chứng tính năng và bài kiểm tra luồng thi đậu:
 
 ```bash
+npm run test:e2e        # chạy tuần tự cả bảy bài dưới đây
 npm run test:features   # ngày/đêm, bốn mùa, chín kiểu thời tiết
 npm run test:panels     # các bảng bên phải, luồng khảo thí, bầu trời đêm
 npm run test:exam       # tự trả lời đúng cả 5 câu rồi kiểm tra màn hình "Đạt"
 npm run test:feed       # bảng Hoạt động đổi ngôn ngữ đúng ở cả hai chiều
 npm run test:fish       # tự chơi minigame câu cá tới khi bắt được một con
 ```
+
+Mọi bài cần trình duyệt đều đi qua `tests/_gate.cjs` để bấm nút vào đảo trước khi
+chờ canvas. Từ khi trang bìa dựng trước còn thế giới 3D dựng sau, canvas không
+tồn tại cho tới lúc cổng mở — bài kiểm nào mở thẳng trang rồi chờ canvas sẽ treo
+hết thời gian rồi báo hỏng dù ứng dụng hoàn toàn bình thường. Nút vào đảo mang
+`data-gate="enter"`, nút demo mang `data-gate="demo"`, nên chỗ bám không phụ
+thuộc vào nhãn chữ vốn đổi theo ngôn ngữ.
 
 `test:fish` đọc vị trí khung và vị trí cá từ DOM rồi giữ hoặc thả chuột đúng như
 một người chơi, nên nó phủ trọn đường đi từ vòng lặp `requestAnimationFrame`, qua
@@ -445,7 +457,7 @@ CoinGecko được hỏi theo `id`, mà bản đồ ký hiệu → `id` thì có
 **đối chiếu lại `symbol` mà CoinGecko trả về**: lệch là loại luôn mục đó. Thà thiếu
 một dòng giá còn hơn hiện giá đồng này dưới tên đồng khác.
 
-Cả hai endpoint trả kèm trường `tried` nói rõ nguồn nào hỏng vì lý do gì. Khi bảng
+Cả ba endpoint trả kèm trường `tried` nói rõ nguồn nào hỏng vì lý do gì. Khi bảng
 giá không lên, mở thẳng trên trình duyệt để biết đang tắc ở đâu:
 
 ```
@@ -455,15 +467,28 @@ giá không lên, mở thẳng trên trình duyệt để biết đang tắc ở
 - Khi nguồn thật không khả dụng, giao diện giữ giá tham chiếu và hiển thị chấm
   xám cùng trạng thái `reference`; không bao giờ gắn nhãn giả là dữ liệu trực tiếp.
 
+`/api/quotes` còn có trần thời gian 9 giây cho cả lời gọi. Trình duyệt tự huỷ sau
+12 giây, nên ba mươi mã nhân hai lần hỏi Yahoo cộng một lần Stooq — vốn thừa sức
+vượt mốc đó — sẽ trả về phần đã lấy được thay vì trả về muộn hơn lúc còn ai chờ.
+
 `api/quotes.js` chạy trực tiếp trên Vercel; Vite có middleware tương đương khi
 phát triển local. Nếu deploy trên nền tảng khác, trỏ client tới proxy tương thích:
 
 ```bash
 VITE_EQUITY_FEED_URL=https://your-domain.example/api/quotes
+VITE_CRYPTO_FEED_URL=https://your-domain.example/api/crypto
+VITE_NEWS_FEED_URL=https://your-domain.example/api/news
 ```
 
-Proxy nhận `?symbols=AAPL,FPT.VN` và trả
-`{ quotes: [{ symbol, price, previousClose, updatedAt }], failed, asOf }`.
+Ba biến này khai trong `src/vite-env.d.ts` và đọc tập trung ở `src/lib/endpoints.ts`;
+bỏ trống thì dùng đường dẫn cùng origin.
+
+Proxy giá cổ phiếu nhận `?symbols=AAPL,FPT.VN` và trả
+`{ quotes: [{ symbol, price, previousClose, updatedAt }], failed, tried, asOf }`.
+
+`vercel.json` khoá cấu hình deploy vào repo: trần thời gian và bộ nhớ cho các hàm
+trong `api/`, cache vĩnh viễn cho tài nguyên có băm tên trong `/assets/`, cùng bốn
+header bảo mật cơ bản.
 
 ## Tài khoản và quyền riêng tư
 
@@ -527,6 +552,28 @@ ghi đè ngầm là cách nhanh nhất để người dùng mất tiến độ.
 - Raycast picking giới hạn 60ms một lần; nhãn thế giới cập nhật 30 lần/giây.
 - Bundle tách riêng `three` và `react` để trình duyệt giữ cache qua các lần deploy;
   bảng điều khiển không kéo theo Three.js.
+- Dải chiều sâu của camera là 0,6–950 chứ không phải 0,1–1400. GTAO đọc chiều sâu
+  từ một depth texture số nguyên: tỉ lệ xa/gần 14.000 lần làm độ chính xác vỡ vụn
+  và bóng tiếp xúc biến thành vệt sọc. Vòm trời nằm ở bán kính 620 nên 950 vẫn
+  thừa chỗ, còn `controls.minDistance` là 5 nên không ai chạm tới mặt cận.
+
+## Khi thế giới 3D gặp sự cố
+
+Ba lớp phòng thủ, mỗi lớp cho một kiểu hỏng khác nhau:
+
+- **Mất ngữ cảnh WebGL.** GPU có thể thu hồi ngữ cảnh bất cứ lúc nào — máy ngủ
+  dậy, trình điều khiển khởi động lại, trình duyệt lấy lại bộ nhớ của tab nền.
+  Cảnh bắt `webglcontextlost`, dừng vòng lặp và gọi `preventDefault` (điều kiện để
+  trình duyệt chịu bắn `webglcontextrestored`), rồi dựng lại tấm bóng và chạy tiếp
+  khi ngữ cảnh về. Không bắt thì canvas đen vĩnh viễn mà vòng lặp vẫn quay không.
+- **Khung chứa đổi kích thước mà cửa sổ thì không.** `ResizeObserver` quan sát
+  thẳng khung chứa, nên mở bảng bên, thu ngăn kéo hay thanh địa chỉ trên di động
+  trượt đi đều được bắt. Cùng chỗ đó đọc lại `devicePixelRatio`, vốn đổi khi kéo
+  cửa sổ sang màn hình khác mật độ.
+- **Lỗi không bắt được.** `src/components/Boundary.tsx` bọc cả ứng dụng. Gần như
+  mọi màn hình nạp bằng `lazy()`, nên một chunk tải hụt — bản deploy mới vừa đổi
+  tên tệp, hay mạng rớt giữa chừng — từng làm trắng cả trang. Giờ nó hiện một
+  thông báo song ngữ kèm nút tải lại, và nói rõ tiến độ vẫn nằm nguyên trong máy.
 
 ## Cấu trúc chính
 
@@ -573,6 +620,9 @@ ghi đè ngầm là cách nhanh nhất để người dùng mất tiến độ.
 - `api/crypto.js` — giá crypto qua máy chủ, đường lui khi WebSocket Binance bị chặn.
 - `api/_providers.js` — các nguồn giá dùng chung cho hai endpoint trên.
 - `src/lib/events.ts` — phát hiện biến động mạnh để ghi sự kiện thị trường.
+- `src/lib/endpoints.ts` — địa chỉ ba endpoint dữ liệu, gom về một chỗ.
+- `src/components/Boundary.tsx` — lưới an toàn cuối cùng cho lỗi không bắt được.
+- `tests/_gate.cjs` — đi qua cổng vào, dùng chung cho mọi bài kiểm cần trình duyệt.
 - `supabase/migrations/` — schema và policy RLS.
 - `tests/ui_audit.cjs` — smoke test Playwright cho WebGL/UI.
 - `tests/feature_shots.cjs` — bộ ảnh kiểm chứng tính năng.

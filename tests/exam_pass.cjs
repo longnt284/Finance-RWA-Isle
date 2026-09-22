@@ -16,6 +16,7 @@ const os = require("node:os");
 const path = require("node:path");
 const esbuild = require("esbuild");
 const { chromium } = require("playwright");
+const { enterIsland } = require("./_gate.cjs");
 
 function readArg(name, fallback) {
   const index = process.argv.indexOf(name);
@@ -81,7 +82,7 @@ async function main() {
   await page.goto(url, { waitUntil: "domcontentloaded" });
   await page.evaluate((save) => localStorage.setItem("vuong-state-v3", JSON.stringify(save)), SAVE);
   await page.reload({ waitUntil: "load" });
-  await page.locator("canvas").waitFor({ state: "visible", timeout: 30_000 });
+  await enterIsland(page);
   await page.waitForTimeout(4_000);
 
   await page.getByRole("button", { name: /Chờ khảo thí/ }).last().click();

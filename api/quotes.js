@@ -2,6 +2,15 @@ import { yahooQuote, stooqQuote } from "./_providers.js";
 
 const CACHE_TTL_MS = 20_000;
 const MAX_SYMBOLS = 30;
+/**
+ * Trần thời gian cho cả request.
+ *
+ * Trình duyệt tự huỷ lời gọi sau 12 giây (xem `fetchEquityChunk` trong
+ * src/lib/market.ts), nên một câu trả lời đến muộn hơn thế là công toi. Ba
+ * mươi mã, mỗi mã tối đa hai lần hỏi Yahoo rồi một lần Stooq, cộng lại vượt
+ * xa mốc đó — vậy nên hết giờ thì trả về phần đã có, còn hơn trả về muộn.
+ */
+const DEADLINE_MS = 9_000;
 /** Trần request đồng thời tới upstream để không bị chặn tốc độ. */
 const UPSTREAM_CONCURRENCY = 8;
 /** Cache tối đa vài trăm mã; xoá mục cũ nhất khi vượt ngưỡng. */
@@ -42,12 +51,16 @@ async function mapWithLimit(items, limit, worker) {
  * sàn Mỹ; Stooq chỉ đỡ được mã Mỹ nhưng đủ để bảng giá không trắng khi Yahoo
  * chặn theo IP (403) hoặc giới hạn tốc độ (429).
  */
-async function fetchQuote(symbol) {
+async function fetchQuote(symbol, deadline = Infinity) {
   const cached = cache.get(symbol);
   if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) return cached.value;
   let lastError = new Error("upstream_unreachable");
   let value = null;
   for (const provider of [yahooQuote, stooqQuote]) {
+    if (Date.now() >= deadline) {
+      lastError = new Error("deadline_exceeded");
+      break;
+    }
     try {
       value = await provider(symbol);
       break;
@@ -88,9 +101,18 @@ export default async function handler(request, response) {
     return;
   }
 
-  const settled = await mapWithLimit(symbols, UPSTREAM_CONCURRENCY, fetchQuote);
+  const deadline = Date.now() + DEADLINE_MS;
+  const settled = await mapWithLimit(symbols, UPSTREAM_CONCURRENCY, (symbol) => fetchQuote(symbol, deadline));
   const quotes = settled.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
   const failed = symbols.filter((_, index) => settled[index].status === "rejected");
+  /* `tried` nói rõ mã nào hỏng vì lý do gì — mở thẳng endpoint trên trình duyệt
+     là chẩn đoán được ngay khi bảng giá không lên. `/api/crypto` vốn đã trả
+     trường này; `/api/quotes` thì tài liệu có hứa mà code thì chưa trả. */
+  const tried = symbols.map((symbol, index) => {
+    const result = settled[index];
+    if (result.status === "fulfilled") return { symbol, source: result.value.source };
+    return { symbol, error: String(result.reason?.message || result.reason) };
+  });
   response.statusCode = quotes.length ? 200 : 502;
-  response.end(JSON.stringify({ quotes, failed, asOf: Date.now() }));
+  response.end(JSON.stringify({ quotes, failed, tried, asOf: Date.now() }));
 }

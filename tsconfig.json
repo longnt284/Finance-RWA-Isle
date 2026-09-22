@@ -1,8 +1,8 @@
 {
   "compilerOptions": {
-    "target": "ES2020",
+    "target": "ES2022",
     "module": "ESNext",
-    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
     "moduleResolution": "bundler",
     "strict": true,
@@ -10,7 +10,20 @@
     "esModuleInterop": true,
     "isolatedModules": true,
     "noEmit": true,
-    "allowImportingTsExtensions": true
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    /* Ghi rõ thay vì để `target` quyết định ngầm: đổi `target` một ngày nào đó
+       sẽ lật ngữ nghĩa khởi tạo thuộc tính của lớp mà không ai nhận ra. */
+    "useDefineForClassFields": true,
+
+    /* Bắt lỗi mà `strict` không phủ. Mỗi cờ dưới đây đều từng là một lớp lỗi
+       thật trong dự án này: biến thừa sau khi gỡ tính năng, `case` quên
+       `break`, và tên tệp khác hoa thường giữa máy macOS và máy build Linux. */
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "forceConsistentCasingInFileNames": true
   },
   "include": ["src"]
 }

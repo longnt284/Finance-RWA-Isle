@@ -7,6 +7,7 @@
 /* ------------------------------------------------------------------ */
 
 import { useEffect, useState } from "react";
+import { NEWS_FEED_URL } from "./endpoints";
 
 export type NewsTopic = "crypto" | "stocks" | "vn" | "world";
 export const NEWS_TOPICS: NewsTopic[] = ["crypto", "stocks", "vn", "world"];
@@ -33,7 +34,7 @@ interface NewsStore {
   error: string;
 }
 
-const FEED_URL = (import.meta.env.VITE_NEWS_FEED_URL as string | undefined) || "/api/news";
+const FEED_URL = NEWS_FEED_URL;
 /** Tin cũ hơn 5 phút thì tải lại; RSS không đổi nhanh hơn thế. */
 const REFRESH_MS = 300_000;
 const READ_KEY = "vuong-news-read-v1";

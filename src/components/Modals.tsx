@@ -178,11 +178,15 @@ export function Hero({ onBegin, returning = false, onEnter }: { onBegin: () => v
             {returning ? t("hero.rSub") : t("hero.sub")}
           </p>
           <div className="anim-fade-up mt-8 flex flex-wrap items-center gap-3" style={{ animationDelay: "0.55s" }}>
+            {/* `data-gate` là mốc bám cho kiểm thử trình duyệt: nhãn nút đổi
+                theo ngôn ngữ và theo việc người chơi đã lập đảo hay chưa, nên
+                bám vào chữ là bám vào thứ hay đổi nhất. */}
             <button
               onClick={() => {
                 sound.chime();
                 onBegin();
               }}
+              data-gate="enter"
               className="btn-gold flex items-center gap-2.5 rounded-xl px-6 py-3.5 font-display text-[12px] tracking-[0.14em]"
             >
               <IconCompass className="h-4.5 w-4.5 h-[18px] w-[18px]" />
@@ -191,6 +195,7 @@ export function Hero({ onBegin, returning = false, onEnter }: { onBegin: () => v
             </button>
             {!returning && (
               <button
+                data-gate="demo"
                 onClick={() => {
                   sound.coin();
                   api.completeOnboarding("", "crypto", true);

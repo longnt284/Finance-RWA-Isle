@@ -3,6 +3,17 @@ node_modules/
 dist/
 build/
 .artifacts/
+
+# Biến môi trường: chỉ .env.example và .env.production được theo dõi.
+# Mọi tệp .env khác có thể chứa khoá thật nên không bao giờ được commit.
+.env
 .env.local
 .env.*.local
+
+# Hạ tầng và công cụ
+.vercel/
+*.tsbuildinfo
 *.log
+.DS_Store
+.idea/
+.vscode/
