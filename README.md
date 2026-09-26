@@ -19,6 +19,7 @@ Kiểm tra trước khi deploy:
 ```bash
 npm run typecheck
 npm run build
+npm run preview         # chạy đúng bản build ở http://127.0.0.1:4173
 ```
 
 Kiểm thử không cần trình duyệt (chạy được ở mọi môi trường, kể cả khi mạng chặn
@@ -114,22 +115,31 @@ seed mà ứng dụng dùng, nên nó bấm trúng chứ không đoán.
 - **Chín kiểu thời tiết**: quang đãng, nhiều mây, mưa, giông bão (có chớp), tuyết
   rơi, mưa hoa, lá rơi, sương mù và đom đóm ban đêm. Thời tiết tự đổi vài lần mỗi
   ngày theo mùa, hoặc bạn tự chọn trong bảng *Khí hậu & thời gian*.
-- **Hậu kỳ** chạy qua `EffectComposer` với bộ đệm đa mẫu (MSAA ×4 trên máy đủ
-  khoẻ) — cờ `antialias` của renderer chỉ áp cho khung vẽ thẳng ra màn hình, nên
-  thiếu bộ đệm này thì hễ bật bloom là mọi mép mái và cột buồm lại răng cưa.
-  Thứ tự: `RenderPass` vẽ vào bộ đệm tuyến tính → bloom → `OutputPass` tone-map
-  và mã hoá sRGB một lần duy nhất → `GradeShader`. Nước và bầu trời tự gọi
-  `<tonemapping_fragment>` nên không bị nướng hai lần. Bloom tự tắt ở mức "cân
-  bằng", trên máy yếu, và khi khung hình vượt 26ms.
+- **Hậu kỳ** chạy qua `EffectComposer` với bộ đệm đa mẫu (MSAA ×4 ở mức tự
+  động, ×8 ở mức "cao") — cờ `antialias` của renderer chỉ áp cho khung vẽ thẳng
+  ra màn hình, nên thiếu bộ đệm này thì hễ bật bloom là mọi mép mái và cột buồm
+  lại răng cưa. Thứ tự: `RenderPass` vẽ vào bộ đệm tuyến tính → bloom →
+  `OutputPass` tone-map và mã hoá sRGB một lần duy nhất → `GradeShader`. Nước và
+  bầu trời tự gọi `<tonemapping_fragment>` nên không bị nướng hai lần. Bloom tắt
+  ở mức "cân bằng" và trên máy nhỏ; ở mức tự động nó là một nấc trong bộ điều
+  chỉnh chất lượng (xem *Hiệu năng*). Bloom vẽ ở độ phân giải CSS: quầng sáng
+  vốn nhoè, vẽ nó ở 1,75x chỉ tốn thêm điểm ảnh.
 - **Lớp chỉnh màu** (`src/world/grade.ts`) mô phỏng đúng những khuyết tật khiến
   mắt đọc một khung hình là "ảnh chụp" chứ không phải "ảnh máy vẽ": tối bốn góc,
   tán sắc rất nhẹ ở rìa, đường cong tương phản chữ S, bóng đổ ngả lam còn vùng
-  sáng ngả ấm, và hạt cảm biến đậm dần về đêm.
+  sáng ngả ấm, và hạt cảm biến đậm dần về đêm. `uResolution` của nó là cỡ bộ đệm
+  thật chứ không phải cỡ CSS, nên bộ lọc nét lấy mẫu đúng từng điểm ảnh ở mọi
+  mật độ màn hình. Vào đảo rồi thì lớp hạt phim và tối góc bằng CSS của trang bìa
+  tắt đi — để cả hai thì góc khung bị tối hai lần.
 - **Vân bề mặt sinh tại chỗ** (`src/world/textures.ts`): nhiễu nhiều tầng lặp
   liền mạch dựng thành bản đồ pháp tuyến và bản đồ độ nhám cho đá, vữa, gỗ, kim
-  loại, cát, vải và lá. Vẽ bằng `DataTexture` ngay khi trang mở nên không thêm
-  một request nào. Đây là thứ tách "khối nhựa tô màu" khỏi "vật liệu": chỉ cần
-  độ nhám lệch vài phần trăm theo vị trí là cùng hình khối ấy đã ra chất đá.
+  loại, cát, vải và lá, không thêm một request nào. Đây là thứ tách "khối nhựa tô
+  màu" khỏi "vật liệu": chỉ cần độ nhám lệch vài phần trăm theo vị trí là cùng hình
+  khối ấy đã ra chất đá. Phần số học (`texturegen.ts`, khoảng 25 triệu lượt gọi
+  nhiễu) chạy trong Web Worker và bắt đầu ngay lúc trang bìa đang rảnh; chạy trên
+  luồng chính nó là 1,3 giây đứng hình đúng lúc bấm "Vào đảo". Texture trả về
+  ngay với dữ liệu trung tính rồi được lấp vân thật khi worker gửi về — không dựng
+  lại vật liệu, không biên dịch lại shader.
 - **Cạnh vát**: mọi khối hộp đủ dày dùng `RoundedBoxGeometry` với bán kính bo
   rất nhỏ. Vật thể thật không có cạnh sắc tuyệt đối, và chính dải bo đó bắt lấy
   một đường highlight mảnh chạy dọc mép.
@@ -137,8 +147,8 @@ seed mà ứng dụng dùng, nên nó bấm trúng chứ không đoán.
   chuỗi hậu kỳ, ngay sau `RenderPass` và trước bloom. Chân tường, kẽ mái, gốc cây
   và mép bậc thềm tối lại đúng như ngoài đời. Bán kính 0,75 đơn vị, cỡ của một
   bóng tiếp xúc thật ở tỉ lệ công trình cao 5–10 đơn vị. Vì nó phải vẽ lại toàn
-  cảnh một lượt nữa để lấy pháp tuyến và chiều sâu, ngưỡng tự tắt chặt hơn bloom
-  (20ms thay vì 26ms) và máy yếu bị loại thẳng. Lượt vẽ pháp tuyến ấy dùng vật
+  cảnh một lượt nữa để lấy pháp tuyến và chiều sâu, nó là hiệu ứng đầu tiên bộ
+  điều chỉnh tắt khi tụt khung, và máy nhỏ không có nó. Lượt vẽ pháp tuyến ấy dùng vật
   liệu ghi đè, mà vật liệu ghi đè thì không biết billboard: mây, mặt trời và mặt
   trăng tụt về đúng hình gốc — những tấm phẳng đứng im ghi chiều sâu — nên tầng
   mây tự đổ bóng che khuất lên chính nó thành mấy ô chữ nhật tối lơ lửng giữa
@@ -167,7 +177,14 @@ seed mà ứng dụng dùng, nên nó bấm trúng chứ không đoán.
   kính và đá bóng nhận về một điểm chói thật thay vì một mảng sáng đều.
 - **Bóng đổ** dùng `normalBias` để khử vệt sọc tự đổ bóng trên mặt cong mà không
   làm bóng bay khỏi chân vật thể; tấm bóng đổ đổi kích thước theo mức chất lượng
-  (1024 trên máy yếu → 4096 ở mức "cao").
+  (1024 trên máy nhỏ và mức "cân bằng" → 3072 ở mức "cao"). Khung bóng bám theo
+  điểm ngắm và co giãn theo khoảng cách camera: ±24 đơn vị khi soi cận cảnh (sắc
+  gấp đôi khung ±52 cố định trước đây), nới tới ±66 khi lùi ra toàn cảnh để phủ
+  cả các đảo riêng, và đi theo du thuyền ra khơi. Tâm khung ghim vào lưới texel
+  trong không gian của đèn, cỡ khung đổi theo nấc 6 đơn vị, nên bóng không rung
+  khi lia hay cuộn camera. Bóng nhạt dần khi mặt trời sát chân trời và khi trời
+  u ám; cờ `castShadow` thì bật suốt, vì lật nó là đổi khoá shader của mọi vật
+  liệu — bản trước đứng hình để biên dịch lại đúng lúc hoàng hôn.
 - **Xóm làng** 36 công trình — nhà gỗ, quầy chợ, lều trại, vọng lâu, cối xay
   gió, tháp canh, nhà kính — gieo trong vành đất giữa quảng trường và bãi cát,
   quay mặt ra biển. Nhà ở có khói bếp bốc lên: nhà có cửa sổ sáng vẫn có thể là
@@ -516,17 +533,42 @@ ghi đè ngầm là cách nhanh nhất để người dùng mất tiến độ.
   camera phải được vá tay mỗi lần — quên một nhịp là camera chui xuống dưới đảo.
 - Bóng mây chạy trong shader của mặt đất, tốn thêm chừng mười phép tính cho mỗi
   điểm ảnh và không thêm một lượt vẽ nào.
-- Renderer tự hạ/tăng pixel ratio theo frame time, giảm shadow map và mật độ hạt
-  trên thiết bị yếu, và tôn trọng `prefers-reduced-motion`.
+- **Biên dịch trước, hiện sau.** Lần vẽ đầu tiên phải biên dịch vài chục chương
+  trình shader. Cảnh gửi hết cho trình điều khiển biên dịch trước
+  (`renderer.compile` + chờ `KHR_parallel_shader_compile`), vẽ khung đầu tiên khi
+  canvas còn ẩn dưới nền gradient, rồi mới hiện dần ra — cú đứng hình biên dịch
+  không bao giờ lọt vào mắt người chơi. Hiệu ứng React không còn dựng lại các quận
+  và đảo riêng lần thứ hai ngay sau khi cảnh vừa dựng xong.
+- **Bộ điều chỉnh chất lượng** đo nhịp khung theo cửa sổ 60 khung, tính ngưỡng theo
+  tần số quét đo được (bản trước dùng ngưỡng tuyệt đối "dưới 14ms thì nâng", mà màn
+  60Hz không bao giờ xuống dưới 16,7ms — độ phân giải kẹt ở mức khởi động trên
+  chính loại màn hình phổ biến nhất). Tụt khung thì hạ từng nấc: kính mờ của giao
+  diện → GTAO → độ phân giải xuống 1,0 → bloom → độ phân giải xuống 0,75 → cả chuỗi
+  hậu kỳ trên máy nhỏ. Nấc hạ độ phân giải nào không làm khung nhanh hơn (máy
+  nghẽn CPU, trình duyệt khoá 30fps để tiết kiệm pin) thì bị trả lại, vì hạ nữa chỉ
+  đổi độ nét lấy không gì cả. Độ phân giải đã từng tụt khung thì không nâng lên
+  lại, để không bật–tắt theo từng cú quay camera. Khung dài hơn 250ms (tab vừa quay
+  lại, dọn rác) không được tính.
 - Ba mức chất lượng (tự động / cao / cân bằng) cùng công tắc tắt hẳn hiệu ứng hạt
-  trong bảng *Khí hậu & thời gian*. Mức chất lượng quyết định cả kích thước tấm
-  bóng đổ lẫn việc có bật bloom hay không; lớp chỉnh màu chỉ tốn một lượt vẽ toàn
-  màn hình nên nó chạy ở cả mức "cân bằng", chỉ tắt khi người chơi tắt hẳn hiệu ứng.
+  trong bảng *Khí hậu & thời gian*, **áp dụng ngay** không cần tải lại trang: MSAA,
+  trần độ phân giải, số mẫu GTAO, bloom và tấm bóng đổ đều đổi theo. Lớp chỉnh
+  màu chỉ tốn một lượt vẽ toàn màn hình nên nó chạy ở cả mức "cân bằng", chỉ tắt
+  khi người chơi tắt hẳn hiệu ứng.
+- **Kính mờ trên canvas có giá.** `backdrop-filter` phải làm mờ lại vùng dưới mỗi
+  tấm kính ở mọi khung, vì canvas bên dưới đổi liên tục. Nhãn công trình và chú
+  giải con trỏ — di chuyển mỗi khung — dùng nền đục thay cho kính mờ. Panel giữ
+  kính mờ khi máy kham được; máy nhỏ, mức "cân bằng" hoặc khi bộ điều chỉnh bắt
+  đầu hạ thì `data-glass="lite"` bỏ lớp mờ và bù độ đục cho nền.
+- Trang bìa không tải Three.js: danh sách góc máy mà HUD cần nằm trong
+  `world/shots.ts` thay vì `camera.ts` — một dòng import từ `camera.ts` là đủ kéo
+  hơn 150KB gzip của three cùng bộ dựng cảnh vào bundle đầu tiên.
 - Vân bề mặt chia sẻ chung một ảnh gốc trong GPU; đổi số lần lặp chỉ tạo một bản
   sao trỏ về đúng ảnh đó nên gần như không tốn thêm bộ nhớ.
 - Raycast picking giới hạn 60ms một lần; nhãn thế giới cập nhật 30 lần/giây.
 - Bundle tách riêng `three` và `react` để trình duyệt giữ cache qua các lần deploy;
-  bảng điều khiển không kéo theo Three.js.
+  bảng điều khiển không kéo theo Three.js. `vercel.json` đặt `/assets/*` là
+  `immutable` một năm: tên tệp ở đó đã mang hash nội dung, nên lần ghé sau trình
+  duyệt dùng thẳng bản trong cache thay vì hỏi lại máy chủ từng tệp.
 
 ## Cấu trúc chính
 
@@ -534,8 +576,11 @@ ghi đè ngầm là cách nhanh nhất để người dùng mất tiến độ.
   ứng, điều phối môi trường và bộ điều khiển du thuyền.
 - `src/world/atmosphere.ts` — vòm trời, mặt trời, mặt trăng có pha, sao băng, mây,
   và bộ màu trời dùng chung để mặt nước phản chiếu đúng bầu trời đang treo trên nó.
-- `src/world/textures.ts` — bộ sinh vân bề mặt (pháp tuyến + độ nhám) bằng nhiễu
-  lặp liền mạch, không tải file.
+- `src/world/textures.ts` — vân bề mặt (pháp tuyến + độ nhám): trả texture ngay,
+  lấp dữ liệu khi Web Worker (`textures.worker.ts`) sinh xong.
+- `src/world/texturegen.ts` — phần số học của vân: nhiễu lặp liền mạch, không phụ
+  thuộc three hay DOM để chạy được trong worker.
+- `src/world/shots.ts` — tên tám góc máy, không phụ thuộc three để HUD dùng được.
 - `src/world/grade.ts` — lớp chỉnh màu hậu kỳ: tối góc, tán sắc, tương phản, hạt phim.
 - `src/world/shape.ts` — **nguồn sự thật duy nhất cho hình học đảo**: đường bờ
   theo phương vị, cao độ, độ phẳng, mép nước, mặt nạ mũi đá, và bộ gieo hạt tất

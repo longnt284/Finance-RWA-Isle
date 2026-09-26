@@ -14,7 +14,7 @@ import { useMarketEvents } from "./lib/events";
 import { useBarometer } from "./lib/market";
 import { dayKey } from "./lib/format";
 import type { GoldenKind } from "./lib/season";
-import type { ShotId } from "./world/camera";
+import type { ShotId } from "./world/shots";
 import type { FishingZone } from "./components/Fishing";
 
 const Workspace = lazy(() => import("./components/Workspace"));
@@ -128,6 +128,10 @@ function Shell() {
     const warm = () => {
       void import("./world/WorldScene");
       void import("./components/Workspace");
+      /* Vân bề mặt sinh trong Web Worker nên làm ấm lúc này không lấy của trang
+         bìa một khung nào — và tới khi cổng mở, cảnh có đủ chất liệu ngay khung
+         đầu tiên thay vì hiện trơn rồi mới "mọc" vân. */
+      void import("./world/textures").then((module) => module.warmSurfaces());
     };
     const idle = window.requestIdleCallback;
     if (idle) {
@@ -304,7 +308,11 @@ function Shell() {
   }
 
   return (
-    <div className="cine-grain cine-vignette relative h-screen w-screen select-none overflow-hidden bg-ink-900">
+    /* Hạt phim và tối góc bằng CSS chỉ dành cho trang bìa. Vào đảo rồi thì lớp
+       chỉnh màu của thế giới 3D đã làm cả hai — hạt động theo thời gian, đậm
+       dần về đêm — nên lớp CSS phủ thêm lên là tối góc hai lần, cộng một tấm
+       nhiễu đứng yên đè lên hình chuyển động như vết bẩn trên kính. */
+    <div className={`${entered ? "" : "cine-grain cine-vignette "}relative h-screen w-screen select-none overflow-hidden bg-ink-900`}>
       {!entered && <GateBackdrop />}
       {entered && (
       <Suspense fallback={<div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_45%,#173f3a_0%,#071816_72%)]" aria-hidden="true" />}>

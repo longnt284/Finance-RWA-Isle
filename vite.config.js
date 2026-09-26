@@ -31,6 +31,11 @@ function localMarketApi() {
 
 export default defineConfig({
   plugins: [react(), tailwindcss(), localMarketApi()],
+  /* Worker sinh vân bề mặt là module worker (`{ type: "module" }`). Để mặc định
+     `iife` thì bản build và bản dev chạy hai kiểu worker khác nhau. */
+  worker: {
+    format: "es",
+  },
   build: {
     // Three.js là chunk lớn nhất và gần như không đổi giữa các lần deploy —
     // tách riêng để trình duyệt giữ cache thay vì tải lại mỗi lần sửa game.
