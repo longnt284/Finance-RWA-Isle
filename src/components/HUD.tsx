@@ -9,8 +9,8 @@ import { fmtMoney, dayKey, timeAgo, fmtPrice, compactVND, fmt } from "../lib/for
 import { useMarket, market, ASSET_BY_ID } from "../lib/market";
 import { useNews, unreadCount } from "../lib/news";
 import { sound } from "../lib/audio";
-import { SHOT_IDS } from "../world/camera";
-import type { ShotId } from "../world/camera";
+import { SHOT_IDS } from "../world/shots";
+import type { ShotId } from "../world/shots";
 import {
   IconBitcoin, IconChart, IconVault, IconBook, IconHome, IconCompass, IconIsland,
   IconBolt, IconGift, IconSound, IconSoundOff, IconCoins, IconCalc, IconNote, IconHelp,

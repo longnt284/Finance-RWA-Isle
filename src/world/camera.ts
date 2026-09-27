@@ -13,12 +13,14 @@ import { ISLE_POSITIONS } from "./build";
 import { BAY_ANGLE, COAST_MAX, CLIFF_ANGLE, coastRadius, terrainHeightAt } from "./shape";
 import { WATER_LEVEL } from "./ocean";
 import { HARBOR_POSITION, PIER_POSITION } from "./props";
+import type { ShotId } from "./shots";
+
+export { SHOT_IDS } from "./shots";
+export type { ShotId } from "./shots";
 
 /* ------------------------------------------------------------------ */
 /*  Góc máy đẹp                                                        */
 /* ------------------------------------------------------------------ */
-
-export type ShotId = "harbor" | "lighthouse" | "skyline" | "pier" | "lagoon" | "cliff" | "bay" | "drone";
 
 export interface CameraShot {
   id: ShotId;
@@ -114,12 +116,6 @@ export const CAMERA_SHOTS: CameraShot[] = [
   },
 ];
 
-/**
- * Thứ tự hiện trong giao diện, và cũng là nguồn sự thật cho bài kiểm tra i18n —
- * nó đọc thẳng mảng này từ mã nguồn để biết cần những khoá `shot.*` nào. Kiểu
- * `ShotId` giữ cho hai danh sách không lệch nhau.
- */
-export const SHOT_IDS: ShotId[] = ["harbor", "lighthouse", "skyline", "pier", "lagoon", "cliff", "bay", "drone"];
 export const SHOT_BY_ID = new Map(CAMERA_SHOTS.map((shot) => [shot.id, shot]));
 
 /* ------------------------------------------------------------------ */

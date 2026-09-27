@@ -70,7 +70,7 @@ const SEASONS = stringArray("src/lib/season.ts", "SEASONS");
 const WEATHERS = stringArray("src/lib/season.ts", "WEATHERS");
 const PHASES = stringArray("src/lib/season.ts", "DAY_PHASES");
 const MAX_YACHT_TIER = Number(/MAX_YACHT_TIER: YachtTier = (\d+)/.exec(read("src/state/store.tsx"))[1]);
-const SHOT_IDS = stringArray("src/world/camera.ts", "SHOT_IDS");
+const SHOT_IDS = stringArray("src/world/shots.ts", "SHOT_IDS");
 const EXPEDITION_IDS = idsOf("src/lib/expedition.ts", "EXPEDITION_ROUTES");
 const BAIT_IDS = idsOf("src/lib/fishing.ts", "BAITS");
 const CHAIN_IDS = idsOf("src/lib/chain.ts", "CHAIN_DEFS");

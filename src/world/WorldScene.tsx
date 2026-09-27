@@ -60,7 +60,7 @@ import type { Season, WeatherId, GoldenKind } from "../lib/season";
 import { SHOP_BY_ID } from "../lib/shop";
 import type { GroundPalette } from "../lib/shop";
 import { DISTRICTS, ISLE_UNLOCK_LEVELS, ISLE_SLOTS, VISUAL_MAX } from "../state/store";
-import type { DistrictId, ViewId, IslandTheme, IsleSlot, WorldPrefs, YachtTier } from "../state/store";
+import type { DistrictId, ViewId, IslandTheme, IsleSlot, QualityMode, WorldPrefs, YachtTier } from "../state/store";
 import { makeT } from "../lib/i18n";
 import type { Lang } from "../lib/i18n";
 import { sound } from "../lib/audio";
@@ -149,6 +149,59 @@ const LABEL_HEIGHT: Record<string, (lv: number) => number> = {
 /** Du thuyền không được vượt vành san hô; chừa một khoảng để không cấn vào rạn. */
 const SAIL_LIMIT = TERRITORY_RADIUS - 6;
 
+/* Khoảng zoom trên đảo: sát 5 đơn vị để soi mặt tiền một công trình, xa 220
+   để thấy trọn quần đảo lẫn vành san hô. Một chỗ khai báo cho cả lúc dựng
+   cảnh lẫn lúc rời du thuyền — bản trước rời tàu là tụt về 9–165. */
+const ORBIT_MIN = 5;
+const ORBIT_MAX = 220;
+
+interface QualityTier {
+  /** Trần mật độ điểm ảnh. */
+  maxRatio: number;
+  /** Mật độ điểm ảnh của khung đầu tiên — bộ điều chỉnh nâng dần từ đây. */
+  startRatio: number;
+  /** Số mẫu MSAA của bộ đệm hậu kỳ. */
+  msaa: number;
+  /** Số mẫu GTAO; 0 là không có GTAO ở mức này. */
+  gtaoSamples: number;
+  shadowSize: number;
+  bloom: boolean;
+  /**
+   * Bộ điều chỉnh được phép tắt GTAO, bloom và hậu kỳ khi máy tụt khung.
+   * Mức "cao" chỉ được hạ độ phân giải: ai chọn nó là đã nói máy mình kham
+   * được hiệu ứng.
+   */
+  dropEffects: boolean;
+}
+
+/**
+ * Bảng tra mức chất lượng.
+ *
+ * - "cao": điện ảnh — tới 2,0x, MSAA 8x, GTAO 16 mẫu, tấm bóng 3072.
+ * - "tự động": mượt trước, đẹp sau — tới 1,75x, MSAA 4x, GTAO 8 mẫu.
+ * - "cân bằng": bỏ GTAO và bloom, giữ lớp chỉnh màu vì nó chỉ tốn một lượt
+ *   vẽ toàn màn hình mà mang lại phần lớn cảm giác "ảnh chụp".
+ *
+ * Trần 1,75 chứ không 2,0 ở mức tự động: trên màn Retina, 2,0 nhân với bộ
+ * đệm nửa-float đa mẫu ra vài trăm megabyte, đẹp hơn không đáng kể mà khung
+ * hình mất gần một nửa. Máy nhỏ (màn hẹp hoặc ≤ 4 luồng CPU) không có GTAO ở
+ * mức nào: nó vẽ lại toàn cảnh thêm một lượt.
+ */
+function qualityTier(mode: QualityMode, compact: boolean): QualityTier {
+  if (mode === "high") {
+    return { maxRatio: compact ? 1.25 : 2, startRatio: compact ? 1 : 1.5, msaa: compact ? 4 : 8, gtaoSamples: compact ? 0 : 16, shadowSize: compact ? 1024 : 3072, bloom: true, dropEffects: false };
+  }
+  if (mode === "balanced") {
+    return { maxRatio: compact ? 1 : 1.5, startRatio: 1, msaa: compact ? 2 : 4, gtaoSamples: 0, shadowSize: 1024, bloom: false, dropEffects: true };
+  }
+  return { maxRatio: compact ? 1.25 : 1.75, startRatio: compact ? 1 : 1.25, msaa: compact ? 2 : 4, gtaoSamples: compact ? 0 : 8, shadowSize: compact ? 1024 : 2048, bloom: !compact, dropEffects: true };
+}
+
+/** Một nấc của bộ điều chỉnh độ phân giải. */
+const RATIO_STEP = 0.125;
+/** Sàn độ phân giải: dưới mức này chữ và mép mái nhoè hẳn, không đáng đổi lấy khung hình. */
+const RATIO_FLOOR = 0.75;
+
 function easeInOutCubic(k: number): number {
   return k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
 }
@@ -219,27 +272,17 @@ export default function WorldScene({
 
     const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const compactGpu = window.matchMedia("(max-width: 760px)").matches || (navigator.hardwareConcurrency ?? 8) <= 4;
-    /* Photoreal cần pixel để nét: desktop lên tới 1.75, mobile 1.25. Composer
-       có MSAA riêng nên cờ antialias của renderer chỉ là lớp dự phòng khi
-       post tắt — bật luôn để khung fallback vẫn sắc.
-
-       Trần hạ từ 2.0 xuống 1.75 vì trên màn Retina, 2.0 nhân với MSAA nửa-float
-       của composer ra một bộ đệm cỡ vài trăm megabyte: đẹp hơn không đáng kể
-       mà khung hình mất gần một nửa.
-
-       Và quan trọng hơn: khung đầu tiên luôn chạy ở mức thấp. Đo trước, đẹp
-       sau. Vòng lặp thích ứng sẽ nâng dần lên trần trong vài giây nếu máy kham
-       nổi — thay vì mở hết cỡ rồi tụt xuống, để người chơi nhìn thấy đúng cái
-       giây giật đầu tiên ấy. */
-    /* Người chơi tự chọn mức "cao" thì họ đã nói là máy kham được và họ muốn
-       ảnh đẹp hơn nhịp mượt — trả lại cho họ đúng độ phân giải tối đa, MSAA
-       8x, GTAO 16 mẫu và tấm bóng 3072. Mức "tự động" thì ngược lại: mượt
-       trước, đẹp sau. */
-    const cinematic = propsRef.current.world.quality === "high";
-    const maxPixelRatio = compactGpu ? 1.25 : cinematic ? 2 : 1.75;
-    const startPixelRatio = compactGpu ? 1 : cinematic ? 1.5 : 1.25;
-    const ceilingPixelRatio = Math.min(window.devicePixelRatio, maxPixelRatio);
-    let renderPixelRatio = Math.min(window.devicePixelRatio, startPixelRatio);
+    /* Mức chất lượng là một bảng tra, đọc lại mỗi khi người chơi đổi lựa chọn
+       — bản trước chỉ đọc một lần lúc dựng cảnh, nên đổi sang "cao" hay "cân
+       bằng" giữa chừng thì MSAA, độ phân giải và số mẫu GTAO vẫn giữ nguyên
+       cho tới lần tải trang sau. */
+    let tier = qualityTier(propsRef.current.world.quality, compactGpu);
+    let ceilingPixelRatio = Math.min(window.devicePixelRatio || 1, tier.maxRatio);
+    /* Khung đầu tiên chạy ở mức khởi động, không phải ở trần. Đo trước, đẹp
+       sau: bộ điều chỉnh nâng dần lên trần trong vài giây nếu máy kham nổi. */
+    let renderPixelRatio = Math.min(window.devicePixelRatio || 1, tier.startRatio);
+    /* Composer có MSAA riêng nên cờ `antialias` chỉ là lớp dự phòng khi hậu kỳ
+       tắt — bật luôn để khung vẽ thẳng ra màn hình vẫn sắc. */
     const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance", stencil: false });
     renderer.setPixelRatio(renderPixelRatio);
     renderer.setSize(container.clientWidth, container.clientHeight);
@@ -258,6 +301,7 @@ export default function WorldScene({
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.16;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.domElement.dataset.quality = renderPixelRatio < 1 ? "balanced" : "high";
     renderer.domElement.tabIndex = 0;
     renderer.domElement.setAttribute("role", "img");
     renderer.domElement.setAttribute("aria-label", lang === "vi" ? "Bản đồ quần đảo tài chính 3D tương tác" : "Interactive 3D finance archipelago");
@@ -266,11 +310,14 @@ export default function WorldScene({
     const scene = new THREE.Scene();
     scene.fog = new THREE.FogExp2(0x08222b, 0.011);
 
-    /* Cận cảnh 0,6 và viễn cảnh 950 thay cho 0,1–1400. GTAO đọc chiều sâu từ
+    /* Cận cảnh 0,5 và viễn cảnh 1000 thay cho 0,1–1400. GTAO đọc chiều sâu từ
        một depth texture số nguyên: tỉ lệ xa/gần 14.000 lần như bản trước làm
-       độ chính xác vỡ vụn, bóng tiếp xúc biến thành những vệt sọc. Vòm trời
-       nằm ở bán kính 620 nên 950 vẫn thừa chỗ. */
-    const camera = new THREE.PerspectiveCamera(46, Math.max(0.1, container.clientWidth / Math.max(1, container.clientHeight)), 0.1, 1400);
+       độ chính xác vỡ vụn, bóng tiếp xúc biến thành những vệt sọc. Ghi chú
+       này có từ lúc thêm GTAO nhưng con số thì chưa bao giờ được đổi theo.
+       Vòm trời bán kính 620 quanh gốc, camera xa gốc tối đa chừng 270 đơn vị:
+       điểm trời xa nhất vẫn nằm trong 1000. Cận cảnh 0,5 vẫn nhỏ hơn khoảng
+       0,85 mà giá máy chừa trước mặt vật cản, nên không xén vào tường. */
+    const camera = new THREE.PerspectiveCamera(46, Math.max(0.1, container.clientWidth / Math.max(1, container.clientHeight)), 0.5, 1000);
     const BASE_FOV = 46;
     camera.position.set(4, 95, 155);
 
@@ -279,8 +326,8 @@ export default function WorldScene({
     controls.dampingFactor = 0.07;
     /* Khoảng zoom rộng: sát 5 đơn vị để soi mặt tiền một công trình, xa 220 để
        thấy trọn quần đảo lẫn vành san hô. Người chơi tự quyết định đứng đâu. */
-    controls.minDistance = 5;
-    controls.maxDistance = 220;
+    controls.minDistance = ORBIT_MIN;
+    controls.maxDistance = ORBIT_MAX;
     /* `maxPolarAngle` được giá máy ghi lại mỗi khung theo khoảng cách; giá trị
        này chỉ là điểm khởi đầu cho khung hình đầu tiên. */
     controls.maxPolarAngle = 1.5;
@@ -307,19 +354,22 @@ export default function WorldScene({
     const hemi = new THREE.HemisphereLight(0xc4e8ec, 0x6a6047, 0.62);
     scene.add(hemi);
     const sunLight = new THREE.DirectionalLight(0xffd9a8, 2.2);
+    /* Bật đổ bóng suốt, kể cả ban đêm. Số nguồn sáng đổ bóng nằm trong khoá
+       chương trình shader của MỌI vật liệu nhận sáng: bản trước lật cờ này
+       lúc mặt trời chạm chân trời, và đúng hai khoảnh khắc đẹp nhất trong ngày
+       lại là lúc cả cảnh đứng hình để biên dịch lại vài chục shader — kéo
+       thanh giờ qua hoàng hôn trong chế độ ảnh cũng thế. Bóng giờ mờ dần theo
+       `shadow.intensity`, và tấm bóng thôi vẽ lại khi mặt trời đã lặn. */
     sunLight.castShadow = true;
-    /* Khung bóng đổ rộng 104 đơn vị. Ở 2048 điểm ảnh thì mỗi texel phủ 5cm —
-       đủ để mép bóng của lan can, cột đèn hay tàu lá dừa vỡ thành răng cưa.
-       Gấp đôi lên 4096 đưa con số đó xuống 2,5cm, và đó là khác biệt giữa
-       "bóng đổ có hình" với "vệt tối". Nhưng tấm bóng đổ cũng là thứ tốn bộ
-       nhớ và băng thông bậc nhất, nên nó phải nghe theo mức chất lượng người
-       chơi chọn chứ không được cố định. */
+    /* Khung bóng đổ không cố định nữa mà bám theo điểm ngắm và co giãn theo
+       khoảng cách camera (xem `fitShadow`): soi cận cảnh thì cả tấm bóng dồn
+       vào vài chục đơn vị quanh chỗ đang nhìn, nên mép bóng lan can hay tàu
+       lá dừa sắc gấp đôi; lùi ra toàn cảnh thì nó nới ra đủ phủ cả các đảo
+       riêng — bản trước khung ±52 quanh gốc bỏ sót nửa đảo riêng, và du
+       thuyền ra khơi là mất bóng. */
     sunLight.shadow.mapSize.set(2048, 2048);
-    sunLight.shadow.camera.left = -52;
-    sunLight.shadow.camera.right = 52;
-    sunLight.shadow.camera.top = 52;
-    sunLight.shadow.camera.bottom = -52;
     sunLight.shadow.camera.far = 200;
+    scene.add(sunLight.target);
     sunLight.shadow.bias = -0.0002;
     /* `normalBias` đẩy điểm lấy mẫu ra theo pháp tuyến. Nó xử lý được vệt sọc
        tự đổ bóng trên mặt cong mà `bias` thuần tuý không xử lý nổi, lại không
@@ -522,6 +572,12 @@ export default function WorldScene({
     let lastEnvKey = "";
     let currentWeather: WeatherId = "clear";
     let currentDaylight = 0.7;
+    /* Độ phơi sáng nền của giờ hiện tại. Chớp giông cộng thêm vào đây từng
+       khung — bản trước ghi đè bằng một công thức nền khác, thấp hơn chừng
+       0,13, nên sau mỗi tia chớp cả cảnh tối sầm lại cho tới phút sau. */
+    let baseExposure = 1.16;
+    /* Hướng mặt trời, đọc bởi `fitShadow` để đặt đèn quanh điểm ngắm. */
+    const sunDirection = new THREE.Vector3(0, 1, 0);
 
     /**
      * Kích thước tấm bóng đổ theo mức chất lượng. Đổi lúc đang chạy được, miễn
@@ -529,17 +585,63 @@ export default function WorldScene({
      */
     let shadowSize = 0;
     function applyShadowQuality() {
-      const prefs = propsRef.current.world;
       /* 4096² là một tấm bóng 64MB phải vẽ lại mỗi khung. Nó không mua thêm
          được gì ở khoảng cách camera thường dùng — 2048² đã cho viền bóng nét
          hơn cả độ mềm mà `shadow.radius` cố ý thêm vào. Giữ 3072 cho mức
          "cao" để ảnh chụp cận cảnh vẫn sạch. */
-      const wanted = compactGpu ? 1024 : prefs.quality === "high" ? 3072 : prefs.quality === "balanced" ? 1024 : 2048;
+      const wanted = qualityTier(propsRef.current.world.quality, compactGpu).shadowSize;
       if (wanted === shadowSize) return;
       shadowSize = wanted;
       sunLight.shadow.mapSize.set(wanted, wanted);
       sunLight.shadow.map?.dispose();
       sunLight.shadow.map = null;
+    }
+
+    /* ---------------------- khung bóng đổ bám điểm ngắm ---------------------- */
+    let shadowHalf = 0;
+    const shadowBasis = new THREE.Matrix4();
+    const lightX = new THREE.Vector3();
+    const lightY = new THREE.Vector3();
+    const lightZ = new THREE.Vector3();
+    const shadowFocus = new THREE.Vector3();
+    const WORLD_UP = new THREE.Vector3(0, 1, 0);
+    const WORLD_ORIGIN = new THREE.Vector3();
+
+    /**
+     * Đặt khung bóng đổ quanh chỗ người chơi đang nhìn.
+     *
+     * Nửa bề rộng khung tỉ lệ với khoảng cách camera: 24 đơn vị khi soi cận
+     * cảnh (mỗi texel ~2,3cm ở tấm 2048, sắc gấp đôi khung ±52 cố định cũ),
+     * nới dần tới 66 khi lùi ra toàn cảnh để phủ cả các đảo riêng.
+     */
+    function fitShadow() {
+      const reach = camera.position.distanceTo(controls.target);
+      /* Làm tròn lên từng nấc 6 đơn vị. Đổi liên tục thì mỗi cú cuộn chuột là
+         một lần cỡ texel đổi, và mép bóng bò lăn tăn theo. */
+      const half = Math.ceil(THREE.MathUtils.clamp(reach * 0.62 + 10, 22, 64) / 6) * 6;
+      const shadowCamera = sunLight.shadow.camera;
+      if (half !== shadowHalf) {
+        shadowHalf = half;
+        shadowCamera.left = -half;
+        shadowCamera.right = half;
+        shadowCamera.top = half;
+        shadowCamera.bottom = -half;
+        shadowCamera.updateProjectionMatrix();
+      }
+      /* Ghim tâm khung vào lưới texel trong không gian của đèn. Không ghim thì
+         mỗi lần điểm ngắm trôi nửa texel, tấm bóng rasterize ra một đường mép
+         khác — bóng rung rinh theo từng cú lia camera. Trục lấy đúng như
+         `lookAt` của máy quay bóng đổ, nên lưới này trùng lưới texel thật. */
+      shadowBasis.lookAt(sunDirection, WORLD_ORIGIN, WORLD_UP);
+      shadowBasis.extractBasis(lightX, lightY, lightZ);
+      shadowFocus.set(controls.target.x, 0, controls.target.z);
+      const texel = (2 * half) / Math.max(1, shadowSize);
+      const u = Math.round(shadowFocus.dot(lightX) / texel) * texel;
+      const v = Math.round(shadowFocus.dot(lightY) / texel) * texel;
+      const w = shadowFocus.dot(lightZ);
+      shadowFocus.set(0, 0, 0).addScaledVector(lightX, u).addScaledVector(lightY, v).addScaledVector(lightZ, w);
+      sunLight.target.position.copy(shadowFocus);
+      sunLight.position.copy(shadowFocus).addScaledVector(sunDirection, 110);
     }
 
     /**
@@ -592,19 +694,26 @@ export default function WorldScene({
 
       /* ---- ánh sáng ---- */
       const lit = state.daylight * profile.lightScale;
-      sunLight.position.copy(state.sunDir).multiplyScalar(110);
+      sunDirection.copy(state.sunDir);
       sunLight.intensity = 0.18 + lit * 2.1;
       sunLight.color.copy(sunWarm).lerp(sunPale, state.daylight);
       seasonTint.setHex(palette.sunTint);
       sunLight.color.lerp(seasonTint, 0.35);
-      sunLight.castShadow = state.sunDir.y > 0.02;
+      /* Bóng nhạt dần trong mươi phút cuối khi mặt trời chạm mặt biển thay vì
+         tắt phụt, và nhạt theo trời mây: trời u ám không có bóng sắc. Dải mờ
+         cố ý hẹp (độ cao 0–0,05): cả khung giờ vàng — mặt trời ở 0,04–0,11 —
+         vẫn giữ đủ những vệt bóng dài làm nên nó. */
+      sunLight.shadow.intensity =
+        THREE.MathUtils.smoothstep(state.sunDir.y, 0, 0.05) * THREE.MathUtils.lerp(1, 0.45, profile.overcast);
+      fitShadow();
 
       moonLight.position.copy(state.moonDir).multiplyScalar(110);
       moonLight.intensity = Math.max(0, state.moonDir.y) * (1 - state.daylight) * 0.7 * profile.lightScale;
 
       hemi.intensity = 0.32 + lit * 0.78;
       rim.intensity = 0.28 + (1 - state.daylight) * 0.5;
-      renderer.toneMappingExposure = 0.94 + state.daylight * 0.34 + palette.warmth * 0.07;
+      baseExposure = 0.94 + state.daylight * 0.34 + palette.warmth * 0.07;
+      renderer.toneMappingExposure = baseExposure;
 
       /* Đèn đường: tắt ban ngày, ấm dần về đêm. 4 đèn đặt quanh quảng trường. */
       const nightK = 1 - THREE.MathUtils.smoothstep(state.daylight, 0.12, 0.45);
@@ -1151,17 +1260,13 @@ export default function WorldScene({
     /* Bộ đệm của composer phải tự khử răng cưa: cờ `antialias` của renderer chỉ
        áp cho khung hình vẽ thẳng ra màn hình, nên trước đây hễ bật bloom là mọi
        đường mái, cột buồm và mép lá lại lởm chởm. Đây chính là chỗ chữ "sắc
-       nét" bị đánh mất. */
-    /* MSAA 4x trên desktop, 2x trên máy nhỏ.
-       Trước đây là 8x/4x. Từ 4x lên 8x, mắt gần như không phân biệt được mép
-       mái hay cột buồm nữa — nhưng băng thông bộ đệm thì gấp đôi, và ở nửa-float
-       cộng pixel ratio cao thì đó chính là cái trần mà GPU tích hợp đâm vào. Ai
-       muốn 8x thì chọn mức "cao" trong bảng Thế giới. */
-    const msaaSamples = cinematic ? (compactGpu ? 4 : 8) : compactGpu ? 2 : 4;
+       nét" bị đánh mất. Số mẫu theo bảng mức chất lượng: 4x ở mức tự động —
+       từ 4x lên 8x mắt gần như không phân biệt được mép mái nữa, nhưng băng
+       thông bộ đệm thì gấp đôi. */
     const composerTarget = new THREE.WebGLRenderTarget(
       Math.max(1, container.clientWidth),
       Math.max(1, container.clientHeight),
-      { type: THREE.HalfFloatType, samples: msaaSamples }
+      { type: THREE.HalfFloatType, samples: tier.msaa }
     );
     const composer = new EffectComposer(renderer, composerTarget);
     composer.setPixelRatio(renderPixelRatio);
@@ -1184,7 +1289,7 @@ export default function WorldScene({
       /* 16 mẫu là mức phim; 8 mẫu cho gần đúng cùng một bóng tiếp xúc với nửa
          chi phí, vì bán kính ở đây chỉ 0,75 đơn vị nên nhiễu tán rất ít. Mức
          "cao" vẫn được trả đủ 16. */
-      samples: cinematic ? 16 : compactGpu ? 4 : 8,
+      samples: tier.gtaoSamples > 0 ? tier.gtaoSamples : 8,
       screenSpaceRadius: false,
     });
     composer.addPass(gtaoPass);
@@ -1226,59 +1331,218 @@ export default function WorldScene({
     /* Chỉnh màu và "khuyết tật ống kính" đi sau cùng, tức là trên dữ liệu đã
        tone-map — đúng thứ tự của một chuỗi hậu kỳ thật. */
     const gradePass = new ShaderPass(GradeShader);
-    gradePass.material.uniforms.uResolution.value.set(container.clientWidth, container.clientHeight);
     composer.addPass(gradePass);
 
     /**
-     * Bloom là hiệu ứng đắt nhất trong khung hình. Ở chế độ tự động, nó tự tắt
-     * khi thời gian dựng khung vượt 26ms — máy yếu giữ được nhịp mượt thay vì
-     * đẹp mà giật. Người chơi chọn "cao" thì tôn trọng lựa chọn đó.
+     * Đồng bộ kích thước các lượt hậu kỳ sau mỗi lần composer đổi cỡ.
+     *
+     * - Bloom chạy ở độ phân giải CSS chứ không nhân mật độ điểm ảnh: quầng
+     *   sáng vốn đã nhoè, vẽ nó ở 1,75x chỉ tốn thêm ba lần điểm ảnh. Bản trước
+     *   làm vậy khi đổi cỡ cửa sổ nhưng quên khi bộ điều chỉnh đổi độ phân giải,
+     *   nên quầng sáng cứ đổi độ rộng theo mỗi nấc.
+     * - `uResolution` của lớp chỉnh màu là cỡ bộ đệm THẬT. Bản trước đưa cỡ CSS
+     *   vào, nên ở 1,75x bộ lọc nét lấy mẫu cách nhau 1,75 điểm ảnh: nét giả,
+     *   viền quầng dày.
      */
-    /* Khởi tạo cố tình bi quan. Cửa sổ đo đầu tiên dài 60 khung, nên trong
-       khoảng một giây đầu GTAO và bloom đứng ngoài — đúng cái giây mà trình
-       duyệt còn đang biên dịch shader, tải texture và dựng cây. Nếu máy khoẻ,
-       cửa sổ đo kế tiếp sẽ bật chúng lên và người chơi không kịp nhận ra. */
+    function syncPassSizes(width: number, height: number, ratio: number) {
+      bloomPass.setSize(width, height);
+      gradePass.material.uniforms.uResolution.value.set(width * ratio, height * ratio);
+    }
+    syncPassSizes(container.clientWidth, container.clientHeight, renderPixelRatio);
+
     /* Lật giữa 0 và 1 mỗi khung để `renderFrame` biết khung này có vẽ lại tấm
        bóng hay không. Khởi tạo bằng 1 để khung đầu tiên vẽ. */
     let shadowTick = 1;
-    let averageFrameMs = 40;
-    /* Máy đã tụt khung ba cửa sổ đo liền thì đừng thử GTAO lại nữa. Không có
-       cờ này, nó bật–tắt–bật theo từng cú quay camera, và cảnh nhấp nháy sáng
-       tối còn khó chịu hơn là không có bóng tiếp xúc. */
-    let slowWindows = 0;
-    let gtaoBanned = false;
+
+    /* ------------------------ bộ điều chỉnh chất lượng ------------------------
+       Đo nhịp khung theo cửa sổ 60 khung rồi quyết định một nấc mỗi lần.
+
+       Bản trước so với ngưỡng tuyệt đối — nâng độ phân giải khi khung dưới
+       14ms. Nhưng trên màn 60Hz, requestAnimationFrame bám vsync nên khung
+       không bao giờ xuống dưới 16,7ms: độ phân giải kẹt vĩnh viễn ở mức khởi
+       động 1,25 trên chính loại màn hình phổ biến nhất. Ngưỡng giờ tính theo
+       tần số quét đo được.
+
+       Thứ tự hạ khi tụt khung: kính mờ của giao diện trước (gần như không ai
+       nhận ra), rồi GTAO (nó vẽ lại cả cảnh, nên đỡ cả máy nghẽn CPU lẫn máy
+       nghẽn GPU), rồi độ phân giải xuống 1,0, rồi bloom, rồi
+       độ phân giải xuống sàn, cuối cùng là cả chuỗi hậu kỳ trên máy nhỏ. Mỗi
+       nấc hạ độ phân giải phải chứng minh nó có ích: cửa sổ đo kế tiếp không
+       nhanh hơn thì nút thắt nằm chỗ khác (CPU, số lệnh vẽ, trình duyệt khoá
+       30fps để tiết kiệm pin) — trả lại độ nét và thôi hạ tiếp. Độ phân giải
+       nào đã từng tụt khung thì không nâng lên lại nữa: bật–tắt theo từng cú
+       quay camera, mỗi lần kèm một cú giật cấp phát lại bộ đệm, còn khó chịu
+       hơn là đứng yên ở một nấc. */
+    let tierMode: QualityMode = propsRef.current.world.quality;
+    let windowFrames = 0;
+    let windowTime = 0;
+    /* Hai cửa sổ đầu là lúc trình duyệt còn tải texture và dựng cây: không tính. */
+    let warmupWindows = 2;
+    /* Bỏ qua vài khung ngay sau một lần đổi cỡ bộ đệm — cú cấp phát lại đó
+       không phải nhịp thật của máy. */
+    let skipSamples = 0;
+    /* Khung nhanh nhất từng thấy, xấp xỉ chu kỳ quét của màn hình. */
+    let fastestWindow = Infinity;
+    let smoothStreak = 0;
+    /* Độ phân giải đã từng tụt khung: chỉ được nâng tới dưới mức này. */
+    let failedRatio = Infinity;
+    /* Hạ độ phân giải không nhanh hơn thì dừng ở đây. */
+    let ratioFloor = RATIO_FLOOR;
+    let glassDropped = false;
+    let gtaoDropped = false;
+    let bloomDropped = false;
+    let postDropped = false;
+    let pendingDrop: { from: number; before: number } | null = null;
+
+    /**
+     * Kính mờ của giao diện (xem `data-glass` trong index.css). Đây là nấc hạ
+     * đầu tiên: lớp mờ sau một tấm panel đục 90% gần như không nhìn thấy, mà
+     * trình duyệt vẫn phải làm mờ lại vùng đó mỗi khung vì canvas bên dưới
+     * đổi liên tục. Máy nhỏ và mức "cân bằng" bỏ nó ngay từ đầu.
+     */
+    function glassLite(): boolean {
+      return compactGpu || tierMode === "balanced" || glassDropped;
+    }
+    function syncGlass() {
+      document.documentElement.dataset.glass = glassLite() ? "lite" : "full";
+    }
+    syncGlass();
+
+    function resizeBuffers(width: number, height: number) {
+      renderer.setPixelRatio(renderPixelRatio);
+      renderer.setSize(width, height, false);
+      composer.setPixelRatio(renderPixelRatio);
+      composer.setSize(width, height);
+      syncPassSizes(width, height, renderPixelRatio);
+      renderer.domElement.dataset.quality = renderPixelRatio < 1 ? "balanced" : "high";
+    }
+
+    function setRenderRatio(next: number) {
+      if (Math.abs(next - renderPixelRatio) < 1e-3) return;
+      renderPixelRatio = next;
+      resizeBuffers(Math.max(1, container.clientWidth), Math.max(1, container.clientHeight));
+      skipSamples = 3;
+    }
+
+    function lowerRatio(to: number, before: number) {
+      failedRatio = Math.min(failedRatio, renderPixelRatio);
+      pendingDrop = { from: renderPixelRatio, before };
+      setRenderRatio(to);
+    }
+
+    function evaluateWindow(average: number) {
+      if (warmupWindows > 0) {
+        warmupWindows--;
+        return;
+      }
+      fastestWindow = Math.min(fastestWindow, average);
+      /* Coi màn hình ít nhất 60Hz, và với màn 120/144Hz thì chỉ đòi 75 khung:
+         đòi đủ 144 là bán độ nét lấy vài khung mắt không phân biệt nổi. */
+      const refresh = THREE.MathUtils.clamp(fastestWindow, 1000 / 165, 1000 / 60);
+      const target = Math.max(refresh, 1000 / 75);
+      const slowMs = target * 1.25;
+      const smoothMs = target * 1.08;
+
+      if (pendingDrop) {
+        const drop = pendingDrop;
+        pendingDrop = null;
+        if (average > drop.before * 0.95 && average > smoothMs) {
+          ratioFloor = drop.from;
+          failedRatio = Infinity;
+          setRenderRatio(drop.from);
+          return;
+        }
+      }
+
+      if (average > slowMs) {
+        smoothStreak = 0;
+        const canDrop = tier.dropEffects;
+        if (canDrop && !glassLite()) {
+          glassDropped = true;
+          syncGlass();
+          return;
+        }
+        if (canDrop && tier.gtaoSamples > 0 && !gtaoDropped) {
+          gtaoDropped = true;
+          return;
+        }
+        const toOne = renderPixelRatio - RATIO_STEP;
+        if (toOne >= Math.max(1, ratioFloor) - 1e-3) {
+          lowerRatio(toOne, average);
+          return;
+        }
+        if (canDrop && tier.bloom && !bloomDropped) {
+          bloomDropped = true;
+          return;
+        }
+        const toFloor = Math.max(ratioFloor, renderPixelRatio - RATIO_STEP);
+        if (toFloor < renderPixelRatio - 1e-3) {
+          lowerRatio(toFloor, average);
+          return;
+        }
+        if (canDrop && compactGpu) postDropped = true;
+        return;
+      }
+
+      if (average <= smoothMs) {
+        smoothStreak++;
+        const next = Math.min(ceilingPixelRatio, renderPixelRatio + RATIO_STEP);
+        if (smoothStreak >= 2 && next > renderPixelRatio + 1e-3 && next < failedRatio - 1e-3) {
+          smoothStreak = 0;
+          setRenderRatio(next);
+        }
+      } else {
+        smoothStreak = 0;
+      }
+    }
+
+    /** Người chơi đổi mức chất lượng: nạp bảng mới và cho bộ điều chỉnh làm lại từ đầu. */
+    function applyQualityTier() {
+      const mode = propsRef.current.world.quality;
+      if (mode === tierMode) return;
+      tierMode = mode;
+      tier = qualityTier(mode, compactGpu);
+      ceilingPixelRatio = Math.min(window.devicePixelRatio || 1, tier.maxRatio);
+      failedRatio = Infinity;
+      ratioFloor = RATIO_FLOOR;
+      glassDropped = false;
+      syncGlass();
+      gtaoDropped = false;
+      bloomDropped = false;
+      postDropped = false;
+      pendingDrop = null;
+      smoothStreak = 0;
+      warmupWindows = 1;
+      windowFrames = 0;
+      windowTime = 0;
+      /* Số mẫu MSAA chỉ đọc lúc cấp phát bộ đệm: đặt lại rồi huỷ, three tự
+         cấp phát lại ở lượt vẽ kế tiếp. */
+      for (const target of [composer.renderTarget1, composer.renderTarget2]) {
+        if (target.samples === tier.msaa) continue;
+        target.samples = tier.msaa;
+        target.dispose();
+      }
+      if (tier.gtaoSamples > 0) gtaoPass.updateGtaoMaterial({ samples: tier.gtaoSamples });
+      setRenderRatio(Math.min(window.devicePixelRatio || 1, tier.startRatio));
+    }
+
     function bloomEnabled(): boolean {
-      const prefs = propsRef.current.world;
-      if (!prefs.effects) return false;
-      if (prefs.quality === "balanced") return false;
-      if (prefs.quality === "high") return true;
-      return !compactGpu && renderPixelRatio >= 1 && averageFrameMs < 26;
+      return propsRef.current.world.effects && tier.bloom && !bloomDropped;
     }
 
     /**
      * Chuỗi hậu kỳ tính cả lớp chỉnh màu, nên nó bật ở cả mức "cân bằng" —
      * lớp đó chỉ tốn đúng một lượt vẽ toàn màn hình nhưng lại là thứ mang lại
      * phần lớn cảm giác "ảnh chụp". Chỉ khi người chơi tắt hẳn hiệu ứng, hoặc
-     * máy yếu đang tụt khung hình, mới vẽ thẳng ra màn hình.
+     * máy nhỏ đã hạ hết mọi nấc khác mà vẫn tụt khung, mới vẽ thẳng ra màn hình.
      */
     function postEnabled(): boolean {
-      const prefs = propsRef.current.world;
-      if (!prefs.effects) return false;
-      if (prefs.quality === "high") return true;
-      return !compactGpu || averageFrameMs < 30;
+      return propsRef.current.world.effects && !postDropped;
     }
 
-    /**
-     * GTAO đắt hơn bloom: nó vẽ lại toàn cảnh một lượt nữa để lấy pháp tuyến và
-     * chiều sâu. Ngưỡng tự động vì thế chặt hơn (20ms thay vì 26ms) và máy yếu
-     * bị loại thẳng — thà không có bóng tiếp xúc còn hơn tụt xuống 30fps.
-     */
+    /** GTAO vẽ lại toàn cảnh một lượt nữa để lấy pháp tuyến và chiều sâu. */
     function gtaoEnabled(): boolean {
-      const prefs = propsRef.current.world;
-      if (!prefs.effects || compactGpu) return false;
-      if (prefs.quality === "balanced") return false;
-      if (prefs.quality === "high") return true;
-      return !gtaoBanned && renderPixelRatio >= 1 && averageFrameMs < 20;
+      return propsRef.current.world.effects && tier.gtaoSamples > 0 && !gtaoDropped;
     }
 
     /* Đoạn mở đầu tự lái camera từ ngoài không gian xuống. Cờ này nằm ở đây,
@@ -1358,8 +1622,8 @@ export default function WorldScene({
       yachtHolder.visible = active;
       yachtSpeed = 0;
       heldKeys.clear();
-      controls.minDistance = active ? 6 : 9;
-      controls.maxDistance = active ? 38 : 165;
+      controls.minDistance = active ? 6 : ORBIT_MIN;
+      controls.maxDistance = active ? 38 : ORBIT_MAX;
       /* Ngoài khơi không có gì để camera đâm vào, mà tia va chạm lại hay quét
          trúng chính con tàu — tắt hẳn giá va chạm khi đang lái. */
       rig.enabled = !active;
@@ -1549,10 +1813,12 @@ export default function WorldScene({
       const h = Math.max(1, container.clientHeight);
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
+      /* Kéo cửa sổ sang màn hình khác thì mật độ điểm ảnh của máy đổi theo. */
+      ceilingPixelRatio = Math.min(window.devicePixelRatio || 1, tier.maxRatio);
+      renderPixelRatio = Math.min(renderPixelRatio, ceilingPixelRatio);
       renderer.setSize(w, h);
-      composer.setSize(w, h);
-      bloomPass.setSize(w, h);
-      gradePass.material.uniforms.uResolution.value.set(w, h);
+      resizeBuffers(w, h);
+      skipSamples = 3;
     }
     window.addEventListener("resize", onResize);
 
@@ -1567,29 +1833,24 @@ export default function WorldScene({
       /* Gấp đôi mật độ điểm ảnh so với lúc chơi: ảnh xuất ra để chia sẻ và
          phóng to, không phải để hiển thị vừa khít khung hiện tại. */
       const shotRatio = Math.min(2.6, Math.max(2, window.devicePixelRatio || 1));
-      const resolution = gradePass.material.uniforms.uResolution.value as THREE.Vector2;
-      const wasResolution = resolution.clone();
       try {
         renderer.setPixelRatio(shotRatio);
         renderer.setSize(w, h, false);
         composer.setPixelRatio(shotRatio);
         composer.setSize(w, h);
-        /* Quang sai của ống kính tính theo `uResolution`. Bộ đệm lúc chụp lớn
-           gấp đôi, nên không cập nhật con số này thì viền màu trong ảnh xuất ra
-           đậm gấp đôi những gì người chơi vừa ngắm. */
-        resolution.set(w * shotRatio, h * shotRatio);
-        renderFrame(clock.elapsedTime, true);
+        /* Quang sai và bộ lọc nét tính theo `uResolution`, bloom giữ cỡ CSS:
+           ảnh xuất ra mang đúng độ dày viền màu và độ rộng quầng sáng mà người
+           chơi vừa ngắm, chỉ nhiều điểm ảnh hơn. */
+        syncPassSizes(w, h, shotRatio);
+        renderFrame(timer.getElapsed(), true);
         return renderer.domElement.toDataURL("image/png");
       } catch {
         /* Trình duyệt có thể từ chối `toDataURL` nếu canvas bị "vấy bẩn"; lúc
            đó thà không có ảnh còn hơn làm sập cả thế giới 3D. */
         return null;
       } finally {
-        resolution.copy(wasResolution);
-        renderer.setPixelRatio(renderPixelRatio);
-        renderer.setSize(w, h, false);
-        composer.setPixelRatio(renderPixelRatio);
-        composer.setSize(w, h);
+        resizeBuffers(w, h);
+        skipSamples = 3;
       }
     }
 
@@ -1639,15 +1900,20 @@ export default function WorldScene({
     if (propsRef.current.voyage) setVoyage(true);
 
     /* ------------------------------ loop ------------------------------ */
-    const clock = new THREE.Clock();
+    /* `Timer` thay cho `Clock` (đã lỗi thời từ r185): nó nhận mốc thời gian
+       của chính requestAnimationFrame — mốc của khung hình, không phải lúc hàm
+       được gọi — nên chuyển động không rung theo độ trễ lịch của trình duyệt,
+       và nó tự bỏ quãng thời gian tab bị ẩn. */
+    const timer = new THREE.Timer();
+    timer.connect(document);
     let raf = 0;
     const introPose = viewPose("overview");
-    const introStart = performance.now();
+    /* Đặt lại lúc cảnh thật sự hiện ra, không phải lúc dựng xong: đoạn mở đầu
+       phải chạy trước mắt người chơi chứ không chạy dưới tấm màn. */
+    let introStart = performance.now();
     const introFrom = camera.position.clone();
     const introTargetFrom = new THREE.Vector3(0, 20, 0);
     let labelClock = 0;
-    let perfFrames = 0;
-    let perfTime = 0;
     const desiredYachtTarget = new THREE.Vector3();
     const followDelta = new THREE.Vector3();
     const nextYachtPosition = new THREE.Vector3();
@@ -1663,43 +1929,32 @@ export default function WorldScene({
       return radial < SAIL_LIMIT;
     }
 
-    function frame() {
+    function frame(now?: number) {
       raf = requestAnimationFrame(frame);
-      const rawDt = clock.getDelta();
+      timer.update(now);
+      const rawDt = Math.max(0, timer.getDelta());
       const dt = Math.min(0.05, rawDt);
-      const t = clock.elapsedTime;
+      const t = timer.getElapsed();
       applyEnvironment();
 
       /* ---- chớp giông ---- */
       const flash = weather.flash;
       lightning.intensity = flash * 2.6;
-      if (flash > 0.01) renderer.toneMappingExposure = (0.82 + currentDaylight * 0.32) + flash * 0.5;
+      renderer.toneMappingExposure = baseExposure + flash * 0.5;
 
-      perfFrames++;
-      perfTime += rawDt * 1000;
-      /* 60 khung một lần thay vì 120: ở 30fps là hai giây, đủ nhanh để máy yếu
-         hạ chất lượng trước khi người chơi kịp bực. */
-      if (perfFrames >= 60) {
-        const averageFrame = perfTime / perfFrames;
-        averageFrameMs = averageFrame;
-        if (averageFrame > 24) {
-          if (++slowWindows >= 3) gtaoBanned = true;
-        } else if (averageFrame < 16) {
-          slowWindows = 0;
-        }
-        let nextRatio = renderPixelRatio;
-        if (averageFrame > 22 && renderPixelRatio > 0.7) nextRatio = Math.max(0.7, renderPixelRatio - 0.15);
-        else if (averageFrame < 14 && renderPixelRatio < ceilingPixelRatio) nextRatio = Math.min(ceilingPixelRatio, renderPixelRatio + 0.1);
-        if (Math.abs(nextRatio - renderPixelRatio) > 0.01) {
-          renderPixelRatio = nextRatio;
-          renderer.setPixelRatio(renderPixelRatio);
-          renderer.setSize(container.clientWidth, container.clientHeight, false);
-          composer.setPixelRatio(renderPixelRatio);
-          composer.setSize(container.clientWidth, container.clientHeight);
-          renderer.domElement.dataset.quality = renderPixelRatio < 1 ? "balanced" : "high";
-        }
-        perfFrames = 0;
-        perfTime = 0;
+      if (propsRef.current.world.quality !== tierMode) applyQualityTier();
+      /* Khung dài hơn 250ms là tab vừa quay lại, trình duyệt vừa dọn rác hay
+         cửa sổ vừa bị kéo — không phải nhịp của máy. Đưa vào là một cú giật
+         lẻ đủ để hạ cả một nấc độ phân giải. */
+      if (skipSamples > 0) skipSamples--;
+      else if (rawDt > 0 && rawDt < 0.25) {
+        windowFrames++;
+        windowTime += rawDt * 1000;
+      }
+      if (windowFrames >= 60) {
+        evaluateWindow(windowTime / windowFrames);
+        windowFrames = 0;
+        windowTime = 0;
       }
 
       /* Trả camera về đúng quỹ đạo mà `OrbitControls` tưởng nó đang ở, trước
@@ -1843,8 +2098,16 @@ export default function WorldScene({
     function renderFrame(t: number, hero = false) {
       const effects = propsRef.current.world.effects;
       /* Ảnh tĩnh luôn được một tấm bóng tươi; lúc chơi thì cách một khung một
-         lần, tức 30Hz trên màn 60Hz. */
-      renderer.shadowMap.needsUpdate = hero || (shadowTick = 1 - shadowTick) === 0;
+         lần, tức 30Hz trên màn 60Hz. Mặt trời đã lặn thì bóng đổ bằng 0, vẽ lại
+         tấm bóng là vẽ lại cả cảnh để không ai thấy. */
+      const shadowDue = hero || (shadowTick = 1 - shadowTick) === 0;
+      /* Tấm bóng chưa có (khung đầu tiên, hoặc vừa đổi cỡ theo mức chất lượng)
+         thì phải vẽ ngay, kể cả lúc đêm: vật liệu vẫn khai báo một sampler bóng
+         đổ, và thiếu tấm bóng thì mỗi lệnh vẽ là một lỗi GL "sampler type
+         mismatch" — trình duyệt chậm hẳn đi chỉ để in lỗi. */
+      renderer.shadowMap.needsUpdate =
+        sunLight.shadow.map === null || (shadowDue && sunLight.shadow.intensity > 0.001);
+      if (renderer.shadowMap.needsUpdate) fitShadow();
       if (!(hero ? effects : postEnabled())) {
         renderer.render(scene, camera);
         return;
@@ -1865,11 +2128,82 @@ export default function WorldScene({
       if (grade.uGain) grade.uGain.value = 1.03 + currentDaylight * 0.02;
       composer.render();
     }
-    frame();
+
+    /* ------------------------- biên dịch trước, hiện sau -------------------------
+       Lần vẽ đầu tiên của một cảnh cỡ này phải biên dịch vài chục chương trình
+       shader. Để nó xảy ra ngay trong khung đầu thì trang đứng hình một hai
+       giây, trên Windows còn lâu hơn. `renderer.compile` gửi hết số shader đó
+       cho trình điều khiển, và nơi nào có KHR_parallel_shader_compile thì chúng
+       được biên dịch song song trong khi luồng chính vẫn chạy; canvas nằm ẩn
+       dưới nền gradient trong lúc chờ, rồi hiện dần ra khi khung đầu tiên đã vẽ
+       xong — kể cả những shader mà `compile` không với tới (tấm bóng, GTAO,
+       bloom) cũng được biên dịch trong khung ẩn đó. */
+    let disposed = false;
+    let started = false;
+    const canvas = renderer.domElement;
+    canvas.style.opacity = "0";
+    canvas.style.transition = reduceMotion ? "none" : "opacity 0.8s ease";
+    function start() {
+      if (disposed || started) return;
+      started = true;
+      clearTimeout(startFallback);
+      introStart = performance.now();
+      /* Bỏ quãng chờ biên dịch khỏi đồng hồ: khung đầu không được mang theo
+         cả mấy giây đó như một bước thời gian. */
+      timer.reset();
+      frame();
+      requestAnimationFrame(() => {
+        if (!disposed) canvas.style.opacity = "1";
+      });
+    }
+    /* Trình duyệt không có phần mở rộng biên dịch song song vẫn trả lời, chỉ
+       chậm hơn; lưới an toàn này chỉ để một lỗi lạ không giữ màn hình trống. */
+    const startFallback = window.setTimeout(start, 6000);
+    /* Tự chờ thay vì dùng `renderer.compileAsync`: bản của three đọc chương
+       trình shader của từng vật liệu mà không kiểm tra, nên một vật liệu bị
+       huỷ trong lúc chờ (một quận vừa lên cấp và dựng lại) ném lỗi ngay trong
+       bộ hẹn giờ — lời hứa không bao giờ xong và cảnh phải đợi lưới an toàn. */
+    function precompile(): Promise<void> {
+      const pending = renderer.compile(scene, camera);
+      return new Promise((resolve) => {
+        const check = () => {
+          if (disposed) return resolve();
+          for (const material of pending) {
+            const state = renderer.properties.get(material) as { currentProgram?: { isReady(): boolean } } | undefined;
+            const program = state?.currentProgram;
+            if (!program || program.isReady()) pending.delete(material);
+          }
+          if (pending.size === 0) resolve();
+          else setTimeout(check, 16);
+        };
+        setTimeout(check, 0);
+      });
+    }
+    try {
+      precompile().then(start, start);
+    } catch {
+      start();
+    }
+
+    /* Tab bị ẩn thì requestAnimationFrame đứng lại. Đồng hồ tự bỏ quãng vắng
+       mặt; bộ điều chỉnh thì bỏ cửa sổ đo dở dang và vài khung đầu khi quay về
+       — lúc đó trình duyệt còn đang dựng lại lớp hiển thị. */
+    function onVisibility() {
+      if (document.hidden) return;
+      windowFrames = 0;
+      windowTime = 0;
+      skipSamples = 3;
+    }
+    document.addEventListener("visibilitychange", onVisibility);
 
     /* ------------------------------ cleanup ------------------------------ */
     return () => {
+      disposed = true;
+      clearTimeout(startFallback);
+      delete document.documentElement.dataset.glass;
       cancelAnimationFrame(raf);
+      document.removeEventListener("visibilitychange", onVisibility);
+      timer.dispose();
       window.removeEventListener("resize", onResize);
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
@@ -1922,6 +2256,9 @@ export default function WorldScene({
     const api = sceneApi.current;
     if (!api) return;
     const prev = prevLevels.current;
+    /* Lần chạy đầu chỉ ghi nhận: khối mount vừa dựng các quận từ đúng những
+       cấp này. Bản trước dựng lại lần nữa ở đây — gấp đôi công dựng cảnh đúng
+       lúc vào đảo, và huỷ luôn vật liệu đang chờ biên dịch. */
     for (const d of DISTRICT_IDS) {
       if (prev && prev[d] !== levels[d]) {
         api.rebuildDistrict(d);
@@ -1929,8 +2266,6 @@ export default function WorldScene({
           api.burst(d, d === "crypto" ? "jade" : "gold");
           sound.levelUp();
         }
-      } else if (!prev) {
-        api.rebuildDistrict(d);
       }
     }
     prevLevels.current = { ...levels };
@@ -1947,11 +2282,13 @@ export default function WorldScene({
       const decorKey = island.decor.join(",");
       const key = `${structural}|${decorKey}`;
       next[district] = key;
-      const old = previous?.[district] ?? "";
+      /* Lần chạy đầu chỉ ghi nhận, như với các quận ở trên. */
+      if (!previous) continue;
+      const old = previous[district] ?? "";
       const [oldStructural, oldDecor = ""] = old.split("|");
       if (oldStructural !== structural) api.rebuildIsle(district);
       if (oldDecor !== decorKey || oldStructural !== structural) api.rebuildDecor(district);
-      if (previous && !old.startsWith("true:") && island.unlocked) {
+      if (!old.startsWith("true:") && island.unlocked) {
         if (activeIsle === district) api.burst("isle", "jade");
         sound.levelUp();
       }
@@ -1990,10 +2327,12 @@ export default function WorldScene({
 
   /* ------------------------------ render ------------------------------ */
   return (
-    <div ref={containerRef} className="absolute inset-0 overflow-hidden">
+    /* Cùng nền với màn chờ của Suspense trong App: canvas hiện dần ra trên
+       đúng nền ấy, không có một khung đen nào chen giữa. */
+    <div ref={containerRef} className="absolute inset-0 overflow-hidden bg-[radial-gradient(circle_at_50%_45%,#173f3a_0%,#071816_72%)]">
       <div
         ref={tooltipRef}
-        className="chip pointer-events-none absolute left-0 top-0 z-30 rounded-md px-2.5 py-1.5 text-[11px] leading-tight opacity-0 transition-opacity duration-150"
+        className="chip world-tip pointer-events-none absolute left-0 top-0 z-30 rounded-md px-2.5 py-1.5 text-[11px] leading-tight opacity-0 transition-opacity duration-150"
         style={{ opacity: 0 }}
       />
       {[...DISTRICT_IDS, "center", ...DISTRICT_IDS.map((district) => `isle:${district}`)].map((id) => {

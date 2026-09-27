@@ -5,8 +5,8 @@ import { makeT } from "../lib/i18n";
 import { SEASONS, WEATHERS } from "../lib/season";
 import type { Season, WeatherId } from "../lib/season";
 import { sound } from "../lib/audio";
-import { SHOT_IDS } from "../world/camera";
-import type { ShotId } from "../world/camera";
+import { SHOT_IDS } from "../world/shots";
+import type { ShotId } from "../world/shots";
 import { IconCamera, IconClose, IconSun, IconSliders, IconCompass, IconCheck } from "./icons";
 
 /* ------------------------------------------------------------------ */

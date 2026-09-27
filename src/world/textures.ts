@@ -1,19 +1,26 @@
 import * as THREE from "three";
+import { generateTexture, sizeOf } from "./texturegen";
+import type { SurfaceKind, TextureData, TextureKey } from "./texturegen";
+
+export type { SurfaceKind } from "./texturegen";
 
 /* ------------------------------------------------------------------ */
 /*  Vân bề mặt sinh tại chỗ — thứ tách "đồ hoạ hoạt hình" khỏi "đồ hoạ   */
-/*  thật". Không tải file, không thêm request: mọi tấm map dưới đây đều  */
-/*  vẽ bằng canvas ngay khi trang mở, mỗi loại đúng một lần.            */
+/*  thật". Không tải file, không thêm request.                          */
 /*                                                                      */
 /*  Vì sao đây là đòn bẩy lớn nhất: một khối `MeshStandardMaterial` chỉ  */
 /*  có `color` thì mọi điểm trên mặt phản xạ y hệt nhau, nên mắt đọc ra  */
 /*  ngay là "nhựa tô màu". Chỉ cần độ nhám thay đổi vài phần trăm theo   */
 /*  vị trí, cộng thêm pháp tuyến gợn nhẹ, thì cùng hình khối ấy đã ra    */
 /*  đá, gỗ hay kim loại.                                                */
+/*                                                                      */
+/*  Phần số học nằm trong `texturegen.ts` và chạy trong Web Worker. Tệp  */
+/*  này trả texture về NGAY, mang dữ liệu trung tính (pháp tuyến thẳng,  */
+/*  độ nhám nhân 1), rồi lấp vân thật vào khi worker gửi về. Texture giữ  */
+/*  chỗ đúng cỡ tấm thật và đã gắn sẵn vào vật liệu, nên lúc vân tới chỉ  */
+/*  là một lượt tải lên GPU — không dựng lại vật liệu, không biên dịch   */
+/*  lại shader nào.                                                     */
 /* ------------------------------------------------------------------ */
-
-/** Kiểu vật liệu quyết định cách trộn nhiễu thành trường độ cao. */
-export type SurfaceKind = "stone" | "plaster" | "wood" | "metal" | "sand" | "fabric" | "foliage";
 
 export interface SurfaceMaps {
   /** Pháp tuyến gợn — làm ánh sáng "bám" vào mặt phẳng. */
@@ -22,211 +29,161 @@ export interface SurfaceMaps {
   roughnessMap: THREE.Texture;
 }
 
-/* ----------------------------- nhiễu ----------------------------- */
-
-/**
- * Băm số nguyên có chu kỳ. Chu kỳ là thứ khiến tấm vân lặp liền mạch: lưới
- * ở cạnh phải trùng khớp lưới ở cạnh trái nên không bao giờ thấy đường nối.
- */
-function hash2(xi: number, yi: number, period: number, seed: number): number {
-  const x = ((xi % period) + period) % period;
-  const y = ((yi % period) + period) % period;
-  let h = Math.imul(x, 374761393) ^ Math.imul(y, 668265263) ^ Math.imul(seed, 1442695041);
-  h = Math.imul(h ^ (h >>> 13), 1274126177);
-  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
-}
-
-function valueNoise(x: number, y: number, period: number, seed: number): number {
-  const x0 = Math.floor(x);
-  const y0 = Math.floor(y);
-  const fx = x - x0;
-  const fy = y - y0;
-  const ux = fx * fx * (3 - 2 * fx);
-  const uy = fy * fy * (3 - 2 * fy);
-  const a = hash2(x0, y0, period, seed);
-  const b = hash2(x0 + 1, y0, period, seed);
-  const c = hash2(x0, y0 + 1, period, seed);
-  const d = hash2(x0 + 1, y0 + 1, period, seed);
-  return (a * (1 - ux) + b * ux) * (1 - uy) + (c * (1 - ux) + d * ux) * uy;
-}
-
-/** Nhiễu nhiều tầng: tầng thô cho mảng lớn, tầng mịn cho hạt li ti. */
-function fbm(x: number, y: number, period: number, octaves: number, seed: number): number {
-  let sum = 0;
-  let amp = 0.5;
-  let freq = 1;
-  let norm = 0;
-  for (let o = 0; o < octaves; o++) {
-    sum += valueNoise(x * freq, y * freq, period * freq, seed + o * 131) * amp;
-    norm += amp;
-    amp *= 0.5;
-    freq *= 2;
-  }
-  return sum / norm;
-}
-
-/* ------------------------- trường độ cao ------------------------- */
-
-/**
- * Mỗi loại vật liệu là một công thức trộn khác nhau trên cùng bộ nhiễu.
- * Trả về độ cao trong khoảng 0..1 tại toạ độ lưới (u, v) đã nhân sẵn tần số.
- */
-function heightFor(kind: SurfaceKind, u: number, v: number, period: number): number {
-  /* Lớp micro chung: hạt li ti ở tần số gấp 3 lần, biên độ nhỏ — thứ khiến
-     ánh sáng xiên tạo ra "hạt" thay vì mảng phẳng khi dí camera lại gần. */
-  const micro = (seed: number) => fbm(u * 18, v * 18, period * 18, 2, seed) * 0.09;
-  switch (kind) {
-    case "stone": {
-      /* Mảng loang lớn cộng hạt sạn — mặt đá mài chứ không phải đá tảng thô. */
-      const blotch = fbm(u, v, period, 5, 11);
-      const grain = fbm(u * 4, v * 4, period * 4, 4, 29);
-      /* Vài đường nứt mảnh: lấy rãnh của nhiễu (gần 0.5 thì tối đi). */
-      const crack = 1 - Math.min(1, Math.abs(fbm(u * 1.6, v * 1.6, period * 2, 4, 61) - 0.5) * 9);
-      const pores = fbm(u * 11, v * 11, period * 11, 2, 101) * 0.08;
-      return blotch * 0.58 + grain * 0.24 - crack * crack * 0.20 + pores + micro(103) + 0.14;
-    }
-    case "plaster": {
-      /* Vữa trát: hạt rất mịn, gợn đều, không có hướng + rỗ khí li ti. */
-      const pits = Math.pow(1 - fbm(u * 14, v * 14, period * 14, 2, 113), 3) * 0.12;
-      return fbm(u * 3, v * 3, period * 3, 5, 7) * 0.66 + fbm(u * 9, v * 9, period * 9, 3, 43) * 0.28 - pits + micro(107);
-    }
-    case "wood": {
-      /* Vân gỗ là những vòng gần song song, bị nhiễu bẻ cong nhẹ. */
-      const warp = fbm(u * 0.9, v * 0.35, period, 4, 17) * 2.4;
-      const rings = Math.sin((v * 5.5 + warp) * Math.PI * 2) * 0.5 + 0.5;
-      const fibre = fbm(u * 1.2, v * 14, period * 14, 3, 53);
-      const pore = fbm(u * 8, v * 30, period * 30, 2, 127) * 0.10;
-      return rings * 0.48 + fibre * 0.30 + fbm(u * 2, v * 2, period * 2, 4, 71) * 0.16 + pore * 0.4 + micro(109);
-    }
-    case "metal": {
-      /* Kim loại xước theo một hướng + xước chéo mịn thứ hai cho ánh brushed thật. */
-      const brush = fbm(u * 0.5, v * 26, period * 26, 3, 23);
-      const cross = fbm(u * 22, v * 0.7, period * 22, 2, 137) * 0.18;
-      const patch = fbm(u, v, period, 4, 89);
-      return brush * 0.58 + patch * 0.30 + cross + micro(131);
-    }
-    case "sand": {
-      /* Sóng cát nhỏ chồng lên hạt li ti + gợn gió thứ hai lệch hướng. */
-      const dune = Math.sin((u * 2.6 + fbm(u, v, period, 4, 5) * 3.1) * Math.PI * 2) * 0.5 + 0.5;
-      const dune2 = Math.sin((v * 3.4 + fbm(v, u, period, 3, 149) * 2.2) * Math.PI * 2) * 0.5 + 0.5;
-      const speck = fbm(u * 12, v * 12, period * 12, 3, 97);
-      return dune * 0.30 + dune2 * 0.12 + speck * 0.42 + fbm(u * 3, v * 3, period * 3, 4, 13) * 0.16 + micro(151);
-    }
-    case "fabric": {
-      /* Sợi dọc và sợi ngang đan nhau + độ lệch sợi ngẫu nhiên. */
-      const warpThread = Math.sin(u * period * Math.PI * 2) * 0.5 + 0.5;
-      const weftThread = Math.sin(v * period * Math.PI * 2) * 0.5 + 0.5;
-      return Math.max(warpThread, weftThread) * 0.52 + fbm(u * 6, v * 6, period * 6, 3, 37) * 0.42 + micro(139);
-    }
-    case "foliage": {
-      /* Gân lá toả ra cộng lấm tấm mặt lá + đốm khô viền lá. */
-      const veins = 1 - Math.min(1, Math.abs(Math.sin(v * 9.5 * Math.PI) ) * 2.2);
-      const mottle = fbm(u * 5, v * 5, period * 5, 4, 67);
-      const speckle = fbm(u * 16, v * 16, period * 16, 2, 157) * 0.10;
-      return mottle * 0.68 + veins * 0.26 + speckle + micro(163);
-    }
-  }
-}
-
 /* --------------------------- dựng texture --------------------------- */
 
-/** Chuyển trường độ cao thành bản đồ pháp tuyến bằng sai phân Sobel. */
-function heightToNormal(height: Float32Array, size: number, strength: number): Uint8Array {
-  const data = new Uint8Array(size * size * 4);
-  const at = (x: number, y: number) => height[((y + size) % size) * size + ((x + size) % size)];
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const dx =
-        at(x + 1, y - 1) + 2 * at(x + 1, y) + at(x + 1, y + 1) -
-        (at(x - 1, y - 1) + 2 * at(x - 1, y) + at(x - 1, y + 1));
-      const dy =
-        at(x - 1, y + 1) + 2 * at(x, y + 1) + at(x + 1, y + 1) -
-        (at(x - 1, y - 1) + 2 * at(x, y - 1) + at(x + 1, y - 1));
-      let nx = -dx * strength;
-      let ny = -dy * strength;
-      const nz = 1;
-      const len = Math.hypot(nx, ny, nz);
-      nx /= len;
-      ny /= len;
-      const i = (y * size + x) * 4;
-      data[i] = Math.round((nx * 0.5 + 0.5) * 255);
-      data[i + 1] = Math.round((ny * 0.5 + 0.5) * 255);
-      data[i + 2] = Math.round((nz / len * 0.5 + 0.5) * 255);
-      data[i + 3] = 255;
-    }
-  }
-  return data;
-}
-
-/**
- * Độ nhám lấy từ chính trường độ cao nhưng nén quanh 1.0: `roughnessMap`
- * được **nhân** với `material.roughness`, nên trung bình phải xấp xỉ 1 thì
- * độ nhám gốc của vật liệu mới giữ nguyên ý đồ.
- */
-function heightToRoughness(height: Float32Array, size: number, spread: number): Uint8Array {
-  const data = new Uint8Array(size * size * 4);
-  for (let i = 0; i < height.length; i++) {
-    const v = THREE.MathUtils.clamp(1 + (height[i] - 0.5) * spread * 2, 0, 1);
-    const byte = Math.round(v * 255);
-    const o = i * 4;
-    /* three đọc kênh G cho độ nhám và kênh B cho độ kim loại. */
-    data[o] = byte;
-    data[o + 1] = byte;
-    data[o + 2] = byte;
-    data[o + 3] = 255;
-  }
-  return data;
-}
-
-function dataTexture(data: Uint8Array, size: number, srgb: boolean): THREE.DataTexture {
+function dataTexture(data: Uint8Array, size: number): THREE.DataTexture {
   const texture = new THREE.DataTexture(data, size, size);
-  texture.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+  texture.colorSpace = THREE.NoColorSpace;
   texture.wrapS = THREE.RepeatWrapping;
   texture.wrapT = THREE.RepeatWrapping;
   texture.magFilter = THREE.LinearFilter;
   texture.minFilter = THREE.LinearMipmapLinearFilter;
   texture.generateMipmaps = true;
   /* Anisotropy 16 giữ vân sắc ở góc nhìn lướt (bãi cát, sân đá) thay vì
-     nhòe thành mảng phẳng. GPU hiện đại chịu được, máy yếu vẫn có mip. */
+     nhòe thành mảng phẳng. three tự kẹp về mức GPU hỗ trợ. */
   texture.anisotropy = 16;
+  /* Sống ở tầng module, qua được nhiều lần mount cảnh: vòng dọn dẹp của
+     WorldScene phải bỏ qua. */
+  texture.userData.shared = true;
   texture.needsUpdate = true;
   return texture;
 }
 
-/** Thông số riêng của từng loại: kích thước tấm, độ nổi, biên độ nhám.
- *  Bản photoreal: tấm 512 cho mọi mặt hero, thêm tầng nhiễu micro để
- *  ánh sáng có hạt ở cả tầm gần lẫn tầm xa. */
-const PROFILE: Record<SurfaceKind, { size: number; period: number; bump: number; rough: number }> = {
-  stone: { size: 512, period: 9, bump: 3.1, rough: 0.34 },
-  plaster: { size: 512, period: 9, bump: 1.35, rough: 0.21 },
-  wood: { size: 512, period: 7, bump: 2.3, rough: 0.30 },
-  metal: { size: 512, period: 9, bump: 0.9, rough: 0.38 },
-  sand: { size: 512, period: 11, bump: 1.9, rough: 0.19 },
-  fabric: { size: 256, period: 18, bump: 1.7, rough: 0.24 },
-  foliage: { size: 256, period: 9, bump: 1.5, rough: 0.26 },
-};
-
-const CACHE = new Map<SurfaceKind, SurfaceMaps>();
-
-/** Sinh (hoặc lấy lại từ bộ nhớ đệm) bộ map gốc của một loại vật liệu. */
-function baseMaps(kind: SurfaceKind): SurfaceMaps {
-  const cached = CACHE.get(kind);
-  if (cached) return cached;
-  const { size, period, bump, rough } = PROFILE[kind];
-  const height = new Float32Array(size * size);
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const u = (x / size) * period;
-      const v = (y / size) * period;
-      height[y * size + x] = THREE.MathUtils.clamp(heightFor(kind, u, v, period), 0, 1);
-    }
+/** Tấm trung tính: pháp tuyến thẳng đứng, độ nhám nhân 1 — vật liệu y như chưa có vân. */
+function neutral(size: number, rgb: [number, number, number]): Uint8Array {
+  const data = new Uint8Array(size * size * 4);
+  for (let i = 0; i < data.length; i += 4) {
+    data[i] = rgb[0];
+    data[i + 1] = rgb[1];
+    data[i + 2] = rgb[2];
+    data[i + 3] = 255;
   }
-  const maps: SurfaceMaps = {
-    normalMap: dataTexture(heightToNormal(height, size, bump), size, false),
-    roughnessMap: dataTexture(heightToRoughness(height, size, rough), size, false),
+  return data;
+}
+
+const FLAT_NORMAL: [number, number, number] = [128, 128, 255];
+const FULL_ROUGH: [number, number, number] = [255, 255, 255];
+
+interface Slot {
+  normal: THREE.DataTexture;
+  rough: THREE.DataTexture | null;
+  /** Bản sao theo số lần lặp. Chúng dùng chung ảnh gốc với `normal`/`rough`,
+      nhưng mỗi bản giữ số phiên bản riêng nên phải được báo "cần tải lại"
+      từng cái một. Cache theo `repeat` để mount lại cảnh không đẻ thêm bản sao. */
+  copies: Map<number, SurfaceMaps>;
+}
+
+const SLOTS = new Map<TextureKey, Slot>();
+/** Dữ liệu đã sinh xong nhưng chưa có texture nào đòi — thường là do làm ấm sẵn. */
+const READY = new Map<TextureKey, TextureData>();
+/** Đã gửi đi sinh (hoặc đã có): không gửi lại lần hai. */
+const REQUESTED = new Set<TextureKey>();
+/** Đã nhận dữ liệu thật. */
+const DONE = new Set<TextureKey>();
+
+/**
+ * Thứ tự sinh: thứ phủ nhiều điểm ảnh nhất lên trước. Mặt nước chiếm nửa khung
+ * hình, cát và đá là cả hòn đảo; vải và lá chỉ là chi tiết.
+ */
+const PRIORITY: TextureKey[] = ["water", "sand", "stone", "plaster", "wood", "metal", "foliage", "fabric"];
+
+function slotFor(key: TextureKey): Slot {
+  let slot = SLOTS.get(key);
+  if (slot) return slot;
+  const size = sizeOf(key);
+  const ready = READY.get(key);
+  READY.delete(key);
+  slot = {
+    normal: dataTexture(ready?.normal ?? neutral(size, FLAT_NORMAL), size),
+    rough: key === "water" ? null : dataTexture(ready?.rough ?? neutral(size, FULL_ROUGH), size),
+    copies: new Map(),
   };
-  CACHE.set(kind, maps);
-  return maps;
+  SLOTS.set(key, slot);
+  if (!ready) requestTextures([key]);
+  return slot;
+}
+
+/** Vân thật vừa tới: thay ảnh gốc (dùng chung cho mọi bản sao) rồi báo tải lại. */
+function accept(result: TextureData) {
+  DONE.add(result.key);
+  /* Đủ bộ rồi thì trả luồng lại cho trình duyệt: worker không còn việc gì nữa. */
+  if (DONE.size === PRIORITY.length && worker) {
+    worker.terminate();
+    worker = null;
+  }
+  const slot = SLOTS.get(result.key);
+  if (!slot) {
+    READY.set(result.key, result);
+    return;
+  }
+  const { size } = result;
+  slot.normal.image = { data: result.normal, width: size, height: size };
+  slot.normal.needsUpdate = true;
+  if (slot.rough && result.rough) {
+    slot.rough.image = { data: result.rough, width: size, height: size };
+    slot.rough.needsUpdate = true;
+  }
+  for (const copy of slot.copies.values()) {
+    copy.normalMap.needsUpdate = true;
+    copy.roughnessMap.needsUpdate = true;
+  }
+}
+
+/* ------------------------------ worker ------------------------------ */
+
+let worker: Worker | null = null;
+let workerBroken = false;
+
+/**
+ * Đường lui khi không có worker (CSP chặn, trình duyệt cũ, worker lỗi giữa
+ * chừng): sinh trên luồng chính, mỗi tấm một nhịp riêng để không đứng hình
+ * liền một mạch.
+ */
+function generateInline(keys: TextureKey[]) {
+  const queue = keys.filter((key) => !DONE.has(key));
+  const step = () => {
+    const key = queue.shift();
+    if (!key) return;
+    if (!DONE.has(key)) accept(generateTexture(key));
+    setTimeout(step, 0);
+  };
+  setTimeout(step, 0);
+}
+
+function spawnWorker(): Worker | null {
+  if (worker || workerBroken) return worker;
+  try {
+    worker = new Worker(new URL("./textures.worker.ts", import.meta.url), { type: "module" });
+  } catch {
+    workerBroken = true;
+    return null;
+  }
+  worker.onmessage = (event: MessageEvent<TextureData>) => accept(event.data);
+  worker.onerror = () => {
+    worker?.terminate();
+    worker = null;
+    workerBroken = true;
+    generateInline([...REQUESTED]);
+  };
+  return worker;
+}
+
+function requestTextures(keys: TextureKey[]) {
+  const fresh = PRIORITY.filter((key) => keys.includes(key) && !REQUESTED.has(key));
+  if (!fresh.length) return;
+  for (const key of fresh) REQUESTED.add(key);
+  const target = typeof Worker === "undefined" ? null : spawnWorker();
+  if (target) target.postMessage(fresh);
+  else generateInline(fresh);
+}
+
+/**
+ * Bắt đầu sinh toàn bộ vân ngay, trước khi cảnh cần tới. Gọi lúc trang bìa
+ * đang rảnh: tới khi người chơi bấm "Vào đảo" thì vân đã nằm sẵn trong bộ nhớ,
+ * cảnh hiện ra đủ chất liệu ngay khung đầu tiên.
+ */
+export function warmSurfaces(): void {
+  requestTextures(PRIORITY);
 }
 
 /**
@@ -234,15 +191,18 @@ function baseMaps(kind: SurfaceKind): SurfaceMaps {
  * nên thêm một tỉ lệ lặp mới gần như không tốn bộ nhớ.
  */
 export function surface(kind: SurfaceKind, repeat = 1): SurfaceMaps {
-  const base = baseMaps(kind);
-  if (repeat === 1) return base;
-  const normalMap = base.normalMap.clone();
-  const roughnessMap = base.roughnessMap.clone();
-  for (const texture of [normalMap, roughnessMap]) {
+  const slot = slotFor(kind);
+  const baseRough = slot.rough as THREE.DataTexture;
+  if (repeat === 1) return { normalMap: slot.normal, roughnessMap: baseRough };
+  const cached = slot.copies.get(repeat);
+  if (cached) return cached;
+  const maps: SurfaceMaps = { normalMap: slot.normal.clone(), roughnessMap: baseRough.clone() };
+  for (const texture of [maps.normalMap, maps.roughnessMap]) {
     texture.repeat.set(repeat, repeat);
     texture.needsUpdate = true;
   }
-  return { normalMap, roughnessMap };
+  slot.copies.set(repeat, maps);
+  return maps;
 }
 
 /**
@@ -250,26 +210,8 @@ export function surface(kind: SurfaceKind, repeat = 1): SurfaceMaps {
  * cuộn hai lớp ngược chiều nhau trong shader đại dương. Đây là thứ tạo ra
  * dải nắng vỡ vụn trên sóng — dấu hiệu dễ nhận nhất của nước thật.
  */
-let waterNormal: THREE.DataTexture | null = null;
 export function waterNormalMap(): THREE.DataTexture {
-  if (waterNormal) return waterNormal;
-  /* 512px + 3 tầng: gợn lừng, sóng chop, lăn tăn micro cho dải nắng vỡ vụn
-     mịn thay vì đốm to. Lặp liền mạch để cuộn 3 lớp không lộ mối nối. */
-  const size = 512;
-  const period = 8;
-  const height = new Float32Array(size * size);
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const u = (x / size) * period;
-      const v = (y / size) * period;
-      const swell = fbm(u * 0.8, v * 0.8, period, 4, 3);
-      const chop = fbm(u * 3.1, v * 3.1, period * 3, 4, 19);
-      const microW = fbm(u * 9.4, v * 9.4, period * 9, 2, 211);
-      height[y * size + x] = THREE.MathUtils.clamp(swell * 0.58 + chop * 0.30 + microW * 0.12, 0, 1);
-    }
-  }
-  waterNormal = dataTexture(heightToNormal(height, size, 3.0), size, false);
-  return waterNormal;
+  return slotFor("water").normal;
 }
 
 /* ------------------------------------------------------------------ */
